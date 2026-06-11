@@ -1,0 +1,249 @@
+const { app, BrowserWindow, ipcMain, dialog, globalShortcut, shell } = require("electron");
+const path = require("node:path");
+const fs = require("node:fs/promises");
+const crypto = require("node:crypto");
+
+const isDev = !app.isPackaged;
+let mainWindow;
+let registered = new Map();
+
+function appRoot() {
+  return path.join(app.getPath("userData"), "library");
+}
+
+function libraryFile() {
+  return path.join(appRoot(), "library.json");
+}
+
+function mediaRoot() {
+  return path.join(appRoot(), "media");
+}
+
+async function ensureLibrary() {
+  await fs.mkdir(mediaRoot(), { recursive: true });
+  try {
+    await fs.access(libraryFile());
+  } catch {
+    const now = new Date().toISOString();
+    await fs.writeFile(
+      libraryFile(),
+      JSON.stringify({
+        version: 1,
+        activeBoardId: "board-default",
+        settings: {
+          micPassthrough: false,
+          soundboardToVirtualMic: false,
+          monitorToHeadphones: true,
+          monitorMicToHeadphones: false,
+          micVolume: 0.85,
+          soundboardVolume: 0.9,
+          monitorVolume: 0.8,
+          monitorDeviceId: "",
+          virtualMicDeviceId: "",
+          microphoneDeviceId: "",
+          stopAllHotkey: "CommandOrControl+Alt+Space"
+        },
+        boards: [
+          {
+            id: "board-default",
+            name: "Main Board",
+            color: "#1db7a6",
+            icon: "zap",
+            createdAt: now,
+            updatedAt: now,
+            sounds: []
+          }
+        ]
+      }, null, 2)
+    );
+  }
+}
+
+function sanitizeName(input) {
+  return String(input || "sound")
+    .replace(/[<>:"/\\|?*\x00-\x1f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 80) || "sound";
+}
+
+function inferMime(ext) {
+  const normalized = ext.toLowerCase();
+  return {
+    ".wav": "audio/wav",
+    ".mp3": "audio/mpeg",
+    ".ogg": "audio/ogg",
+    ".flac": "audio/flac",
+    ".m4a": "audio/mp4",
+    ".aac": "audio/aac",
+    ".webm": "audio/webm"
+  }[normalized] || "application/octet-stream";
+}
+
+async function readJson(filePath) {
+  return JSON.parse(await fs.readFile(filePath, "utf8"));
+}
+
+async function createWindow() {
+  await ensureLibrary();
+  mainWindow = new BrowserWindow({
+    width: 1360,
+    height: 860,
+    minWidth: 1040,
+    minHeight: 700,
+    backgroundColor: "#101114",
+    title: "SoundDeck Studio",
+    webPreferences: {
+      preload: path.join(__dirname, "preload.cjs"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false
+    }
+  });
+
+  if (isDev) {
+    await mainWindow.loadURL("http://127.0.0.1:5173");
+  } else {
+    await mainWindow.loadFile(path.join(__dirname, "../dist/index.html"));
+  }
+}
+
+function registerHotkeys(bindings) {
+  for (const accelerator of registered.keys()) {
+    globalShortcut.unregister(accelerator);
+  }
+  registered = new Map();
+
+  const results = [];
+  for (const binding of bindings) {
+    if (!binding.accelerator) continue;
+    if (registered.has(binding.accelerator)) {
+      results.push({ ...binding, ok: false, reason: "duplicate" });
+      continue;
+    }
+    try {
+      const ok = globalShortcut.register(binding.accelerator, () => {
+        mainWindow?.webContents.send("hotkey-trigger", binding);
+      });
+      if (ok) registered.set(binding.accelerator, binding);
+      results.push({ ...binding, ok, reason: ok ? "" : "system-or-app-conflict" });
+    } catch (error) {
+      results.push({ ...binding, ok: false, reason: "invalid-accelerator" });
+    }
+  }
+  return results;
+}
+
+app.whenReady().then(createWindow);
+
+app.on("will-quit", () => {
+  globalShortcut.unregisterAll();
+});
+
+app.on("window-all-closed", () => {
+  if (process.platform !== "darwin") app.quit();
+});
+
+ipcMain.handle("library:load", async () => {
+  await ensureLibrary();
+  return readJson(libraryFile());
+});
+
+ipcMain.handle("library:save", async (_event, library) => {
+  await ensureLibrary();
+  await fs.writeFile(libraryFile(), JSON.stringify(library, null, 2));
+  return { ok: true };
+});
+
+ipcMain.handle("library:reveal", async () => {
+  await ensureLibrary();
+  await shell.openPath(appRoot());
+  return { ok: true };
+});
+
+ipcMain.handle("library:export", async (_event, library) => {
+  const target = await dialog.showSaveDialog(mainWindow, {
+    title: "Export SoundDeck library backup",
+    defaultPath: `sounddeck-backup-${new Date().toISOString().slice(0, 10)}.json`,
+    filters: [{ name: "SoundDeck Backup", extensions: ["json"] }]
+  });
+  if (target.canceled || !target.filePath) return { ok: false, canceled: true };
+  await fs.writeFile(target.filePath, JSON.stringify(library, null, 2));
+  return { ok: true, filePath: target.filePath };
+});
+
+ipcMain.handle("library:importBackup", async () => {
+  const picked = await dialog.showOpenDialog(mainWindow, {
+    title: "Import SoundDeck library backup",
+    properties: ["openFile"],
+    filters: [{ name: "SoundDeck Backup", extensions: ["json"] }]
+  });
+  if (picked.canceled || !picked.filePaths[0]) return { ok: false, canceled: true };
+  const imported = await readJson(picked.filePaths[0]);
+  await fs.writeFile(libraryFile(), JSON.stringify(imported, null, 2));
+  return { ok: true, library: imported };
+});
+
+ipcMain.handle("media:import", async (_event, filePaths) => {
+  await ensureLibrary();
+  const allowed = new Set([".wav", ".mp3", ".ogg", ".flac", ".m4a", ".aac", ".webm"]);
+  const imported = [];
+  for (const sourcePath of filePaths) {
+    const stat = await fs.stat(sourcePath);
+    if (!stat.isFile()) continue;
+    const ext = path.extname(sourcePath).toLowerCase();
+    if (!allowed.has(ext)) {
+      imported.push({ ok: false, sourcePath, reason: "unsupported-format" });
+      continue;
+    }
+    const id = crypto.randomUUID();
+    const baseName = sanitizeName(path.basename(sourcePath, ext));
+    const storedName = `${id}${ext}`;
+    const dest = path.join(mediaRoot(), storedName);
+    await fs.copyFile(sourcePath, dest);
+    imported.push({
+      ok: true,
+      id,
+      title: baseName,
+      sourcePath,
+      mediaPath: dest,
+      storedName,
+      ext,
+      mime: inferMime(ext),
+      size: stat.size
+    });
+  }
+  return imported;
+});
+
+ipcMain.handle("media:read", async (_event, mediaPath) => {
+  const data = await fs.readFile(mediaPath);
+  return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+});
+
+ipcMain.handle("media:saveRecording", async (_event, payload) => {
+  await ensureLibrary();
+  const id = crypto.randomUUID();
+  const ext = payload.ext || ".webm";
+  const title = sanitizeName(payload.title || "Recording");
+  const dest = path.join(mediaRoot(), `${id}${ext}`);
+  await fs.writeFile(dest, Buffer.from(payload.bytes));
+  const stat = await fs.stat(dest);
+  return {
+    ok: true,
+    id,
+    title,
+    mediaPath: dest,
+    storedName: `${id}${ext}`,
+    ext,
+    mime: inferMime(ext),
+    size: stat.size
+  };
+});
+
+ipcMain.handle("hotkeys:register", async (_event, bindings) => registerHotkeys(bindings));
+
+ipcMain.handle("app:openExternal", async (_event, url) => {
+  await shell.openExternal(url);
+  return { ok: true };
+});

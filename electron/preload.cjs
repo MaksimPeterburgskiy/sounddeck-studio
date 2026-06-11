@@ -1,0 +1,20 @@
+const { contextBridge, ipcRenderer, webUtils } = require("electron");
+
+contextBridge.exposeInMainWorld("sounddeck", {
+  loadLibrary: () => ipcRenderer.invoke("library:load"),
+  saveLibrary: (library) => ipcRenderer.invoke("library:save", library),
+  exportLibrary: (library) => ipcRenderer.invoke("library:export", library),
+  importBackup: () => ipcRenderer.invoke("library:importBackup"),
+  revealLibrary: () => ipcRenderer.invoke("library:reveal"),
+  importMedia: (paths) => ipcRenderer.invoke("media:import", paths),
+  readMedia: (mediaPath) => ipcRenderer.invoke("media:read", mediaPath),
+  saveRecording: (payload) => ipcRenderer.invoke("media:saveRecording", payload),
+  registerHotkeys: (bindings) => ipcRenderer.invoke("hotkeys:register", bindings),
+  openExternal: (url) => ipcRenderer.invoke("app:openExternal", url),
+  getPathForFile: (file) => webUtils.getPathForFile(file),
+  onHotkeyTrigger: (callback) => {
+    const listener = (_event, binding) => callback(binding);
+    ipcRenderer.on("hotkey-trigger", listener);
+    return () => ipcRenderer.removeListener("hotkey-trigger", listener);
+  }
+});
