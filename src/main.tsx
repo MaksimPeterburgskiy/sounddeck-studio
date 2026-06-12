@@ -768,8 +768,9 @@ function useHotkeyCapture(onChange: (value: string) => void) {
       stop();
     });
     return () => {
-      release();
-      void window.sounddeck.setHotkeyCapture(false);
+      // If a newer capture claimed the slot it has already re-enabled
+      // suspension; sending false here would resume global hotkeys under it.
+      if (release()) void window.sounddeck.setHotkeyCapture(false);
       setPreview("");
       window.removeEventListener("keydown", onKeyDown, true);
       window.removeEventListener("keyup", onKeyUp, true);

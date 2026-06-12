@@ -148,10 +148,14 @@ export function formatAccelerator(accelerator: string) {
 // whichever capture currently holds it.
 let activeCaptureCancel: (() => void) | null = null;
 
-export function claimCaptureSlot(cancel: () => void): () => void {
+// Releasing reports whether the slot was still owned, so a capture whose slot
+// was claimed by a newer capture knows not to undo the newer capture's state.
+export function claimCaptureSlot(cancel: () => void): () => boolean {
   if (activeCaptureCancel && activeCaptureCancel !== cancel) activeCaptureCancel();
   activeCaptureCancel = cancel;
   return () => {
-    if (activeCaptureCancel === cancel) activeCaptureCancel = null;
+    if (activeCaptureCancel !== cancel) return false;
+    activeCaptureCancel = null;
+    return true;
   };
 }
