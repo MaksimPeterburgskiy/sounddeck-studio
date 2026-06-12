@@ -7,6 +7,9 @@ interface ActiveVoice {
   gains: GainNode[];
   startedAt: number;
   fadeOutMs: number;
+  trimStart: number;
+  clipDuration: number;
+  loop: boolean;
 }
 
 type EngineStatus = "idle" | "playing" | "paused";
@@ -15,6 +18,8 @@ export class AudioEngine {
   private monitorContext: AudioContext;
   private virtualContext: AudioContext;
   private decodeContext: AudioContext;
+  private monitorBus: GainNode;
+  private virtualBus: GainNode;
   private cache = new Map<string, AudioBuffer>();
   private active = new Map<string, ActiveVoice[]>();
   private micStream?: MediaStream;
@@ -28,12 +33,18 @@ export class AudioEngine {
     this.monitorContext = new AudioContext({ latencyHint: "interactive" });
     this.virtualContext = new AudioContext({ latencyHint: "interactive" });
     this.decodeContext = new AudioContext({ latencyHint: "interactive" });
+    this.monitorBus = this.monitorContext.createGain();
+    this.monitorBus.connect(this.monitorContext.destination);
+    this.virtualBus = this.virtualContext.createGain();
+    this.virtualBus.connect(this.virtualContext.destination);
+    this.applyBusVolumes();
   }
 
-  async configure(settings: AudioSettings) {
+  async configure(settings: AudioSettings, virtualSinkId: string) {
     this.settings = settings;
+    this.applyBusVolumes();
     await this.setSink(this.monitorContext, settings.monitorDeviceId);
-    await this.setSink(this.virtualContext, settings.virtualMicDeviceId);
+    await this.setSink(this.virtualContext, virtualSinkId);
     await this.configureMic();
   }
 
@@ -53,20 +64,20 @@ export class AudioEngine {
     const trimStart = Math.min(Math.max(0, sound.trimStartSec ?? 0), buffer.duration);
     const trimEnd = Math.min(Math.max(trimStart + 0.01, sound.trimEndSec ?? buffer.duration), buffer.duration);
     const clipDuration = Math.max(0.01, trimEnd - trimStart);
-    const voice: ActiveVoice = { id: crypto.randomUUID(), soundId: sound.id, sources: [], gains: [], startedAt: performance.now(), fadeOutMs: sound.fadeOutMs };
+    const voice: ActiveVoice = { id: crypto.randomUUID(), soundId: sound.id, sources: [], gains: [], startedAt: performance.now(), fadeOutMs: sound.fadeOutMs, trimStart, clipDuration, loop: sound.loop };
 
     for (const route of contexts) {
       const context = route.context;
       const source = context.createBufferSource();
       const gain = context.createGain();
-      const totalGain = sound.volume * this.settings.soundboardVolume * route.volume;
+      const totalGain = sound.volume;
       source.buffer = buffer;
       source.loop = sound.loop;
       if (sound.loop) {
         source.loopStart = trimStart;
         source.loopEnd = trimEnd;
       }
-      source.connect(gain).connect(context.destination);
+      source.connect(gain).connect(route.bus);
       const now = context.currentTime;
       gain.gain.setValueAtTime(sound.fadeInMs > 0 ? 0.0001 : totalGain, now);
       if (sound.fadeInMs > 0) gain.gain.exponentialRampToValueAtTime(Math.max(0.0001, totalGain), now + sound.fadeInMs / 1000);
@@ -110,6 +121,27 @@ export class AudioEngine {
     return (this.active.get(soundId) || []).length > 0;
   }
 
+  /** Apply a new per-sound volume to any currently playing voices of that sound. */
+  setSoundVolume(soundId: string, volume: number) {
+    for (const voice of this.active.get(soundId) || []) {
+      for (const gain of voice.gains) {
+        const now = gain.context.currentTime;
+        gain.gain.cancelScheduledValues(now);
+        gain.gain.setTargetAtTime(Math.max(0.0001, volume), now, 0.02);
+      }
+    }
+  }
+
+  /** Current playback position in seconds within the source buffer, or null when not playing. */
+  getPosition(soundId: string): number | null {
+    const voices = this.active.get(soundId);
+    if (!voices?.length) return null;
+    const voice = voices[voices.length - 1];
+    const elapsed = (performance.now() - voice.startedAt) / 1000;
+    if (voice.loop) return voice.trimStart + (elapsed % voice.clipDuration);
+    return voice.trimStart + Math.min(elapsed, voice.clipDuration);
+  }
+
   async dispose() {
     this.stopAll();
     this.stopMic();
@@ -117,15 +149,20 @@ export class AudioEngine {
   }
 
   private contextsForTarget(target: OutputTarget) {
-    const contexts: Array<{ context: AudioContext; volume: number }> = [];
+    const contexts: Array<{ context: AudioContext; volume: number; bus: GainNode }> = [];
     if ((target === "monitor" || target === "both") && this.settings.monitorToHeadphones) {
-      contexts.push({ context: this.monitorContext, volume: this.settings.monitorVolume });
+      contexts.push({ context: this.monitorContext, volume: this.settings.monitorVolume, bus: this.monitorBus });
     }
     if ((target === "virtual" || target === "both") && this.settings.soundboardToVirtualMic) {
-      contexts.push({ context: this.virtualContext, volume: 1 });
+      contexts.push({ context: this.virtualContext, volume: 1, bus: this.virtualBus });
     }
-    if (!contexts.length) contexts.push({ context: this.monitorContext, volume: this.settings.monitorVolume });
+    if (!contexts.length) contexts.push({ context: this.monitorContext, volume: this.settings.monitorVolume, bus: this.monitorBus });
     return contexts;
+  }
+
+  private applyBusVolumes() {
+    this.monitorBus.gain.setTargetAtTime(this.settings.soundboardVolume * this.settings.monitorVolume, this.monitorContext.currentTime, 0.02);
+    this.virtualBus.gain.setTargetAtTime(this.settings.soundboardVolume, this.virtualContext.currentTime, 0.02);
   }
 
   private async setSink(context: AudioContext, deviceId: string) {
@@ -174,7 +211,8 @@ export class AudioEngine {
     voice.gains.forEach((gain) => {
       const now = gain.context.currentTime;
       gain.gain.cancelScheduledValues(now);
-      gain.gain.setTargetAtTime(0.0001, now, fadeSeconds);
+      if (fadeSeconds > 0) gain.gain.setTargetAtTime(0.0001, now, fadeSeconds);
+      else gain.gain.setValueAtTime(0.0001, now);
     });
     window.setTimeout(() => voice.sources.forEach((source) => {
       try {

@@ -23,7 +23,14 @@
       "electron/**",
       "package.json"
     ],
+    "extraResources": [
+      {
+        "from": "build/vbcable",
+        "to": "vbcable"
+      }
+    ],
     "win": {
+      "icon": "build/icon.ico",
       "target": [
         "portable",
         "nsis"
@@ -31,7 +38,9 @@
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "perMachine": true,
+      "allowToChangeInstallationDirectory": true,
+      "include": "build/installer.nsh"
     }
   },
   "keywords": [

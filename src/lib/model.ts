@@ -7,17 +7,16 @@ const defaultSettings: SoundLibrary["settings"] = {
   soundboardToVirtualMic: false,
   monitorToHeadphones: true,
   monitorMicToHeadphones: false,
-  micVolume: 0.85,
-  soundboardVolume: 0.9,
-  monitorVolume: 0.8,
+  micVolume: 1,
+  soundboardVolume: 1,
+  monitorVolume: 1,
   monitorDeviceId: "",
-  virtualMicDeviceId: "",
   microphoneDeviceId: "",
   stopAllHotkey: "CommandOrControl+Alt+Space"
 };
 const defaultSoundOptions: Pick<SoundSlot, "fadeInMs" | "fadeOutMs" | "loop" | "retriggerMode" | "hotkey" | "outputTarget"> = {
   fadeInMs: 0,
-  fadeOutMs: 35,
+  fadeOutMs: 0,
   loop: false,
   retriggerMode: "restart",
   hotkey: "",
@@ -58,9 +57,9 @@ export function soundFromImport(result: MediaImportResult, index: number, output
     size: result.size,
     color: palette[index % palette.length],
     icon: icons[index % icons.length],
-    volume: 0.9,
+    volume: 1,
     fadeInMs: 0,
-    fadeOutMs: 35,
+    fadeOutMs: 0,
     loop: false,
     retriggerMode: "restart",
     hotkey: "",
@@ -79,7 +78,8 @@ export function normalizeLibrary(library: SoundLibrary): SoundLibrary {
     settings: { ...defaultSettings, ...library.settings },
     boards: boards.map((board) => ({
       ...board,
-      sounds: board.sounds.map((sound) => ({ ...defaultSoundOptions, ...sound }))
+      // volume 0.9 was the old import default; lift it to the new 100% default.
+      sounds: board.sounds.map((sound) => ({ ...defaultSoundOptions, ...sound, volume: sound.volume === 0.9 ? 1 : sound.volume }))
     }))
   };
 }

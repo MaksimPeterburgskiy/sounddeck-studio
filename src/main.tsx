@@ -63,14 +63,17 @@ function App() {
     void window.sounddeck.saveLibrary(library);
   }, [library]);
 
+  // The virtual mic sink is always the VB-CABLE playback device; detected by label, never user-picked.
+  const cableDeviceId = useMemo(() => devices.find((device) => device.kind === "audiooutput" && /cable input/i.test(device.label))?.deviceId ?? "", [devices]);
+
   useEffect(() => {
     if (!library) return;
     if (!engineRef.current) engineRef.current = new AudioEngine(library.settings, (status, activeIds) => {
       setEngineStatus(status);
       setPlayingIds(activeIds);
     });
-    void engineRef.current.configure(library.settings);
-  }, [library?.settings]);
+    void engineRef.current.configure(library.settings, cableDeviceId);
+  }, [library?.settings, cableDeviceId]);
 
   const activeBoard = useMemo(() => {
     if (!library) return null;
@@ -154,6 +157,7 @@ function App() {
   }
 
   function updateSound(soundId: string, patch: Partial<SoundSlot>) {
+    if (patch.volume !== undefined) engineRef.current?.setSoundVolume(soundId, patch.volume);
     updateLibrary((current) => ({
       ...current,
       boards: current.boards.map((board) => ({
@@ -319,6 +323,7 @@ function App() {
                 <SoundPad
                   key={sound.id}
                   sound={sound}
+                  engine={engineRef.current}
                   selected={selectedSoundId === sound.id}
                   playing={playingIds.includes(sound.id)}
                   hotkeyProblem={hotkeyResults.some((result) => result.soundId === sound.id && !result.ok)}
@@ -354,7 +359,6 @@ function App() {
             outputDevices={outputDevices}
             onRefresh={refreshDevices}
             onChange={changeSettings}
-            onExternal={(url) => void window.sounddeck.openExternal(url)}
           />
         )}
 
@@ -446,6 +450,7 @@ function BoardTitle({ name, onRename }: { name: string; onRename: (name: string)
 
 function SoundPad(props: {
   sound: SoundSlot;
+  engine: AudioEngine | null;
   selected: boolean;
   playing: boolean;
   hotkeyProblem: boolean;
@@ -469,7 +474,10 @@ function SoundPad(props: {
         <PadIcon sound={sound} />
         <strong>{sound.title}</strong>
         <span>{formatDuration(clipDuration)} · {formatBytes(sound.size)}</span>
-        <Wave peaks={sound.waveform} color={sound.color} />
+        <div className="waveWrap">
+          <Wave peaks={sound.waveform} color={sound.color} />
+          <Playhead engine={props.engine} soundId={sound.id} duration={sound.duration} active={props.playing} />
+        </div>
       </button>
       <div className="padControls">
         <button title={props.playing ? "Stop" : "Play"} onClick={props.playing ? props.onStop : props.onPlay}>
@@ -482,6 +490,7 @@ function SoundPad(props: {
       </div>
       <div className="padMeta">
         <span className={props.hotkeyProblem ? "problem" : ""}>{sound.hotkey || "No hotkey"}</span>
+        <span className="padVolume"><Volume2 size={11} /> {Math.round(sound.volume * 100)}%</span>
         <span>{sound.outputTarget}</span>
       </div>
     </article>
@@ -514,6 +523,54 @@ async function fileToIconDataUrl(file: File): Promise<string> {
 
 function Wave({ peaks, color }: { peaks?: number[]; color: string }) {
   return <div className="wave">{(peaks?.length ? peaks : Array.from({ length: 36 }, (_, index) => (index % 5) / 5 + 0.15)).map((peak, index) => <i key={index} style={{ height: `${Math.max(10, peak * 100)}%`, background: color }} />)}</div>;
+}
+
+function Playhead({ engine, soundId, duration, active }: { engine: AudioEngine | null; soundId: string; duration?: number; active: boolean }) {
+  const lineRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!active || !engine || !duration) return;
+    let frame = 0;
+    const tick = () => {
+      const position = engine.getPosition(soundId);
+      if (lineRef.current) {
+        if (position === null) {
+          lineRef.current.style.opacity = "0";
+        } else {
+          lineRef.current.style.opacity = "1";
+          lineRef.current.style.left = `${Math.min(100, (position / duration) * 100)}%`;
+        }
+      }
+      frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+  }, [engine, soundId, duration, active]);
+
+  if (!active || !duration) return null;
+  return <div className="playhead" ref={lineRef} />;
+}
+
+function VolumeField({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) {
+  return (
+    <label className="volumeField">
+      {label}
+      <div className="volumeRow">
+        <input type="range" min="0" max="1" step="0.01" value={value} onChange={(event) => onChange(Number(event.target.value))} />
+        <input
+          type="number"
+          min="0"
+          max="100"
+          value={Math.round(value * 100)}
+          onChange={(event) => {
+            const percent = Number(event.target.value);
+            if (Number.isFinite(percent)) onChange(Math.min(100, Math.max(0, percent)) / 100);
+          }}
+        />
+        <span className="volumeUnit">%</span>
+      </div>
+    </label>
+  );
 }
 
 function SoundEditor({ sound, onChange, onClose }: { sound: SoundSlot; onChange: (patch: Partial<SoundSlot>) => void; onClose: () => void }) {
@@ -551,7 +608,7 @@ function SoundEditor({ sound, onChange, onClose }: { sound: SoundSlot; onChange:
           />
         </div>
       </div>
-      <label>Volume <span>{Math.round(sound.volume * 100)}%</span><input type="range" min="0" max="1" step="0.01" value={sound.volume} onChange={(event) => onChange({ volume: Number(event.target.value) })} /></label>
+      <VolumeField label="Volume" value={sound.volume} onChange={(volume) => onChange({ volume })} />
       <label>Fade in ms<input type="number" min="0" value={sound.fadeInMs} onChange={(event) => onChange({ fadeInMs: Number(event.target.value) })} /></label>
       <label>Fade out ms<input type="number" min="0" value={sound.fadeOutMs} onChange={(event) => onChange({ fadeOutMs: Number(event.target.value) })} /></label>
       <label>Output<select value={sound.outputTarget} onChange={(event) => onChange({ outputTarget: event.target.value as SoundSlot["outputTarget"] })}><option value="both">Headphones + virtual mic</option><option value="monitor">Headphones</option><option value="virtual">Virtual mic</option></select></label>
@@ -652,6 +709,7 @@ function ClipEditor({ sound, engine, playing, onPlay, onStop, onChange, onClose 
             })}
           </div>
           <div className="clipRegion" style={{ left: `${startPct}%`, width: `${Math.max(0, endPct - startPct)}%` }} />
+          <Playhead engine={engine} soundId={sound.id} duration={duration} active={playing} />
           <div className="clipHandle start" style={{ left: `${startPct}%` }} onPointerDown={dragHandle("start")} role="slider" aria-label="Clip start" aria-valuenow={start} aria-valuemin={0} aria-valuemax={duration} tabIndex={0} />
           <div className="clipHandle end" style={{ left: `${endPct}%` }} onPointerDown={dragHandle("end")} role="slider" aria-label="Clip end" aria-valuenow={end} aria-valuemin={0} aria-valuemax={duration} tabIndex={0} />
         </div>
@@ -673,13 +731,12 @@ function ClipEditor({ sound, engine, playing, onPlay, onStop, onChange, onClose 
   );
 }
 
-function DevicePanel({ library, inputDevices, outputDevices, onRefresh, onChange, onExternal }: {
+function DevicePanel({ library, inputDevices, outputDevices, onRefresh, onChange }: {
   library: SoundLibrary;
   inputDevices: MediaDeviceInfo[];
   outputDevices: MediaDeviceInfo[];
   onRefresh: () => void;
   onChange: (patch: Partial<SoundLibrary["settings"]>) => void;
-  onExternal: (url: string) => void;
 }) {
   const settings = library.settings;
   return (
@@ -689,20 +746,18 @@ function DevicePanel({ library, inputDevices, outputDevices, onRefresh, onChange
         <div className="toggleRow"><label><input type="checkbox" checked={settings.micPassthrough} onChange={(event) => onChange({ micPassthrough: event.target.checked })} /> Mic passthrough</label><label><input type="checkbox" checked={settings.soundboardToVirtualMic} onChange={(event) => onChange({ soundboardToVirtualMic: event.target.checked })} /> Soundboard to virtual mic</label><label><input type="checkbox" checked={settings.monitorToHeadphones} onChange={(event) => onChange({ monitorToHeadphones: event.target.checked })} /> Monitor soundboard</label><label><input type="checkbox" checked={settings.monitorMicToHeadphones} onChange={(event) => onChange({ monitorMicToHeadphones: event.target.checked })} /> Monitor microphone</label></div>
         <label><Mic size={16} /> Microphone<select value={settings.microphoneDeviceId} onChange={(event) => onChange({ microphoneDeviceId: event.target.value })}><option value="">System default</option>{inputDevices.map((device) => <option key={device.deviceId} value={device.deviceId}>{device.label || `Input ${device.deviceId.slice(0, 6)}`}</option>)}</select></label>
         <label><Headphones size={16} /> Headphones / monitor<select value={settings.monitorDeviceId} onChange={(event) => onChange({ monitorDeviceId: event.target.value })}><option value="">System default</option>{outputDevices.map((device) => <option key={device.deviceId} value={device.deviceId}>{device.label || `Output ${device.deviceId.slice(0, 6)}`}</option>)}</select></label>
-        <label><Radio size={16} /> Virtual cable playback device<select value={settings.virtualMicDeviceId} onChange={(event) => onChange({ virtualMicDeviceId: event.target.value })}><option value="">System default</option>{outputDevices.map((device) => <option key={device.deviceId} value={device.deviceId}>{device.label || `Output ${device.deviceId.slice(0, 6)}`}</option>)}</select></label>
-        <label>Mic volume <input type="range" min="0" max="1" step="0.01" value={settings.micVolume} onChange={(event) => onChange({ micVolume: Number(event.target.value) })} /></label>
-        <label>Soundboard volume <input type="range" min="0" max="1" step="0.01" value={settings.soundboardVolume} onChange={(event) => onChange({ soundboardVolume: Number(event.target.value) })} /></label>
-        <label>Monitor volume <input type="range" min="0" max="1" step="0.01" value={settings.monitorVolume} onChange={(event) => onChange({ monitorVolume: Number(event.target.value) })} /></label>
-        <div className="buttonLine"><button onClick={onRefresh}><Settings size={16} /> Refresh devices</button><button onClick={() => onExternal("https://vb-audio.com/Cable/")}><Download size={16} /> VB-CABLE</button></div>
+        <VolumeField label="Mic volume" value={settings.micVolume} onChange={(micVolume) => onChange({ micVolume })} />
+        <VolumeField label="Soundboard volume" value={settings.soundboardVolume} onChange={(soundboardVolume) => onChange({ soundboardVolume })} />
+        <VolumeField label="Monitor volume" value={settings.monitorVolume} onChange={(monitorVolume) => onChange({ monitorVolume })} />
+        <div className="buttonLine"><button onClick={onRefresh}><Settings size={16} /> Refresh devices</button></div>
       </section>
       <section className="routingGuide">
         <h2>Virtual Mic Setup</h2>
-        <p>Install a signed virtual cable, select its playback side here, then choose the matching recording side as the microphone in Discord, OBS, or your game.</p>
+        <p>VB-CABLE is installed automatically with this app and the soundboard always plays into its <strong>CABLE Input</strong> speaker — no setup needed here. Everything comes back out of the <strong>CABLE Output</strong> microphone: that virtual output is where the sound comes from for other apps.</p>
         <ol>
-          <li>Install VB-CABLE or another signed Windows virtual audio cable.</li>
-          <li>Set virtual cable playback to <strong>CABLE Input</strong> in this app.</li>
-          <li>Set Discord or OBS microphone to <strong>CABLE Output</strong>.</li>
-          <li>Keep monitor output on headphones to avoid feedback.</li>
+          <li>In Discord, OBS, or your game, pick <strong>CABLE Output (VB-Audio Virtual Cable)</strong> as the microphone.</li>
+          <li>Enable <strong>Soundboard to virtual mic</strong>, plus <strong>Mic passthrough</strong> if your voice should be mixed in with the sounds.</li>
+          <li>Keep the headphones / monitor device above on your real headphones so you hear the soundboard without echo or feedback.</li>
         </ol>
       </section>
     </div>

@@ -22,7 +22,6 @@ export function installDevBridge() {
           soundboardVolume: 0.9,
           monitorVolume: 0.8,
           monitorDeviceId: "",
-          virtualMicDeviceId: "",
           microphoneDeviceId: "",
           stopAllHotkey: "CommandOrControl+Alt+Space"
         },

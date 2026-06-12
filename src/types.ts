@@ -46,7 +46,6 @@ export interface AudioSettings {
   soundboardVolume: number;
   monitorVolume: number;
   monitorDeviceId: string;
-  virtualMicDeviceId: string;
   microphoneDeviceId: string;
   stopAllHotkey: string;
 }
