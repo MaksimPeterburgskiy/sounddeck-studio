@@ -104,6 +104,7 @@ declare global {
       saveRecording: (payload: { title: string; ext: string; bytes: ArrayBuffer }) => Promise<MediaImportResult>;
       registerHotkeys: (bindings: HotkeyBinding[]) => Promise<HotkeyResult[]>;
       openExternal: (url: string) => Promise<{ ok: boolean }>;
+      getVersion: () => Promise<string>;
       getPathForFile: (file: File) => string;
       onHotkeyTrigger: (callback: (binding: HotkeyBinding) => void) => () => void;
       getCorsairStatus: () => Promise<CorsairState>;
