@@ -62,6 +62,9 @@ jobs:
       - name: Fetch VB-CABLE driver pack
         run: node scripts/fetch-vbcable.mjs
 
+      - name: Generate installer artwork
+        run: node scripts/make-installer-art.mjs
+
       - name: Build and publish Windows installers
         run: npx electron-builder --win --publish always
         env:

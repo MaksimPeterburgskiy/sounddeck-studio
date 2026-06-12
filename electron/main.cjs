@@ -281,21 +281,15 @@ function setupAutoUpdates() {
     console.error("electron-updater unavailable:", error);
     return;
   }
+  const sendStatus = (status) => mainWindow?.webContents.send("update-status", status);
   autoUpdater.on("error", (error) => console.error("Auto-update error:", error));
-  autoUpdater.on("update-downloaded", async (info) => {
-    const { response } = await dialog.showMessageBox(mainWindow, {
-      type: "info",
-      title: "Update ready",
-      message: `SoundDeck Studio ${info.version} has been downloaded.`,
-      detail: "Restart now to apply the update, or it will be installed the next time you quit the app.",
-      buttons: ["Restart & Update", "Later"],
-      defaultId: 0,
-      cancelId: 1
-    });
-    if (response === 0) {
-      isQuitting = true;
-      autoUpdater.quitAndInstall();
-    }
+  autoUpdater.on("update-available", (info) => sendStatus({ state: "downloading", version: info.version, percent: 0 }));
+  autoUpdater.on("download-progress", (progress) => sendStatus({ state: "downloading", percent: progress.percent }));
+  autoUpdater.on("update-downloaded", (info) => sendStatus({ state: "ready", version: info.version }));
+  ipcMain.handle("update:install", () => {
+    isQuitting = true;
+    // Silent install with auto-relaunch: no installer pages, no "run app?" prompt.
+    autoUpdater.quitAndInstall(true, true);
   });
   autoUpdater.checkForUpdates().catch((error) => {
     console.error("Auto-update check failed:", error);

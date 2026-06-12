@@ -86,6 +86,10 @@ export interface HotkeyResult extends HotkeyBinding {
 
 export type CorsairState = "unavailable" | "idle" | "connecting" | "connected" | "disconnected";
 
+export type UpdateStatus =
+  | { state: "downloading"; version?: string; percent?: number }
+  | { state: "ready"; version: string };
+
 declare global {
   interface Window {
     sounddeck: {
@@ -105,6 +109,8 @@ declare global {
       getCorsairStatus: () => Promise<CorsairState>;
       onCorsairStatus: (callback: (state: CorsairState) => void) => () => void;
       onCorsairKey: (callback: (key: string) => void) => () => void;
+      installUpdate: () => Promise<void>;
+      onUpdateStatus: (callback: (status: UpdateStatus) => void) => () => void;
     };
   }
 }

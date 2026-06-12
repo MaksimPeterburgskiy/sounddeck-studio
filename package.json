@@ -9,7 +9,7 @@
     "electron": "electron .",
     "start": "concurrently -k \"npm run dev\" \"wait-on tcp:5173 && electron .\"",
     "build": "tsc && vite build",
-    "dist": "node scripts/fetch-vbcable.mjs && npm run build && electron-builder --win",
+    "dist": "node scripts/fetch-vbcable.mjs && node scripts/make-installer-art.mjs && npm run build && electron-builder --win",
     "test": "vitest run"
   },
   "build": {
@@ -44,7 +44,9 @@
       "oneClick": false,
       "perMachine": true,
       "allowToChangeInstallationDirectory": true,
-      "include": "build/installer.nsh"
+      "include": "build/installer.nsh",
+      "installerHeader": "build/installerHeader.bmp",
+      "installerSidebar": "build/installerSidebar.bmp"
     },
     "publish": {
       "provider": "github",
