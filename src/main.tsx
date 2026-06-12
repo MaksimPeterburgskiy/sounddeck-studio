@@ -205,11 +205,17 @@ function App() {
     }
   }
 
+  function selectBoard(boardId: string) {
+    updateLibrary((current) => ({ ...current, activeBoardId: boardId }));
+    setView("board");
+  }
+
   function addBoard() {
     updateLibrary((current) => {
       const board = makeBoard(current.boards.length + 1);
       return { ...current, activeBoardId: board.id, boards: [...current.boards, board] };
     });
+    setView("board");
   }
 
   function deleteSound(soundId: string) {
@@ -282,9 +288,9 @@ function App() {
               className={board.id === activeBoard.id ? "boardButton active" : "boardButton"}
               role="button"
               tabIndex={0}
-              onClick={() => updateLibrary((current) => ({ ...current, activeBoardId: board.id }))}
+              onClick={() => selectBoard(board.id)}
               onKeyDown={(event) => {
-                if (event.key === "Enter" || event.key === " ") updateLibrary((current) => ({ ...current, activeBoardId: board.id }));
+                if (event.key === "Enter" || event.key === " ") selectBoard(board.id);
               }}
             >
               <span className="dot" style={{ background: board.color }} />
@@ -308,23 +314,34 @@ function App() {
         <button className="wideButton" onClick={addBoard}><Plus size={16} /> New board</button>
         <div className="sideNav">
           <button className={view === "board" ? "active" : ""} onClick={() => setView("board")}><Wand2 size={18} /> Board</button>
+          <button className={view === "recorder" ? "active" : ""} onClick={() => setView("recorder")}><Mic size={18} /> Recorder</button>
+          <div className="sideNavDivider" />
+          <div className="sideNavLabel">Global settings</div>
           <button className={view === "devices" ? "active" : ""} onClick={() => setView("devices")}><Settings size={18} /> Devices</button>
           <button className={view === "hotkeys" ? "active" : ""} onClick={() => setView("hotkeys")}><Keyboard size={18} /> Hotkeys</button>
-          <button className={view === "recorder" ? "active" : ""} onClick={() => setView("recorder")}><Mic size={18} /> Recorder</button>
         </div>
       </aside>
 
       <section className="workspace">
         <header className="topbar">
-          <div>
-            <BoardTitle key={activeBoard.id} name={activeBoard.name} onRename={(name) => updateBoard(activeBoard.id, { name })} />
-            <p>{activeBoard.sounds.length} sounds · {message}</p>
-          </div>
-          <div className="boardHotkeyControl" title="Global hotkey that switches to this board">
-            <Keyboard size={15} />
-            <span>Switch key</span>
-            <HotkeyCapture value={activeBoard.switchHotkey || ""} onChange={(switchHotkey) => updateBoard(activeBoard.id, { switchHotkey })} />
-          </div>
+          {view === "devices" || view === "hotkeys" ? (
+            <div>
+              <div className="boardTitle"><h1>{view === "devices" ? "Devices" : "Hotkeys"}</h1></div>
+              <p>Global settings · applies to every board · {message}</p>
+            </div>
+          ) : (
+            <>
+              <div>
+                <BoardTitle key={activeBoard.id} name={activeBoard.name} onRename={(name) => updateBoard(activeBoard.id, { name })} />
+                <p>{activeBoard.sounds.length} sounds · {message}</p>
+              </div>
+              <div className="boardHotkeyControl" title="Global hotkey that switches to this board">
+                <Keyboard size={15} />
+                <span>Switch key</span>
+                <HotkeyCapture value={activeBoard.switchHotkey || ""} onChange={(switchHotkey) => updateBoard(activeBoard.id, { switchHotkey })} />
+              </div>
+            </>
+          )}
           <div className="topActions">
             <button onClick={() => void window.sounddeck.revealLibrary()}><FolderOpen size={16} /> Library</button>
             <button onClick={() => void window.sounddeck.exportLibrary(library)}><Download size={16} /> Backup</button>

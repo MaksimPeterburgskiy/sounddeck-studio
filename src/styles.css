@@ -280,6 +280,16 @@ small { color: var(--text-dim); font-size: 12px; }
 .wideButton:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
 
 .sideNav { display: grid; gap: 4px; margin-top: auto; }
+.sideNavDivider { height: 1px; margin: 8px 6px 4px; background: var(--line); }
+.sideNavLabel {
+  margin: 0 6px 2px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
 .sideNav button {
   font-weight: 600;
   letter-spacing: 0.04em;
@@ -989,6 +999,7 @@ input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent);
   }
   .sideNav { grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); margin-top: 0; }
   .sideNav button { justify-content: center; }
+  .sideNavDivider, .sideNavLabel { grid-column: 1 / -1; }
   .boards { max-height: 170px; }
   .soundGrid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; padding-bottom: 60vh; }
   .pad { min-height: 200px; }
