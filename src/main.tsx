@@ -7,6 +7,7 @@ import {
   Image as ImageIcon,
   Keyboard,
   Mic,
+  MoreVertical,
   Pencil,
   Play,
   Plus,
@@ -242,6 +243,29 @@ function App() {
     if (editingClipId === soundId) setEditingClipId("");
   }
 
+  function moveSound(soundId: string, targetBoardId: string) {
+    engineRef.current?.stop(soundId);
+    updateLibrary((current) => {
+      const sourceBoard = current.boards.find((board) => board.sounds.some((sound) => sound.id === soundId));
+      const targetBoard = current.boards.find((board) => board.id === targetBoardId);
+      if (!sourceBoard || !targetBoard || sourceBoard.id === targetBoard.id) return current;
+      const sound = sourceBoard.sounds.find((candidate) => candidate.id === soundId)!;
+      return {
+        ...current,
+        boards: current.boards.map((board) => {
+          if (board.id === sourceBoard.id) return { ...board, sounds: board.sounds.filter((candidate) => candidate.id !== soundId), updatedAt: now() };
+          if (board.id === targetBoard.id) return { ...board, sounds: [...board.sounds, { ...sound, updatedAt: now() }], updatedAt: now() };
+          return board;
+        })
+      };
+    });
+    const movedSound = library?.boards.flatMap((board) => board.sounds).find((sound) => sound.id === soundId);
+    const targetBoard = library?.boards.find((board) => board.id === targetBoardId);
+    if (movedSound && targetBoard) setMessage(`Moved ${movedSound.title} to ${targetBoard.name}`);
+    if (selectedSoundId === soundId) setSelectedSoundId("");
+    if (editingClipId === soundId) setEditingClipId("");
+  }
+
   function deleteBoard(boardId: string) {
     if (library && library.boards.length > 1) {
       const boardToDelete = library.boards.find((board) => board.id === boardId);
@@ -395,6 +419,8 @@ function App() {
                   onSelect={() => setSelectedSoundId(sound.id)}
                   onDelete={() => deleteSound(sound.id)}
                   onChange={(patch) => updateSound(sound.id, patch)}
+                  otherBoards={library.boards.filter((board) => board.id !== activeBoard.id)}
+                  onMove={(boardId) => moveSound(sound.id, boardId)}
                 />
               ))}
               {!activeBoard.sounds.length && <div className="empty">Drop sounds to build this board.</div>}
@@ -523,8 +549,28 @@ function SoundPad(props: {
   onSelect: () => void;
   onDelete: () => void;
   onChange: (patch: Partial<SoundSlot>) => void;
+  otherBoards: SoundBoard[];
+  onMove: (boardId: string) => void;
 }) {
   const { sound } = props;
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (!menuRef.current?.contains(event.target as Node)) setMenuOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMenuOpen(false);
+    };
+    window.addEventListener("pointerdown", onPointerDown);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [menuOpen]);
   const clipDuration = Number.isFinite(sound.duration)
     ? Math.max(0, Math.min(sound.trimEndSec ?? sound.duration!, sound.duration!) - Math.max(0, sound.trimStartSec ?? 0))
     : sound.duration;
@@ -533,6 +579,37 @@ function SoundPad(props: {
       className={`pad${props.selected ? " selected" : ""}${props.playing ? " playing" : ""}`}
       style={{ "--pad": sound.color } as React.CSSProperties}
     >
+      <div className="padMenu" ref={menuRef}>
+        <button
+          className={menuOpen ? "padMenuButton open" : "padMenuButton"}
+          title="More options"
+          aria-label="More options"
+          aria-haspopup="menu"
+          aria-expanded={menuOpen}
+          onClick={() => setMenuOpen((open) => !open)}
+        >
+          <MoreVertical size={15} />
+        </button>
+        {menuOpen && (
+          <div className="padMenuDropdown" role="menu">
+            <div className="padMenuLabel">Move to board</div>
+            {props.otherBoards.map((board) => (
+              <button
+                key={board.id}
+                role="menuitem"
+                onClick={() => {
+                  setMenuOpen(false);
+                  props.onMove(board.id);
+                }}
+              >
+                <span className="dot" style={{ background: board.color }} />
+                {board.name}
+              </button>
+            ))}
+            {!props.otherBoards.length && <div className="padMenuEmpty">No other boards</div>}
+          </div>
+        )}
+      </div>
       <button className="padMain" onClick={props.onSelect}>
         <PadIcon sound={sound} />
         <strong>{sound.title}</strong>
