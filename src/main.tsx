@@ -223,13 +223,14 @@ function App() {
       }}
     >
       <aside className="sidebar">
-        <div className="brand">
+        <div className="brand" data-status={engineStatus}>
           <Radio size={24} />
           <div>
             <strong>SoundDeck</strong>
             <span>{engineStatus}</span>
           </div>
         </div>
+        <div className="sideLabel">Boards</div>
         <nav className="boards">
           {library.boards.map((board) => (
             <div
@@ -260,6 +261,7 @@ function App() {
           ))}
         </nav>
         <button className="wideButton" onClick={addBoard}><Plus size={16} /> New board</button>
+        <div className="sideLabel">Studio</div>
         <div className="sideNav">
           <button className={view === "board" ? "active" : ""} onClick={() => setView("board")}><Wand2 size={18} /> Board</button>
           <button className={view === "devices" ? "active" : ""} onClick={() => setView("devices")}><Settings size={18} /> Devices</button>
@@ -368,7 +370,10 @@ function SoundPad(props: {
 }) {
   const { sound } = props;
   return (
-    <article className={props.selected ? "pad selected" : "pad"} style={{ borderColor: sound.color }}>
+    <article
+      className={`pad${props.selected ? " selected" : ""}${props.playing ? " playing" : ""}`}
+      style={{ "--pad": sound.color } as React.CSSProperties}
+    >
       <button className="padMain" onClick={props.onPlay} onDoubleClick={props.onSelect}>
         <span className="padIcon" style={{ background: sound.color }}>{sound.title.slice(0, 1).toUpperCase()}</span>
         <strong>{sound.title}</strong>
