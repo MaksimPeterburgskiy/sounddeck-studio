@@ -20,6 +20,7 @@ let mainWindow;
 let tray;
 let isQuitting = false;
 let corsairBindings = new Map();
+let hotkeyCaptureActive = false;
 
 const hotkeyEngine = createHotkeyEngine({
   onTrigger: (binding) => mainWindow?.webContents.send("hotkey-trigger", binding)
@@ -28,6 +29,9 @@ const hotkeyEngine = createHotkeyEngine({
 const corsair = createCorsairBridge({
   onKey: (key) => {
     mainWindow?.webContents.send("corsair-gkey", key);
+    // While capturing, the pressed G-key is being recorded as a new bind;
+    // firing its existing binding here would play/stop/switch mid-capture.
+    if (hotkeyCaptureActive) return;
     const binding = corsairBindings.get(key);
     if (binding) mainWindow?.webContents.send("hotkey-trigger", binding);
   },
@@ -454,7 +458,8 @@ ipcMain.handle("media:saveRecording", async (_event, payload) => {
 ipcMain.handle("hotkeys:register", async (_event, bindings) => registerHotkeys(bindings));
 
 ipcMain.handle("hotkeys:capture", (_event, active) => {
-  hotkeyEngine.setSuspended(Boolean(active));
+  hotkeyCaptureActive = Boolean(active);
+  hotkeyEngine.setSuspended(hotkeyCaptureActive);
   return { ok: true };
 });
 
