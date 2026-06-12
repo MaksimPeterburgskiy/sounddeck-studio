@@ -49,7 +49,8 @@
     "publish": {
       "provider": "github",
       "owner": "MaksimPeterburgskiy",
-      "repo": "sounddeck-studio"
+      "repo": "sounddeck-studio",
+      "releaseType": "release"
     }
   },
   "keywords": [
