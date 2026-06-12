@@ -84,7 +84,7 @@
     "lucide-react": "^1.17.0",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
-    "typescript": "^5.9.3",
+    "typescript": "^6.0.3",
     "vite": "^7.2.7",
     "vitest": "^4.0.15",
     "wait-on": "^9.0.3"
