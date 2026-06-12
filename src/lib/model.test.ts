@@ -12,7 +12,28 @@ describe("model helpers", () => {
     });
 
     expect(library.activeBoardId).toBe("a");
-    expect(library.settings.stopAllHotkey).toBe("CommandOrControl+Alt+Space");
+    expect(library.settings.stopAllHotkey).toBe("Ctrl+Alt+Space");
+    expect(library.settings.cycleBoardsHotkey).toBe("");
+  });
+
+  it("migrates legacy Electron accelerators to canonical tokens", () => {
+    const library = normalizeLibrary({
+      version: 1,
+      activeBoardId: "a",
+      settings: { stopAllHotkey: "CommandOrControl+Alt+Space" } as SoundLibrary["settings"],
+      boards: [{
+        id: "a", name: "A", color: "#fff", icon: "zap", createdAt: "", updatedAt: "", switchHotkey: "CommandOrControl+num1",
+        sounds: [{
+          id: "s", title: "S", mediaPath: "", storedName: "", mime: "", ext: "", size: 0, color: "#fff", icon: "zap",
+          volume: 1, fadeInMs: 0, fadeOutMs: 0, loop: false, soloPlay: true, retriggerMode: "restart",
+          hotkey: "Shift+numadd", outputTarget: "both", createdAt: "", updatedAt: ""
+        }]
+      }]
+    });
+
+    expect(library.settings.stopAllHotkey).toBe("Ctrl+Alt+Space");
+    expect(library.boards[0].switchHotkey).toBe("Ctrl+Num1");
+    expect(library.boards[0].sounds[0].hotkey).toBe("Shift+NumAdd");
   });
 
   it("creates a sound from a successful media import", () => {

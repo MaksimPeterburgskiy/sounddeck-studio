@@ -1,10 +1,11 @@
-const { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, dialog, globalShortcut, shell } = require("electron");
+const { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, dialog, shell } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs/promises");
 const http = require("node:http");
 const https = require("node:https");
 const crypto = require("node:crypto");
 const { createCorsairBridge, isGKeyAccelerator } = require("./corsair.cjs");
+const { createHotkeyEngine } = require("./hotkeys.cjs");
 
 const isDev = !app.isPackaged;
 if (isDev && process.env.SOUNDDECK_USER_DATA) app.setPath("userData", process.env.SOUNDDECK_USER_DATA);
@@ -18,12 +19,19 @@ if (!app.requestSingleInstanceLock()) {
 let mainWindow;
 let tray;
 let isQuitting = false;
-let registered = new Map();
 let corsairBindings = new Map();
+let hotkeyCaptureActive = false;
+
+const hotkeyEngine = createHotkeyEngine({
+  onTrigger: (binding) => mainWindow?.webContents.send("hotkey-trigger", binding)
+});
 
 const corsair = createCorsairBridge({
   onKey: (key) => {
     mainWindow?.webContents.send("corsair-gkey", key);
+    // While capturing, the pressed G-key is being recorded as a new bind;
+    // firing its existing binding here would play/stop/switch mid-capture.
+    if (hotkeyCaptureActive) return;
     const binding = corsairBindings.get(key);
     if (binding) mainWindow?.webContents.send("hotkey-trigger", binding);
   },
@@ -65,7 +73,8 @@ async function ensureLibrary() {
           monitorVolume: 0.8,
           monitorDeviceId: "",
           microphoneDeviceId: "",
-          stopAllHotkey: "CommandOrControl+Alt+Space"
+          stopAllHotkey: "Ctrl+Alt+Space",
+          cycleBoardsHotkey: ""
         },
         boards: [
           {
@@ -233,13 +242,10 @@ async function createWindow() {
 }
 
 function registerHotkeys(bindings) {
-  for (const accelerator of registered.keys()) {
-    globalShortcut.unregister(accelerator);
-  }
-  registered = new Map();
   corsairBindings = new Map();
 
   const results = [];
+  const keyboardBindings = [];
   for (const binding of bindings) {
     if (!binding.accelerator) continue;
     if (isGKeyAccelerator(binding.accelerator)) {
@@ -253,20 +259,9 @@ function registerHotkeys(bindings) {
       results.push({ ...binding, ok: connected, reason: connected ? "" : "icue-not-connected" });
       continue;
     }
-    if (registered.has(binding.accelerator)) {
-      results.push({ ...binding, ok: false, reason: "duplicate" });
-      continue;
-    }
-    try {
-      const ok = globalShortcut.register(binding.accelerator, () => {
-        mainWindow?.webContents.send("hotkey-trigger", binding);
-      });
-      if (ok) registered.set(binding.accelerator, binding);
-      results.push({ ...binding, ok, reason: ok ? "" : "system-or-app-conflict" });
-    } catch (error) {
-      results.push({ ...binding, ok: false, reason: "invalid-accelerator" });
-    }
+    keyboardBindings.push(binding);
   }
+  results.push(...hotkeyEngine.register(keyboardBindings));
   return results;
 }
 
@@ -314,7 +309,7 @@ app.on("before-quit", () => {
 });
 
 app.on("will-quit", () => {
-  globalShortcut.unregisterAll();
+  hotkeyEngine.stop();
   corsair.stop();
 });
 
@@ -467,6 +462,12 @@ ipcMain.handle("media:saveRecording", async (_event, payload) => {
 });
 
 ipcMain.handle("hotkeys:register", async (_event, bindings) => registerHotkeys(bindings));
+
+ipcMain.handle("hotkeys:capture", (_event, active) => {
+  hotkeyCaptureActive = Boolean(active);
+  hotkeyEngine.setSuspended(hotkeyCaptureActive);
+  return { ok: true };
+});
 
 ipcMain.handle("corsair:status", async () => corsair.getState());
 

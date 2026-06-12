@@ -50,6 +50,7 @@ export interface AudioSettings {
   monitorDeviceId: string;
   microphoneDeviceId: string;
   stopAllHotkey: string;
+  cycleBoardsHotkey: string;
 }
 
 export interface SoundLibrary {
@@ -73,7 +74,7 @@ export interface MediaImportResult {
 }
 
 export interface HotkeyBinding {
-  type: "sound" | "stop-all" | "board";
+  type: "sound" | "stop-all" | "board" | "cycle-board";
   soundId?: string;
   boardId?: string;
   accelerator: string;
@@ -103,6 +104,7 @@ declare global {
       deleteMedia: (mediaPath: string) => Promise<{ ok: boolean; reason?: string }>;
       saveRecording: (payload: { title: string; ext: string; bytes: ArrayBuffer }) => Promise<MediaImportResult>;
       registerHotkeys: (bindings: HotkeyBinding[]) => Promise<HotkeyResult[]>;
+      setHotkeyCapture: (active: boolean) => Promise<{ ok: boolean }>;
       openExternal: (url: string) => Promise<{ ok: boolean }>;
       getVersion: () => Promise<string>;
       getPathForFile: (file: File) => string;

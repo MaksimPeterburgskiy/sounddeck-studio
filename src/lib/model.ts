@@ -1,4 +1,5 @@
 import type { MediaImportResult, OutputTarget, SoundBoard, SoundLibrary, SoundSlot } from "../types";
+import { normalizeAccelerator } from "./hotkeys";
 
 const palette = ["#1db7a6", "#ffcf5c", "#ff6b6b", "#8f7cff", "#4ba3ff", "#74d66b", "#ef7bd5", "#f6903d"];
 const icons = ["zap", "radio", "music", "mic", "laugh", "siren", "sparkles", "gamepad"];
@@ -12,7 +13,8 @@ const defaultSettings: SoundLibrary["settings"] = {
   monitorVolume: 1,
   monitorDeviceId: "",
   microphoneDeviceId: "",
-  stopAllHotkey: "CommandOrControl+Alt+Space"
+  stopAllHotkey: "Ctrl+Alt+Space",
+  cycleBoardsHotkey: ""
 };
 const defaultSoundOptions: Pick<SoundSlot, "fadeInMs" | "fadeOutMs" | "loop" | "soloPlay" | "retriggerMode" | "hotkey" | "outputTarget"> = {
   fadeInMs: 0,
@@ -75,15 +77,23 @@ export function soundFromImport(result: MediaImportResult, index: number, output
 export function normalizeLibrary(library: SoundLibrary): SoundLibrary {
   const boards = library.boards?.length ? library.boards : [makeBoard(1)];
   const activeBoardId = boards.some((board) => board.id === library.activeBoardId) ? library.activeBoardId : boards[0].id;
+  const settings = { ...defaultSettings, ...library.settings };
+  settings.stopAllHotkey = normalizeAccelerator(settings.stopAllHotkey);
+  settings.cycleBoardsHotkey = normalizeAccelerator(settings.cycleBoardsHotkey);
   return {
     ...library,
     activeBoardId,
-    settings: { ...defaultSettings, ...library.settings },
+    settings,
     boards: boards.map((board) => ({
       ...board,
-      switchHotkey: board.switchHotkey ?? "",
+      switchHotkey: normalizeAccelerator(board.switchHotkey ?? ""),
       // volume 0.9 was the old import default; lift it to the new 100% default.
-      sounds: board.sounds.map((sound) => ({ ...defaultSoundOptions, ...sound, volume: sound.volume === 0.9 ? 1 : sound.volume }))
+      sounds: board.sounds.map((sound) => ({
+        ...defaultSoundOptions,
+        ...sound,
+        hotkey: normalizeAccelerator(sound.hotkey || ""),
+        volume: sound.volume === 0.9 ? 1 : sound.volume
+      }))
     }))
   };
 }
@@ -102,6 +112,6 @@ export function formatBytes(bytes: number) {
 }
 
 export function acceleratorLooksReserved(value: string) {
-  const normalized = value.toLowerCase().replace(/\s+/g, "");
-  return ["alt+f4", "commandorcontrol+w", "commandorcontrol+q", "commandorcontrol+r", "f5"].includes(normalized);
+  const normalized = normalizeAccelerator(value).toLowerCase();
+  return ["alt+f4", "ctrl+w", "ctrl+q", "ctrl+r", "f5"].includes(normalized);
 }

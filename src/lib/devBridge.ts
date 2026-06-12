@@ -23,7 +23,8 @@ export function installDevBridge() {
           monitorVolume: 0.8,
           monitorDeviceId: "",
           microphoneDeviceId: "",
-          stopAllHotkey: "CommandOrControl+Alt+Space"
+          stopAllHotkey: "Ctrl+Alt+Space",
+          cycleBoardsHotkey: ""
         },
         boards: [{ id: "board-default", name: "Main Board", color: "#1db7a6", icon: "zap", createdAt, updatedAt: createdAt, sounds: [] }]
       };
@@ -55,6 +56,9 @@ export function installDevBridge() {
     },
     async registerHotkeys(bindings: HotkeyBinding[]) {
       return bindings.map((binding) => ({ ...binding, ok: true, reason: "" }));
+    },
+    async setHotkeyCapture() {
+      return { ok: true };
     },
     async openExternal(url: string) {
       window.open(url, "_blank", "noopener,noreferrer");
