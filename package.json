@@ -1,6 +1,6 @@
 {
   "name": "sounddeck-studio",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Windows-first desktop soundboard with boards, hotkeys, local media, and virtual audio routing.",
   "main": "electron/main.cjs",
   "type": "module",
