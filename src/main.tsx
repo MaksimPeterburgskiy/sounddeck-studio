@@ -291,6 +291,28 @@ function App() {
     });
   }
 
+  async function restoreBoard() {
+    const result = await window.sounddeck.importBoard();
+    if (!result.ok || !result.board) {
+      if (!result.canceled) setMessage("Could not read that board file");
+      return;
+    }
+    const imported = result.board;
+    if (library) {
+      const boardId = library.activeBoardId;
+      const current = library.boards.find((board) => board.id === boardId);
+      current?.sounds.forEach((sound) => engineRef.current?.stop(sound.id));
+      if (current) deleteMediaFiles(current.sounds, library.boards.map((board) => board.id === boardId ? { ...imported, id: boardId } : board));
+    }
+    updateLibrary((current) => ({
+      ...current,
+      boards: current.boards.map((board) => board.id === current.activeBoardId ? { ...imported, id: board.id, createdAt: board.createdAt, updatedAt: now() } : board)
+    }));
+    setSelectedSoundId("");
+    setEditingClipId("");
+    setMessage(`Imported "${imported.name}" onto this board`);
+  }
+
   function changeSettings(patch: Partial<SoundLibrary["settings"]>) {
     updateLibrary((current) => ({ ...current, settings: { ...current.settings, ...patch } }));
   }
@@ -386,11 +408,8 @@ function App() {
           )}
           <div className="topActions">
             <button onClick={() => void window.sounddeck.revealLibrary()}><FolderOpen size={16} /> Library</button>
-            <button onClick={() => void window.sounddeck.exportLibrary(library)}><Download size={16} /> Backup</button>
-            <button onClick={async () => {
-              const result = await window.sounddeck.importBackup();
-              if (result.ok && result.library) setLibrary(normalizeLibrary(result.library));
-            }}><Upload size={16} /> Restore</button>
+            <button title={`Save "${activeBoard.name}" with its sounds to a file`} onClick={() => void window.sounddeck.exportBoard(activeBoard)}><Upload size={16} /> Export</button>
+            <button title="Replace this board with an exported board file" onClick={() => void restoreBoard()}><Download size={16} /> Import</button>
           </div>
         </header>
 

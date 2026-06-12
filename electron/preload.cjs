@@ -3,8 +3,8 @@ const { contextBridge, ipcRenderer, webUtils } = require("electron");
 contextBridge.exposeInMainWorld("sounddeck", {
   loadLibrary: () => ipcRenderer.invoke("library:load"),
   saveLibrary: (library) => ipcRenderer.invoke("library:save", library),
-  exportLibrary: (library) => ipcRenderer.invoke("library:export", library),
-  importBackup: () => ipcRenderer.invoke("library:importBackup"),
+  exportBoard: (board) => ipcRenderer.invoke("board:export", board),
+  importBoard: () => ipcRenderer.invoke("board:import"),
   revealLibrary: () => ipcRenderer.invoke("library:reveal"),
   importMedia: (paths) => ipcRenderer.invoke("media:import", paths),
   readMedia: (mediaPath) => ipcRenderer.invoke("media:read", mediaPath),

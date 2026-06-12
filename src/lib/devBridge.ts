@@ -32,10 +32,10 @@ export function installDevBridge() {
       localStorage.setItem(storageKey, JSON.stringify(library));
       return { ok: true };
     },
-    async exportLibrary() {
+    async exportBoard() {
       return { ok: false, canceled: true };
     },
-    async importBackup() {
+    async importBoard() {
       return { ok: false, canceled: true };
     },
     async revealLibrary() {

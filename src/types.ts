@@ -91,8 +91,8 @@ declare global {
     sounddeck: {
       loadLibrary: () => Promise<SoundLibrary>;
       saveLibrary: (library: SoundLibrary) => Promise<{ ok: boolean }>;
-      exportLibrary: (library: SoundLibrary) => Promise<{ ok: boolean; canceled?: boolean; filePath?: string }>;
-      importBackup: () => Promise<{ ok: boolean; canceled?: boolean; library?: SoundLibrary }>;
+      exportBoard: (board: SoundBoard) => Promise<{ ok: boolean; canceled?: boolean; filePath?: string }>;
+      importBoard: () => Promise<{ ok: boolean; canceled?: boolean; reason?: string; board?: SoundBoard }>;
       revealLibrary: () => Promise<{ ok: boolean }>;
       importMedia: (paths: string[]) => Promise<MediaImportResult[]>;
       readMedia: (mediaPath: string) => Promise<ArrayBuffer>;

@@ -306,27 +306,60 @@ ipcMain.handle("library:reveal", async () => {
   return { ok: true };
 });
 
-ipcMain.handle("library:export", async (_event, library) => {
+ipcMain.handle("board:export", async (_event, board) => {
   const target = await dialog.showSaveDialog(mainWindow, {
-    title: "Export SoundDeck library backup",
-    defaultPath: `sounddeck-backup-${new Date().toISOString().slice(0, 10)}.json`,
-    filters: [{ name: "SoundDeck Backup", extensions: ["json"] }]
+    title: `Export board "${board?.name || "board"}"`,
+    defaultPath: `${sanitizeName(board?.name)}.sdboard`,
+    filters: [{ name: "SoundDeck Board", extensions: ["sdboard"] }]
   });
   if (target.canceled || !target.filePath) return { ok: false, canceled: true };
-  await fs.writeFile(target.filePath, JSON.stringify(library, null, 2));
+  // Audio bytes are embedded so the backup stays valid after the originals are deleted.
+  const media = {};
+  for (const sound of board?.sounds || []) {
+    if (!sound.storedName || media[sound.storedName]) continue;
+    try {
+      media[sound.storedName] = (await fs.readFile(sound.mediaPath)).toString("base64");
+    } catch {
+      // Missing source audio: keep the slot in the backup, restore will skip it.
+    }
+  }
+  await fs.writeFile(target.filePath, JSON.stringify({ format: "sounddeck-board", version: 1, board, media }));
   return { ok: true, filePath: target.filePath };
 });
 
-ipcMain.handle("library:importBackup", async () => {
+ipcMain.handle("board:import", async () => {
   const picked = await dialog.showOpenDialog(mainWindow, {
-    title: "Import SoundDeck library backup",
+    title: "Import a board file",
     properties: ["openFile"],
-    filters: [{ name: "SoundDeck Backup", extensions: ["json"] }]
+    filters: [{ name: "SoundDeck Board", extensions: ["sdboard"] }]
   });
   if (picked.canceled || !picked.filePaths[0]) return { ok: false, canceled: true };
-  const imported = await readJson(picked.filePaths[0]);
-  await fs.writeFile(libraryFile(), JSON.stringify(imported, null, 2));
-  return { ok: true, library: imported };
+  let payload;
+  try {
+    payload = await readJson(picked.filePaths[0]);
+  } catch {
+    return { ok: false, reason: "unreadable-file" };
+  }
+  if (payload?.format !== "sounddeck-board" || !payload.board || !Array.isArray(payload.board.sounds)) {
+    return { ok: false, reason: "not-a-board-backup" };
+  }
+  await ensureLibrary();
+  // Fresh ids and media files so a restored board never collides with the original.
+  const restoredPaths = new Map();
+  const sounds = [];
+  for (const sound of payload.board.sounds) {
+    const data = payload.media?.[sound.storedName];
+    if (typeof data !== "string") continue;
+    let mediaPath = restoredPaths.get(sound.storedName);
+    if (!mediaPath) {
+      const ext = path.extname(sound.storedName) || sound.ext || "";
+      mediaPath = path.join(mediaRoot(), `${crypto.randomUUID()}${ext}`);
+      await fs.writeFile(mediaPath, Buffer.from(data, "base64"));
+      restoredPaths.set(sound.storedName, mediaPath);
+    }
+    sounds.push({ ...sound, id: crypto.randomUUID(), mediaPath, storedName: path.basename(mediaPath) });
+  }
+  return { ok: true, board: { ...payload.board, sounds } };
 });
 
 ipcMain.handle("media:import", async (_event, filePaths) => {
