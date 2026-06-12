@@ -8,6 +8,13 @@ const { createCorsairBridge, isGKeyAccelerator } = require("./corsair.cjs");
 
 const isDev = !app.isPackaged;
 if (isDev && process.env.SOUNDDECK_USER_DATA) app.setPath("userData", process.env.SOUNDDECK_USER_DATA);
+
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+} else {
+  app.on("second-instance", () => showMainWindow());
+}
+
 let mainWindow;
 let tray;
 let isQuitting = false;
