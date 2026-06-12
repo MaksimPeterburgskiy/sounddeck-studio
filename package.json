@@ -9,7 +9,30 @@
     "electron": "electron .",
     "start": "concurrently -k \"npm run dev\" \"wait-on tcp:5173 && electron .\"",
     "build": "tsc && vite build",
+    "dist": "npm run build && electron-builder --win",
     "test": "vitest run"
+  },
+  "build": {
+    "appId": "com.sounddeck.studio",
+    "productName": "SoundDeck Studio",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**",
+      "electron/**",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "portable",
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
   },
   "keywords": [
     "electron",
@@ -21,21 +44,22 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "@vitejs/plugin-react": "^5.1.1",
-    "concurrently": "^10.0.3",
-    "cue-sdk": "^4.0.84",
-    "electron": "^39.2.6",
-    "lucide-react": "^0.561.0",
-    "react": "^19.2.3",
-    "react-dom": "^19.2.3",
-    "vite": "^7.2.7",
-    "wait-on": "^9.0.3"
+    "cue-sdk": "^4.0.84"
   },
   "devDependencies": {
     "@types/node": "^25.0.1",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.1.1",
+    "concurrently": "^10.0.3",
+    "electron": "^39.2.6",
+    "electron-builder": "^26.0.12",
+    "lucide-react": "^0.561.0",
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3",
     "typescript": "^5.9.3",
-    "vitest": "^4.0.15"
+    "vite": "^7.2.7",
+    "vitest": "^4.0.15",
+    "wait-on": "^9.0.3"
   }
 }

@@ -4,6 +4,7 @@ import {
   Download,
   FolderOpen,
   Headphones,
+  Image as ImageIcon,
   Keyboard,
   Mic,
   Pencil,
@@ -465,7 +466,7 @@ function SoundPad(props: {
       style={{ "--pad": sound.color } as React.CSSProperties}
     >
       <button className="padMain" onClick={props.onPlay} onDoubleClick={props.onSelect}>
-        <span className="padIcon" style={{ background: sound.color }}>{sound.title.slice(0, 1).toUpperCase()}</span>
+        <PadIcon sound={sound} />
         <strong>{sound.title}</strong>
         <span>{formatDuration(clipDuration)} · {formatBytes(sound.size)}</span>
         <Wave peaks={sound.waveform} color={sound.color} />
@@ -487,16 +488,69 @@ function SoundPad(props: {
   );
 }
 
+function PadIcon({ sound }: { sound: SoundSlot }) {
+  return (
+    <span className="padIcon" style={{ background: sound.color }}>
+      {sound.image ? <img src={sound.image} alt="" draggable={false} /> : sound.title.slice(0, 1).toUpperCase()}
+    </span>
+  );
+}
+
+const PAD_ICON_IMAGE_SIZE = 96;
+
+async function fileToIconDataUrl(file: File): Promise<string> {
+  const bitmap = await createImageBitmap(file);
+  const scale = Math.max(PAD_ICON_IMAGE_SIZE / bitmap.width, PAD_ICON_IMAGE_SIZE / bitmap.height);
+  const width = Math.round(bitmap.width * scale);
+  const height = Math.round(bitmap.height * scale);
+  const canvas = document.createElement("canvas");
+  canvas.width = PAD_ICON_IMAGE_SIZE;
+  canvas.height = PAD_ICON_IMAGE_SIZE;
+  const context = canvas.getContext("2d")!;
+  context.drawImage(bitmap, (PAD_ICON_IMAGE_SIZE - width) / 2, (PAD_ICON_IMAGE_SIZE - height) / 2, width, height);
+  bitmap.close();
+  return canvas.toDataURL("image/png");
+}
+
 function Wave({ peaks, color }: { peaks?: number[]; color: string }) {
   return <div className="wave">{(peaks?.length ? peaks : Array.from({ length: 36 }, (_, index) => (index % 5) / 5 + 0.15)).map((peak, index) => <i key={index} style={{ height: `${Math.max(10, peak * 100)}%`, background: color }} />)}</div>;
 }
 
 function SoundEditor({ sound, onChange, onClose }: { sound: SoundSlot; onChange: (patch: Partial<SoundSlot>) => void; onClose: () => void }) {
+  const imageInputRef = useRef<HTMLInputElement>(null);
+
+  async function pickImage(file: File | undefined) {
+    if (!file) return;
+    try {
+      onChange({ image: await fileToIconDataUrl(file) });
+    } catch (error) {
+      console.error("Could not load icon image", error);
+    }
+  }
+
   return (
     <aside className="inspector">
       <header><strong>Edit sound</strong><button onClick={onClose}><X size={16} /></button></header>
       <label>Title<input value={sound.title} onChange={(event) => onChange({ title: event.target.value })} /></label>
       <label>Color<input type="color" value={sound.color} onChange={(event) => onChange({ color: event.target.value })} /></label>
+      <div className="iconField">
+        <span>Icon</span>
+        <div className="iconImageRow">
+          <PadIcon sound={sound} />
+          <button onClick={() => imageInputRef.current?.click()}><ImageIcon size={15} /> {sound.image ? "Replace image" : "Use image"}</button>
+          {sound.image && <button onClick={() => onChange({ image: undefined })}><X size={15} /> Remove</button>}
+          <input
+            ref={imageInputRef}
+            type="file"
+            accept="image/*"
+            hidden
+            onChange={(event) => {
+              void pickImage(event.currentTarget.files?.[0]);
+              event.currentTarget.value = "";
+            }}
+          />
+        </div>
+      </div>
       <label>Volume <span>{Math.round(sound.volume * 100)}%</span><input type="range" min="0" max="1" step="0.01" value={sound.volume} onChange={(event) => onChange({ volume: Number(event.target.value) })} /></label>
       <label>Fade in ms<input type="number" min="0" value={sound.fadeInMs} onChange={(event) => onChange({ fadeInMs: Number(event.target.value) })} /></label>
       <label>Fade out ms<input type="number" min="0" value={sound.fadeOutMs} onChange={(event) => onChange({ fadeOutMs: Number(event.target.value) })} /></label>
