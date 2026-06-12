@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, ipcMain, dialog, globalShortcut, shell } = require("electron");
+const { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, dialog, globalShortcut, shell } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs/promises");
 const http = require("node:http");
@@ -9,6 +9,8 @@ const { createCorsairBridge, isGKeyAccelerator } = require("./corsair.cjs");
 const isDev = !app.isPackaged;
 if (isDev && process.env.SOUNDDECK_USER_DATA) app.setPath("userData", process.env.SOUNDDECK_USER_DATA);
 let mainWindow;
+let tray;
+let isQuitting = false;
 let registered = new Map();
 let corsairBindings = new Map();
 
@@ -148,6 +150,40 @@ async function loadRenderer(window) {
   await window.loadFile(builtIndex);
 }
 
+function trayIconPath() {
+  return isDev
+    ? path.join(__dirname, "../build/icon.ico")
+    : path.join(process.resourcesPath, "icon.ico");
+}
+
+function showMainWindow() {
+  if (!mainWindow) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+function createTray() {
+  const icon = nativeImage.createFromPath(trayIconPath());
+  tray = new Tray(icon);
+  tray.setToolTip("SoundDeck Studio");
+  tray.setContextMenu(Menu.buildFromTemplate([
+    {
+      label: "Open SoundDeck Studio",
+      click: () => showMainWindow()
+    },
+    { type: "separator" },
+    {
+      label: "Quit",
+      click: () => {
+        isQuitting = true;
+        app.quit();
+      }
+    }
+  ]));
+  tray.on("double-click", () => showMainWindow());
+}
+
 async function createWindow() {
   await ensureLibrary();
   Menu.setApplicationMenu(null);
@@ -179,6 +215,12 @@ async function createWindow() {
       }
     });
   }
+
+  mainWindow.on("close", (event) => {
+    if (isQuitting) return;
+    event.preventDefault();
+    mainWindow.hide();
+  });
 
   await loadRenderer(mainWindow);
 }
@@ -223,7 +265,12 @@ function registerHotkeys(bindings) {
 
 app.whenReady().then(async () => {
   await createWindow();
+  createTray();
   corsair.start();
+});
+
+app.on("before-quit", () => {
+  isQuitting = true;
 });
 
 app.on("will-quit", () => {

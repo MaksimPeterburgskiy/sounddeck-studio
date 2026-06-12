@@ -27,6 +27,10 @@
       {
         "from": "build/vbcable",
         "to": "vbcable"
+      },
+      {
+        "from": "build/icon.ico",
+        "to": "icon.ico"
       }
     ],
     "win": {
