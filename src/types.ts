@@ -19,6 +19,7 @@ export interface SoundSlot {
   fadeInMs: number;
   fadeOutMs: number;
   loop: boolean;
+  soloPlay: boolean;
   retriggerMode: RetriggerMode;
   hotkey: string;
   outputTarget: OutputTarget;
@@ -95,6 +96,7 @@ declare global {
       revealLibrary: () => Promise<{ ok: boolean }>;
       importMedia: (paths: string[]) => Promise<MediaImportResult[]>;
       readMedia: (mediaPath: string) => Promise<ArrayBuffer>;
+      deleteMedia: (mediaPath: string) => Promise<{ ok: boolean; reason?: string }>;
       saveRecording: (payload: { title: string; ext: string; bytes: ArrayBuffer }) => Promise<MediaImportResult>;
       registerHotkeys: (bindings: HotkeyBinding[]) => Promise<HotkeyResult[]>;
       openExternal: (url: string) => Promise<{ ok: boolean }>;

@@ -14,10 +14,11 @@ const defaultSettings: SoundLibrary["settings"] = {
   microphoneDeviceId: "",
   stopAllHotkey: "CommandOrControl+Alt+Space"
 };
-const defaultSoundOptions: Pick<SoundSlot, "fadeInMs" | "fadeOutMs" | "loop" | "retriggerMode" | "hotkey" | "outputTarget"> = {
+const defaultSoundOptions: Pick<SoundSlot, "fadeInMs" | "fadeOutMs" | "loop" | "soloPlay" | "retriggerMode" | "hotkey" | "outputTarget"> = {
   fadeInMs: 0,
   fadeOutMs: 0,
   loop: false,
+  soloPlay: true,
   retriggerMode: "restart",
   hotkey: "",
   outputTarget: "both"
@@ -62,6 +63,7 @@ export function soundFromImport(result: MediaImportResult, index: number, output
     fadeInMs: 0,
     fadeOutMs: 0,
     loop: false,
+    soloPlay: true,
     retriggerMode: "restart",
     hotkey: "",
     outputTarget,

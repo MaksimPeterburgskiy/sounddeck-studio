@@ -47,6 +47,9 @@ export function installDevBridge() {
     async readMedia() {
       throw new Error("Run in Electron to read app-managed media");
     },
+    async deleteMedia() {
+      return { ok: true };
+    },
     async saveRecording() {
       return { ok: false, sourcePath: "", reason: "Run in Electron to save recordings" };
     },

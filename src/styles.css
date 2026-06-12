@@ -416,7 +416,7 @@ small { color: var(--text-dim); font-size: 12px; }
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(218px, 1fr));
   gap: 16px;
-  padding-bottom: 260px;
+  padding-bottom: 32px;
 }
 
 .pad {

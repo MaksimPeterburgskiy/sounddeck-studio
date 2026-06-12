@@ -218,8 +218,22 @@ function App() {
     setView("board");
   }
 
+  function deleteMediaFiles(removedSounds: SoundSlot[], remainingBoards: SoundBoard[]) {
+    const stillReferenced = new Set(remainingBoards.flatMap((board) => board.sounds.map((sound) => sound.mediaPath)));
+    const mediaPaths = new Set(removedSounds.map((sound) => sound.mediaPath).filter((mediaPath) => mediaPath && !stillReferenced.has(mediaPath)));
+    for (const mediaPath of mediaPaths) {
+      void window.sounddeck.deleteMedia(mediaPath).catch(() => undefined);
+    }
+  }
+
   function deleteSound(soundId: string) {
     engineRef.current?.stop(soundId);
+    if (library) {
+      const board = library.boards.find((candidate) => candidate.id === library.activeBoardId);
+      const removed = board?.sounds.filter((sound) => sound.id === soundId) || [];
+      const remaining = library.boards.map((candidate) => ({ ...candidate, sounds: candidate.sounds.filter((sound) => sound.id !== soundId) }));
+      deleteMediaFiles(removed, remaining);
+    }
     updateLibrary((current) => ({
       ...current,
       boards: current.boards.map((board) => board.id === current.activeBoardId ? { ...board, sounds: board.sounds.filter((sound) => sound.id !== soundId), updatedAt: now() } : board)
@@ -229,6 +243,10 @@ function App() {
   }
 
   function deleteBoard(boardId: string) {
+    if (library && library.boards.length > 1) {
+      const boardToDelete = library.boards.find((board) => board.id === boardId);
+      if (boardToDelete) deleteMediaFiles(boardToDelete.sounds, library.boards.filter((board) => board.id !== boardId));
+    }
     updateLibrary((current) => {
       if (current.boards.length <= 1) {
         setMessage("Keep at least one board");
@@ -659,6 +677,7 @@ function SoundEditor({ sound, onChange, onClose }: { sound: SoundSlot; onChange:
       <label>Output<select value={sound.outputTarget} onChange={(event) => onChange({ outputTarget: event.target.value as SoundSlot["outputTarget"] })}><option value="both">Headphones + virtual mic</option><option value="monitor">Headphones</option><option value="virtual">Virtual mic</option></select></label>
       <label>Retrigger<select value={sound.retriggerMode} onChange={(event) => onChange({ retriggerMode: event.target.value as SoundSlot["retriggerMode"] })}><option value="restart">Stop then restart</option><option value="overlap">Overlap</option><option value="stop">Play / stop toggle</option></select></label>
       <label className="check"><input type="checkbox" checked={sound.loop} onChange={(event) => onChange({ loop: event.target.checked })} /> Loop</label>
+      <label className="check"><input type="checkbox" checked={sound.soloPlay} onChange={(event) => onChange({ soloPlay: event.target.checked })} /> Stop other sounds when played</label>
       <HotkeyCapture value={sound.hotkey} onChange={(hotkey) => onChange({ hotkey })} />
     </aside>
   );

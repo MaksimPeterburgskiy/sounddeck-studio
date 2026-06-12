@@ -7,6 +7,7 @@ const crypto = require("node:crypto");
 const { createCorsairBridge, isGKeyAccelerator } = require("./corsair.cjs");
 
 const isDev = !app.isPackaged;
+if (isDev && process.env.SOUNDDECK_USER_DATA) app.setPath("userData", process.env.SOUNDDECK_USER_DATA);
 let mainWindow;
 let registered = new Map();
 let corsairBindings = new Map();
@@ -304,6 +305,20 @@ ipcMain.handle("media:import", async (_event, filePaths) => {
     });
   }
   return imported;
+});
+
+ipcMain.handle("media:delete", async (_event, mediaPath) => {
+  const resolved = path.resolve(String(mediaPath || ""));
+  const root = path.resolve(mediaRoot());
+  if (!resolved.startsWith(root + path.sep)) {
+    return { ok: false, reason: "outside-media-root" };
+  }
+  try {
+    await fs.rm(resolved, { force: true });
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, reason: String(error?.message || error) };
+  }
 });
 
 ipcMain.handle("media:read", async (_event, mediaPath) => {

@@ -58,6 +58,7 @@ export class AudioEngine {
 
   async play(sound: SoundSlot) {
     const buffer = await this.preload(sound);
+    if (sound.soloPlay) this.stopAllExcept(sound.id);
     if (sound.retriggerMode === "restart") this.stop(sound.id);
     await Promise.all([this.monitorContext.resume(), this.virtualContext.resume()]);
     const contexts = this.contextsForTarget(sound.outputTarget);
@@ -96,6 +97,15 @@ export class AudioEngine {
     const voices = this.active.get(soundId) || [];
     for (const voice of voices) this.stopVoice(voice, voice.fadeOutMs / 1000);
     this.active.delete(soundId);
+    this.emitStatus();
+  }
+
+  stopAllExcept(soundId: string) {
+    for (const [activeId, voices] of this.active) {
+      if (activeId === soundId) continue;
+      for (const voice of voices) this.stopVoice(voice, 0.03);
+      this.active.delete(activeId);
+    }
     this.emitStatus();
   }
 

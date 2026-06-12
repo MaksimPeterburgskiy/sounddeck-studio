@@ -31,6 +31,7 @@ describe("model helpers", () => {
     expect(sound?.title).toBe("Airhorn");
     expect(sound?.outputTarget).toBe("both");
     expect(sound?.retriggerMode).toBe("restart");
+    expect(sound?.soloPlay).toBe(true);
   });
 
   it("formats metadata for compact cards", () => {
