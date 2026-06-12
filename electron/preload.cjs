@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld("sounddeck", {
   deleteMedia: (mediaPath) => ipcRenderer.invoke("media:delete", mediaPath),
   saveRecording: (payload) => ipcRenderer.invoke("media:saveRecording", payload),
   registerHotkeys: (bindings) => ipcRenderer.invoke("hotkeys:register", bindings),
+  setHotkeyCapture: (active) => ipcRenderer.invoke("hotkeys:capture", active),
   openExternal: (url) => ipcRenderer.invoke("app:openExternal", url),
   getPathForFile: (file) => webUtils.getPathForFile(file),
   onHotkeyTrigger: (callback) => {

@@ -25,7 +25,7 @@ import {
 } from "lucide-react";
 import { AudioEngine } from "./lib/audioEngine";
 import { acceleratorLooksReserved, formatBytes, formatDuration, makeBoard, normalizeLibrary, now, soundFromImport } from "./lib/model";
-import { eventToAccelerator, formatAccelerator } from "./lib/hotkeys";
+import { claimCaptureSlot, eventToToken, formatAccelerator, MODIFIER_TOKENS, normalizeAccelerator, orderTokens } from "./lib/hotkeys";
 import { makeWaveform } from "./lib/waveform";
 import { installDevBridge } from "./lib/devBridge";
 import type { CorsairState, HotkeyBinding, HotkeyResult, SoundBoard, SoundLibrary, SoundSlot, UpdateStatus } from "./types";
@@ -120,14 +120,15 @@ function App() {
 
   const registerHotkeys = useCallback(async (current: SoundLibrary) => {
     const bindings: HotkeyBinding[] = [];
-    if (current.settings.stopAllHotkey) bindings.push({ type: "stop-all", accelerator: current.settings.stopAllHotkey });
+    if (current.settings.stopAllHotkey) bindings.push({ type: "stop-all", accelerator: normalizeAccelerator(current.settings.stopAllHotkey) });
+    if (current.settings.cycleBoardsHotkey) bindings.push({ type: "cycle-board", accelerator: normalizeAccelerator(current.settings.cycleBoardsHotkey) });
     for (const board of current.boards) {
-      if (board.switchHotkey) bindings.push({ type: "board", boardId: board.id, accelerator: board.switchHotkey });
+      if (board.switchHotkey) bindings.push({ type: "board", boardId: board.id, accelerator: normalizeAccelerator(board.switchHotkey) });
     }
     // Only the active board's sound hotkeys are live, so boards can reuse the same keys.
     const active = current.boards.find((board) => board.id === current.activeBoardId) || current.boards[0];
     for (const sound of active?.sounds || []) {
-      if (sound.hotkey) bindings.push({ type: "sound", boardId: active.id, soundId: sound.id, accelerator: sound.hotkey });
+      if (sound.hotkey) bindings.push({ type: "sound", boardId: active.id, soundId: sound.id, accelerator: normalizeAccelerator(sound.hotkey) });
     }
     const results = await window.sounddeck.registerHotkeys(bindings);
     setHotkeyResults(results);
@@ -171,6 +172,14 @@ function App() {
           updateLibrary((current) => ({ ...current, activeBoardId: board.id }));
           setMessage(`Switched to ${board.name}`);
         }
+        return;
+      }
+      if (binding.type === "cycle-board") {
+        if (!library || library.boards.length < 2) return;
+        const index = library.boards.findIndex((board) => board.id === library.activeBoardId);
+        const next = library.boards[(index + 1) % library.boards.length];
+        updateLibrary((current) => ({ ...current, activeBoardId: next.id }));
+        setMessage(`Switched to ${next.name}`);
         return;
       }
       const sound = library?.boards.flatMap((board) => board.sounds).find((candidate) => candidate.id === binding.soundId);
@@ -706,45 +715,84 @@ function SoundPad(props: {
   );
 }
 
-function PadHotkey({ value, problem, onChange }: { value: string; problem: boolean; onChange: (value: string) => void }) {
+// Captures a key combo: keys accumulate while held and the combo commits once
+// everything is released, so any combination of keys can be bound. Only one
+// capture can be active app-wide (starting a new one cancels the previous),
+// and the global hotkey engine is suspended while capturing.
+function useHotkeyCapture(onChange: (value: string) => void) {
   const [capturing, setCapturing] = useState(false);
+  const [preview, setPreview] = useState("");
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
 
   useEffect(() => {
     if (!capturing) return;
+    const stop = () => setCapturing(false);
+    const release = claimCaptureSlot(stop);
+    void window.sounddeck.setHotkeyCapture(true);
+    const held = new Set<string>();
+    const combo: string[] = [];
     const onKeyDown = (event: KeyboardEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
       if (event.key === "Escape") {
-        event.preventDefault();
-        event.stopPropagation();
-        setCapturing(false);
+        stop();
         return;
       }
-      const next = eventToAccelerator(event);
-      if (!next) return;
-      onChange(next);
-      setCapturing(false);
+      const token = eventToToken(event);
+      if (!token) return;
+      held.add(event.code);
+      if (!combo.includes(token)) combo.push(token);
+      setPreview(orderTokens(combo).join("+"));
     };
-    const onPointerDown = () => setCapturing(false);
+    const onKeyUp = (event: KeyboardEvent) => {
+      held.delete(event.code);
+      if (held.size || !combo.length) return;
+      // A lone modifier is almost always a mistake; reset and keep listening.
+      if (combo.length === 1 && MODIFIER_TOKENS.includes(combo[0])) {
+        combo.length = 0;
+        setPreview("");
+        return;
+      }
+      onChangeRef.current(orderTokens(combo).join("+"));
+      stop();
+    };
+    const onPointerDown = () => stop();
+    const onBlur = () => stop();
     window.addEventListener("keydown", onKeyDown, true);
+    window.addEventListener("keyup", onKeyUp, true);
     window.addEventListener("pointerdown", onPointerDown);
+    window.addEventListener("blur", onBlur);
     const offCorsair = window.sounddeck.onCorsairKey((key) => {
-      onChange(key);
-      setCapturing(false);
+      onChangeRef.current(key);
+      stop();
     });
     return () => {
+      release();
+      void window.sounddeck.setHotkeyCapture(false);
+      setPreview("");
       window.removeEventListener("keydown", onKeyDown, true);
+      window.removeEventListener("keyup", onKeyUp, true);
       window.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("blur", onBlur);
       offCorsair();
     };
-  }, [capturing, onChange]);
+  }, [capturing]);
+
+  return { capturing, preview, start: () => setCapturing(true) };
+}
+
+function PadHotkey({ value, problem, onChange }: { value: string; problem: boolean; onChange: (value: string) => void }) {
+  const { capturing, preview, start } = useHotkeyCapture(onChange);
 
   return (
     <button
       className={`padHotkey${capturing ? " capturing" : ""}${problem ? " problem" : ""}`}
       title={capturing ? "Press a key combo, Escape to cancel" : "Click to set hotkey"}
       onPointerDown={(event) => event.stopPropagation()}
-      onClick={() => setCapturing(true)}
+      onClick={start}
     >
-      {capturing ? "Press a key..." : value || "No hotkey"}
+      {capturing ? (preview ? formatAccelerator(preview) : "Press keys...") : value ? formatAccelerator(value) : "No hotkey"}
     </button>
   );
 }
@@ -1057,6 +1105,16 @@ function HotkeyPanel({ library, results, corsairState, onChangeSettings, onChang
             <small>Global</small>
             <HotkeyCapture value={library.settings.stopAllHotkey} onChange={(hotkey) => onChangeSettings({ stopAllHotkey: hotkey })} />
           </div>
+          <div className="hotkeyRow">
+            <span className="dot" />
+            <strong>Next Board</strong>
+            <small>Cycles through boards</small>
+            <HotkeyCapture value={library.settings.cycleBoardsHotkey} onChange={(hotkey) => onChangeSettings({ cycleBoardsHotkey: hotkey })} />
+            {(() => {
+              const result = results.find((candidate) => candidate.type === "cycle-board");
+              return result && !result.ok ? <em>{result.reason}</em> : null;
+            })()}
+          </div>
           {library.boards.map((board) => {
             const result = results.find((candidate) => candidate.type === "board" && candidate.boardId === board.id);
             return (
@@ -1081,36 +1139,13 @@ function HotkeyPanel({ library, results, corsairState, onChangeSettings, onChang
 }
 
 function HotkeyCapture({ value, onChange }: { value: string; onChange: (value: string) => void }) {
-  const [capturing, setCapturing] = useState(false);
-
-  useEffect(() => {
-    if (!capturing) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        event.stopPropagation();
-        setCapturing(false);
-        return;
-      }
-      const next = eventToAccelerator(event);
-      if (!next) return;
-      onChange(next);
-      setCapturing(false);
-    };
-    window.addEventListener("keydown", onKeyDown, true);
-    const offCorsair = window.sounddeck.onCorsairKey((key) => {
-      onChange(key);
-      setCapturing(false);
-    });
-    return () => {
-      window.removeEventListener("keydown", onKeyDown, true);
-      offCorsair();
-    };
-  }, [capturing, onChange]);
+  const { capturing, preview, start } = useHotkeyCapture(onChange);
 
   return (
     <div className={capturing ? "hotkeyCapture active" : "hotkeyCapture"}>
-      <button onClick={() => setCapturing(true)}>{capturing ? "Press keys..." : value || "Bind"}</button>
+      <button onPointerDown={(event) => event.stopPropagation()} onClick={start}>
+        {capturing ? (preview ? formatAccelerator(preview) : "Press keys...") : value ? formatAccelerator(value) : "Bind"}
+      </button>
       {value && <button title="Clear" onClick={() => onChange("")}><X size={14} /></button>}
     </div>
   );
