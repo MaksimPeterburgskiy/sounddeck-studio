@@ -98,8 +98,9 @@ function createHotkeyEngine({ onTrigger }) {
 
   const keycodeToToken = buildKeycodeMap();
   const validTokens = new Set(keycodeToToken.values());
-  let bindings = new Map(); // signature -> binding
+  let bindings = new Map(); // signature -> { binding, tokens, hasSuperset }
   let pressed = new Map(); // keycode -> token
+  let pending = null; // matched binding deferred because a longer combo may still complete
   let started = false;
   let suspended = false;
 
@@ -111,27 +112,44 @@ function createHotkeyEngine({ onTrigger }) {
     if (pressed.has(event.keycode)) return; // key repeat while held
     pressed.set(event.keycode, token);
     if (suspended || !bindings.size) return;
-    const binding = bindings.get(signatureOf([...pressed.values()]));
-    if (binding) onTrigger(binding);
+    const entry = bindings.get(signatureOf([...pressed.values()]));
+    if (!entry) return;
+    // If this match is a strict prefix of a longer binding (e.g. "Num1" with
+    // "Num1+Num2" also bound), hold it until the next keyup so the longer
+    // combo gets a chance to complete and win.
+    if (entry.hasSuperset) {
+      pending = entry.binding;
+      return;
+    }
+    pending = null;
+    onTrigger(entry.binding);
   });
 
   uIOhook.on("keyup", (event) => {
-    pressed.delete(event.keycode);
+    if (!pressed.delete(event.keycode)) return;
+    if (pending && !suspended) {
+      const binding = pending;
+      pending = null;
+      onTrigger(binding);
+    }
   });
 
   function ensureStarted() {
-    if (started) return;
+    if (started) return true;
     try {
       uIOhook.start();
       started = true;
+      return true;
     } catch (error) {
       console.error("Failed to start keyboard hook:", error);
+      return false;
     }
   }
 
   return {
     register(list) {
       bindings = new Map();
+      pending = null;
       const results = [];
       for (const binding of list) {
         const tokens = String(binding.accelerator || "").split("+").map((token) => token.trim()).filter(Boolean);
@@ -144,16 +162,26 @@ function createHotkeyEngine({ onTrigger }) {
           results.push({ ...binding, ok: false, reason: "duplicate" });
           continue;
         }
-        bindings.set(signature, binding);
+        bindings.set(signature, { binding, tokens: [...new Set(tokens)], hasSuperset: false });
         results.push({ ...binding, ok: true, reason: "" });
       }
-      if (bindings.size) ensureStarted();
+      const entries = [...bindings.values()];
+      for (const entry of entries) {
+        entry.hasSuperset = entries.some(
+          (other) => other.tokens.length > entry.tokens.length && entry.tokens.every((token) => other.tokens.includes(token))
+        );
+      }
+      if (bindings.size && !ensureStarted()) {
+        bindings = new Map();
+        return results.map((result) => (result.ok ? { ...result, ok: false, reason: "hotkey-engine-start-failed" } : result));
+      }
       return results;
     },
     // Pause triggering while the renderer is capturing a new bind so existing
     // hotkeys don't fire mid-capture.
     setSuspended(value) {
       suspended = Boolean(value);
+      if (suspended) pending = null;
     },
     stop() {
       if (!started) return;
