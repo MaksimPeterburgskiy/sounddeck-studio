@@ -67,5 +67,42 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
 
+      - name: Write release notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $repo = "${{ github.repository }}"
+          $version = "${{ steps.version.outputs.version }}"
+          $tag = "v$version"
+          $prev = git describe --tags --abbrev=0 "$tag^" 2>$null
+
+          $lines = @(
+            "## SoundDeck Studio $version",
+            "",
+            "### Downloads",
+            "",
+            "| File | Notes |",
+            "| --- | --- |",
+            "| [SoundDeck-Studio-Setup-$version.exe](https://github.com/$repo/releases/download/$tag/SoundDeck-Studio-Setup-$version.exe) | **Recommended.** Installer with auto-update; sets up the VB-CABLE virtual mic if needed. |",
+            "| [SoundDeck-Studio-$version.exe](https://github.com/$repo/releases/download/$tag/SoundDeck-Studio-$version.exe) | Portable. No installation, but no auto-update either. |",
+            "",
+            "> Builds are unsigned, so Windows SmartScreen may warn on first run: *More info -> Run anyway*.",
+            ""
+          )
+
+          if ($prev) {
+            $commits = git log "$prev..$tag" --no-merges --pretty='- %s (%h)' | Where-Object { $_ -notmatch '^- Release v\d' }
+            $lines += "### What's changed since $prev"
+            $lines += ""
+            $lines += $commits
+            $lines += ""
+            $lines += "**Full changelog**: [$prev...$tag](https://github.com/$repo/compare/$prev...$tag)"
+          } else {
+            $lines += "First public release."
+          }
+
+          Set-Content -Path notes.md -Value ($lines -join "`n") -Encoding utf8
+          gh release edit $tag --repo $repo --title "SoundDeck Studio $tag" --notes-file notes.md
+
       - name: Summary
         run: echo "Released v${{ steps.version.outputs.version }} — https://github.com/${{ github.repository }}/releases/tag/v${{ steps.version.outputs.version }}" >> $env:GITHUB_STEP_SUMMARY
