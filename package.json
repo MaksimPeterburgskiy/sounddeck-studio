@@ -68,25 +68,28 @@
     "type": "git",
     "url": "https://github.com/MaksimPeterburgskiy/sounddeck-studio.git"
   },
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "dependencies": {
     "cue-sdk": "^4.0.84",
     "electron-updater": "^6.8.9",
     "uiohook-napi": "^1.5.5"
   },
   "devDependencies": {
-    "@types/node": "^25.0.1",
-    "@types/react": "^19.2.7",
+    "@types/node": "^25.9.3",
+    "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^5.1.1",
+    "@vitejs/plugin-react": "^6.0.2",
     "concurrently": "^10.0.3",
-    "electron": "^39.2.6",
-    "electron-builder": "^26.0.12",
-    "lucide-react": "^1.17.0",
-    "react": "^19.2.3",
-    "react-dom": "^19.2.3",
-    "typescript": "^5.9.3",
-    "vite": "^7.2.7",
-    "vitest": "^4.0.15",
-    "wait-on": "^9.0.3"
+    "electron": "^42.4.0",
+    "electron-builder": "^26.15.3",
+    "lucide-react": "^1.18.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "typescript": "^6.0.3",
+    "vite": "^8.0.16",
+    "vitest": "^4.1.8",
+    "wait-on": "^9.0.10"
   }
 }
