@@ -1,6 +1,8 @@
 const { app, BrowserWindow, ipcMain, dialog, globalShortcut, shell } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs/promises");
+const http = require("node:http");
+const https = require("node:https");
 const crypto = require("node:crypto");
 
 const isDev = !app.isPackaged;
@@ -84,6 +86,55 @@ async function readJson(filePath) {
   return JSON.parse(await fs.readFile(filePath, "utf8"));
 }
 
+async function fileExists(filePath) {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function canReachUrl(url, timeoutMs = 350) {
+  return new Promise((resolve) => {
+    const parsed = new URL(url);
+    const client = parsed.protocol === "https:" ? https : http;
+    const request = client.request(
+      parsed,
+      { method: "HEAD", timeout: timeoutMs },
+      (response) => {
+        response.resume();
+        resolve(true);
+      }
+    );
+    request.on("timeout", () => {
+      request.destroy();
+      resolve(false);
+    });
+    request.on("error", () => resolve(false));
+    request.end();
+  });
+}
+
+async function loadRenderer(window) {
+  const devUrl = process.env.VITE_DEV_SERVER_URL || "http://127.0.0.1:5173";
+  const builtIndex = path.join(__dirname, "../dist/index.html");
+
+  if (isDev) {
+    if (await canReachUrl(devUrl)) {
+      await window.loadURL(devUrl);
+      return;
+    }
+    if (await fileExists(builtIndex)) {
+      await window.loadFile(builtIndex);
+      return;
+    }
+    throw new Error(`Renderer not available. Start Vite with "npm run dev" or build first with "npm run build". Tried ${devUrl} and ${builtIndex}.`);
+  }
+
+  await window.loadFile(builtIndex);
+}
+
 async function createWindow() {
   await ensureLibrary();
   mainWindow = new BrowserWindow({
@@ -101,11 +152,7 @@ async function createWindow() {
     }
   });
 
-  if (isDev) {
-    await mainWindow.loadURL("http://127.0.0.1:5173");
-  } else {
-    await mainWindow.loadFile(path.join(__dirname, "../dist/index.html"));
-  }
+  await loadRenderer(mainWindow);
 }
 
 function registerHotkeys(bindings) {

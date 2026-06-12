@@ -53,6 +53,13 @@ For a renderer-only development server:
 npm run dev
 ```
 
+To run the desktop app from the built files:
+
+```powershell
+npm run build
+npm run electron
+```
+
 For verification:
 
 ```powershell
