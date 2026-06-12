@@ -648,11 +648,54 @@ function SoundPad(props: {
         <button title="Delete" onClick={props.onDelete}><Trash2 size={15} /></button>
       </div>
       <div className="padMeta">
-        <span className={props.hotkeyProblem ? "problem" : ""}>{sound.hotkey || "No hotkey"}</span>
+        <PadHotkey value={sound.hotkey} problem={props.hotkeyProblem} onChange={(hotkey) => props.onChange({ hotkey })} />
         <span className="padVolume"><Volume2 size={11} /> {Math.round(sound.volume * 100)}%</span>
-        <span>{sound.outputTarget}</span>
+        <span className="padOutput">{sound.outputTarget}</span>
       </div>
     </article>
+  );
+}
+
+function PadHotkey({ value, problem, onChange }: { value: string; problem: boolean; onChange: (value: string) => void }) {
+  const [capturing, setCapturing] = useState(false);
+
+  useEffect(() => {
+    if (!capturing) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        setCapturing(false);
+        return;
+      }
+      const next = eventToAccelerator(event);
+      if (!next) return;
+      onChange(next);
+      setCapturing(false);
+    };
+    const onPointerDown = () => setCapturing(false);
+    window.addEventListener("keydown", onKeyDown, true);
+    window.addEventListener("pointerdown", onPointerDown);
+    const offCorsair = window.sounddeck.onCorsairKey((key) => {
+      onChange(key);
+      setCapturing(false);
+    });
+    return () => {
+      window.removeEventListener("keydown", onKeyDown, true);
+      window.removeEventListener("pointerdown", onPointerDown);
+      offCorsair();
+    };
+  }, [capturing, onChange]);
+
+  return (
+    <button
+      className={`padHotkey${capturing ? " capturing" : ""}${problem ? " problem" : ""}`}
+      title={capturing ? "Press a key combo, Escape to cancel" : "Click to set hotkey"}
+      onPointerDown={(event) => event.stopPropagation()}
+      onClick={() => setCapturing(true)}
+    >
+      {capturing ? "Press a key..." : value || "No hotkey"}
+    </button>
   );
 }
 
@@ -734,6 +777,15 @@ function VolumeField({ label, value, onChange }: { label: string; value: number;
 
 function SoundEditor({ sound, onChange, onClose }: { sound: SoundSlot; onChange: (patch: Partial<SoundSlot>) => void; onClose: () => void }) {
   const imageInputRef = useRef<HTMLInputElement>(null);
+  const panelRef = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    const onPointerDown = (event: PointerEvent) => {
+      if (!panelRef.current?.contains(event.target as Node)) onClose();
+    };
+    window.addEventListener("pointerdown", onPointerDown);
+    return () => window.removeEventListener("pointerdown", onPointerDown);
+  }, [onClose]);
 
   async function pickImage(file: File | undefined) {
     if (!file) return;
@@ -745,7 +797,7 @@ function SoundEditor({ sound, onChange, onClose }: { sound: SoundSlot; onChange:
   }
 
   return (
-    <aside className="inspector">
+    <aside className="inspector" ref={panelRef}>
       <header><strong>Edit sound</strong><button onClick={onClose}><X size={16} /></button></header>
       <label>Title<input value={sound.title} onChange={(event) => onChange({ title: event.target.value })} /></label>
       <label>Color<input type="color" value={sound.color} onChange={(event) => onChange({ color: event.target.value })} /></label>
