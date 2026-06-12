@@ -535,7 +535,7 @@ function UpdateToast({ status, onInstall, onDismiss }: { status: UpdateStatus; o
         ) : (
           <>
             <strong>Update {status.version} ready</strong>
-            <small>Restarts and installs automatically — no clicks needed.</small>
+            <small>Restarts and installs automatically.</small>
             <div className="updateToastActions">
               <button className="updatePrimary" onClick={onInstall}>Restart to Update</button>
               <button className="updateLater" onClick={onDismiss}>Later</button>
