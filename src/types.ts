@@ -32,6 +32,7 @@ export interface SoundBoard {
   name: string;
   color: string;
   icon: string;
+  switchHotkey?: string;
   createdAt: string;
   updatedAt: string;
   sounds: SoundSlot[];
@@ -71,7 +72,7 @@ export interface MediaImportResult {
 }
 
 export interface HotkeyBinding {
-  type: "sound" | "stop-all";
+  type: "sound" | "stop-all" | "board";
   soundId?: string;
   boardId?: string;
   accelerator: string;

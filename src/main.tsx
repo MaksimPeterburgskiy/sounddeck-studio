@@ -24,7 +24,7 @@ import {
 } from "lucide-react";
 import { AudioEngine } from "./lib/audioEngine";
 import { acceleratorLooksReserved, formatBytes, formatDuration, makeBoard, normalizeLibrary, now, soundFromImport } from "./lib/model";
-import { eventToAccelerator } from "./lib/hotkeys";
+import { eventToAccelerator, formatAccelerator } from "./lib/hotkeys";
 import { makeWaveform } from "./lib/waveform";
 import { installDevBridge } from "./lib/devBridge";
 import type { CorsairState, HotkeyBinding, HotkeyResult, SoundBoard, SoundLibrary, SoundSlot } from "./types";
@@ -80,6 +80,17 @@ function App() {
     return library.boards.find((board) => board.id === library.activeBoardId) || library.boards[0];
   }, [library]);
 
+  const previousBoardRef = useRef<{ id: string; soundIds: string[] } | null>(null);
+
+  useEffect(() => {
+    const previous = previousBoardRef.current;
+    if (activeBoard) previousBoardRef.current = { id: activeBoard.id, soundIds: activeBoard.sounds.map((sound) => sound.id) };
+    if (!previous || !activeBoard || previous.id === activeBoard.id) return;
+    for (const soundId of previous.soundIds) {
+      if (engineRef.current?.isPlaying(soundId)) engineRef.current.stop(soundId);
+    }
+  }, [activeBoard]);
+
   const selectedSound = useMemo(() => activeBoard?.sounds.find((sound) => sound.id === selectedSoundId) || null, [activeBoard, selectedSoundId]);
   const editingClipSound = useMemo(() => activeBoard?.sounds.find((sound) => sound.id === editingClipId) || null, [activeBoard, editingClipId]);
 
@@ -100,9 +111,12 @@ function App() {
     const bindings: HotkeyBinding[] = [];
     if (current.settings.stopAllHotkey) bindings.push({ type: "stop-all", accelerator: current.settings.stopAllHotkey });
     for (const board of current.boards) {
-      for (const sound of board.sounds) {
-        if (sound.hotkey) bindings.push({ type: "sound", boardId: board.id, soundId: sound.id, accelerator: sound.hotkey });
-      }
+      if (board.switchHotkey) bindings.push({ type: "board", boardId: board.id, accelerator: board.switchHotkey });
+    }
+    // Only the active board's sound hotkeys are live, so boards can reuse the same keys.
+    const active = current.boards.find((board) => board.id === current.activeBoardId) || current.boards[0];
+    for (const sound of active?.sounds || []) {
+      if (sound.hotkey) bindings.push({ type: "sound", boardId: active.id, soundId: sound.id, accelerator: sound.hotkey });
     }
     const results = await window.sounddeck.registerHotkeys(bindings);
     setHotkeyResults(results);
@@ -138,6 +152,14 @@ function App() {
       if (binding.type === "stop-all") {
         engineRef.current?.stopAll();
         setMessage("Stopped all sounds");
+        return;
+      }
+      if (binding.type === "board") {
+        const board = library?.boards.find((candidate) => candidate.id === binding.boardId);
+        if (board) {
+          updateLibrary((current) => ({ ...current, activeBoardId: board.id }));
+          setMessage(`Switched to ${board.name}`);
+        }
         return;
       }
       const sound = library?.boards.flatMap((board) => board.sounds).find((candidate) => candidate.id === binding.soundId);
@@ -267,6 +289,7 @@ function App() {
             >
               <span className="dot" style={{ background: board.color }} />
               <span className="boardName">{board.name}</span>
+              {board.switchHotkey && <kbd className="boardHotkey" title={`Switch with ${board.switchHotkey}`}>{formatAccelerator(board.switchHotkey)}</kbd>}
               <button
                 className="deleteBoardButton"
                 title={library.boards.length <= 1 ? "Keep at least one board" : `Delete ${board.name}`}
@@ -283,7 +306,6 @@ function App() {
           ))}
         </nav>
         <button className="wideButton" onClick={addBoard}><Plus size={16} /> New board</button>
-        <div className="sideLabel">Studio</div>
         <div className="sideNav">
           <button className={view === "board" ? "active" : ""} onClick={() => setView("board")}><Wand2 size={18} /> Board</button>
           <button className={view === "devices" ? "active" : ""} onClick={() => setView("devices")}><Settings size={18} /> Devices</button>
@@ -297,6 +319,11 @@ function App() {
           <div>
             <BoardTitle key={activeBoard.id} name={activeBoard.name} onRename={(name) => updateBoard(activeBoard.id, { name })} />
             <p>{activeBoard.sounds.length} sounds · {message}</p>
+          </div>
+          <div className="boardHotkeyControl" title="Global hotkey that switches to this board">
+            <Keyboard size={15} />
+            <span>Switch key</span>
+            <HotkeyCapture value={activeBoard.switchHotkey || ""} onChange={(switchHotkey) => updateBoard(activeBoard.id, { switchHotkey })} />
           </div>
           <div className="topActions">
             <button onClick={() => void window.sounddeck.revealLibrary()}><FolderOpen size={16} /> Library</button>
@@ -369,6 +396,7 @@ function App() {
             corsairState={corsairState}
             onChangeSettings={changeSettings}
             onChangeSound={updateSound}
+            onChangeBoard={updateBoard}
           />
         )}
 
@@ -470,7 +498,7 @@ function SoundPad(props: {
       className={`pad${props.selected ? " selected" : ""}${props.playing ? " playing" : ""}`}
       style={{ "--pad": sound.color } as React.CSSProperties}
     >
-      <button className="padMain" onClick={props.onPlay} onDoubleClick={props.onSelect}>
+      <button className="padMain" onClick={props.onSelect}>
         <PadIcon sound={sound} />
         <strong>{sound.title}</strong>
         <span>{formatDuration(clipDuration)} · {formatBytes(sound.size)}</span>
@@ -772,12 +800,13 @@ const corsairStateLabels: Record<CorsairState, string> = {
   disconnected: "Corsair iCUE not detected. Start iCUE and enable the SDK (Settings > Software and Games) to bind G-keys."
 };
 
-function HotkeyPanel({ library, results, corsairState, onChangeSettings, onChangeSound }: {
+function HotkeyPanel({ library, results, corsairState, onChangeSettings, onChangeSound, onChangeBoard }: {
   library: SoundLibrary;
   results: HotkeyResult[];
   corsairState: CorsairState;
   onChangeSettings: (patch: Partial<SoundLibrary["settings"]>) => void;
   onChangeSound: (id: string, patch: Partial<SoundSlot>) => void;
+  onChangeBoard: (id: string, patch: Partial<SoundBoard>) => void;
 }) {
   const allSounds = library.boards.flatMap((board) => board.sounds.map((sound) => ({ board, sound })));
   return (
@@ -794,6 +823,18 @@ function HotkeyPanel({ library, results, corsairState, onChangeSettings, onChang
             <small>Global</small>
             <HotkeyCapture value={library.settings.stopAllHotkey} onChange={(hotkey) => onChangeSettings({ stopAllHotkey: hotkey })} />
           </div>
+          {library.boards.map((board) => {
+            const result = results.find((candidate) => candidate.type === "board" && candidate.boardId === board.id);
+            return (
+              <div key={board.id} className="hotkeyRow">
+                <span className="dot" style={{ background: board.color }} />
+                <strong>Switch to {board.name}</strong>
+                <small>Board</small>
+                <HotkeyCapture value={board.switchHotkey || ""} onChange={(switchHotkey) => onChangeBoard(board.id, { switchHotkey })} />
+                {result && !result.ok && <em>{result.reason}</em>}
+              </div>
+            );
+          })}
           {allSounds.map(({ board, sound }) => {
             const result = results.find((candidate) => candidate.soundId === sound.id);
             return <div key={sound.id} className="hotkeyRow"><span className="dot" style={{ background: board.color }} /><strong>{sound.title}</strong><small>{board.name}</small><HotkeyCapture value={sound.hotkey} onChange={(hotkey) => onChangeSound(sound.id, { hotkey })} />{result && !result.ok && <em>{result.reason}</em>}{acceleratorLooksReserved(sound.hotkey) && <em>reserved-looking</em>}</div>;

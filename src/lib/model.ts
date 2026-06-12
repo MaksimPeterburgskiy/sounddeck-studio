@@ -38,6 +38,7 @@ export function makeBoard(index: number): SoundBoard {
     name: `Board ${index}`,
     color: palette[index % palette.length],
     icon: icons[index % icons.length],
+    switchHotkey: "",
     createdAt: timestamp,
     updatedAt: timestamp,
     sounds: []
@@ -78,6 +79,7 @@ export function normalizeLibrary(library: SoundLibrary): SoundLibrary {
     settings: { ...defaultSettings, ...library.settings },
     boards: boards.map((board) => ({
       ...board,
+      switchHotkey: board.switchHotkey ?? "",
       // volume 0.9 was the old import default; lift it to the new 100% default.
       sounds: board.sounds.map((sound) => ({ ...defaultSoundOptions, ...sound, volume: sound.volume === 0.9 ? 1 : sound.volume }))
     }))

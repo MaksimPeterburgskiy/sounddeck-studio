@@ -17,6 +17,10 @@ const electronKeyNames: Record<string, string> = {
   pagedown: "PageDown"
 };
 
+export function formatAccelerator(accelerator: string) {
+  return accelerator.replace("CommandOrControl", "Ctrl");
+}
+
 export function eventToAccelerator(event: KeyboardEvent) {
   event.preventDefault();
   event.stopPropagation();
