@@ -26,7 +26,7 @@ jobs:
           # PAT so version/tag pushes pass branch protection (GITHUB_TOKEN can't).
           token: ${{ secrets.RELEASE_TOKEN }}
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v6
         with:
           node-version: 20
           cache: npm
