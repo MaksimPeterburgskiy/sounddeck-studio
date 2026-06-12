@@ -14,6 +14,7 @@ export interface SoundSlot {
   trimEndSec?: number;
   color: string;
   icon: string;
+  image?: string;
   volume: number;
   fadeInMs: number;
   fadeOutMs: number;
