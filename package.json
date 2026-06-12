@@ -9,7 +9,7 @@
     "electron": "electron .",
     "start": "concurrently -k \"npm run dev\" \"wait-on tcp:5173 && electron .\"",
     "build": "tsc && vite build",
-    "dist": "npm run build && electron-builder --win",
+    "dist": "node scripts/fetch-vbcable.mjs && npm run build && electron-builder --win",
     "test": "vitest run"
   },
   "build": {
@@ -45,6 +45,11 @@
       "perMachine": true,
       "allowToChangeInstallationDirectory": true,
       "include": "build/installer.nsh"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "MaksimPeterburgskiy",
+      "repo": "sounddeck-studio"
     }
   },
   "keywords": [
@@ -54,10 +59,15 @@
     "audio",
     "hotkeys"
   ],
-  "author": "",
+  "author": "Maksim Peterburgskiy",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/MaksimPeterburgskiy/sounddeck-studio.git"
+  },
   "dependencies": {
-    "cue-sdk": "^4.0.84"
+    "cue-sdk": "^4.0.84",
+    "electron-updater": "^6.8.9"
   },
   "devDependencies": {
     "@types/node": "^25.0.1",

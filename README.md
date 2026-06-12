@@ -1,104 +1,105 @@
+<div align="center">
+
+<img src="docs/icon.png" alt="SoundDeck Studio" width="96" height="96" />
+
 # SoundDeck Studio
 
-SoundDeck Studio is an original Windows-first desktop soundboard for streamers, gamers, Discord users, and voice-chat workflows. It is inspired by the general soundboard workflow common in voice apps, but it does not use Voicemod branding, assets, names, or proprietary UI.
+**Free, open-source soundboard for Windows with global hotkeys, virtual mic routing, and Corsair G-keys.**
 
-## Research Notes
+[![Latest release](https://img.shields.io/github/v/release/MaksimPeterburgskiy/sounddeck-studio?label=download&color=1db7a6)](https://github.com/MaksimPeterburgskiy/sounddeck-studio/releases/latest)
+[![CI](https://github.com/MaksimPeterburgskiy/sounddeck-studio/actions/workflows/ci.yml/badge.svg)](https://github.com/MaksimPeterburgskiy/sounddeck-studio/actions/workflows/ci.yml)
+[![Downloads](https://img.shields.io/github/downloads/MaksimPeterburgskiy/sounddeck-studio/total?color=1db7a6)](https://github.com/MaksimPeterburgskiy/sounddeck-studio/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Current implementation choices are based on current public documentation and examples:
+Play sounds into Discord, OBS, or any game as if they came from your microphone, with your boards, your hotkeys, and no subscription.
 
-- Microsoft WASAPI/Core Audio is the native Windows path for render, capture, and loopback. WASAPI loopback captures what is playing through a render endpoint, and the broader Core Audio API manages endpoint device flow.
-- Microsoft SysVAD is the documented sample path for building a real virtual audio endpoint driver, but shipping one requires Windows Driver Kit work, signing, installer elevation, and long-term driver maintenance.
-- VB-CABLE provides a practical signed virtual audio cable: audio sent to `CABLE Input` is exposed from `CABLE Output`, which Discord/OBS/games can select as a microphone.
-- Electron exposes `globalShortcut` for OS-level hotkeys. On Windows it maps to system hotkey registration behavior and reports registration failure when another app or the OS owns a shortcut.
-- Chromium/Electron Web Audio gives low-latency decoded-buffer playback and mixing. `AudioContext.setSinkId()`/media output device selection is the practical way to route Web Audio to headphones or a virtual cable when available.
-- FFmpeg remains the robust production answer for broad transcoding; this prototype uses Chromium decoders for `.wav`, `.mp3`, `.ogg`, `.flac`, `.m4a`, `.aac`, and `.webm`, then stores the original media in the app library.
+<img src="docs/screenshot.png" alt="SoundDeck Studio main window" width="800" />
 
-Sources used:
+</div>
 
-- [Microsoft WASAPI overview](https://learn.microsoft.com/en-us/windows/win32/coreaudio/wasapi)
-- [Microsoft WASAPI loopback recording](https://learn.microsoft.com/en-us/windows/win32/coreaudio/loopback-recording)
-- [Microsoft low latency audio on Windows](https://learn.microsoft.com/en-us/windows-hardware/drivers/audio/low-latency-audio)
-- [Microsoft SysVAD virtual audio driver sample](https://learn.microsoft.com/en-us/samples/microsoft/windows-driver-samples/sysvad-virtual-audio-device-driver-sample/)
-- [Microsoft RegisterHotKey](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-registerhotkey)
-- [Electron globalShortcut](https://www.electronjs.org/docs/latest/api/global-shortcut)
-- [MDN HTMLMediaElement.setSinkId](https://developer.mozilla.org/en-US/docs/Web/API/HTMLMediaElement/setSinkId)
-- [Chrome AudioContext.setSinkId](https://developer.chrome.com/blog/audiocontext-setsinkid)
-- [VB-Audio Virtual Cable](https://vb-audio.com/Cable/)
-- [FFmpeg documentation](https://ffmpeg.org/ffmpeg.html)
+---
+
+## Download
+
+**[Download the latest release](https://github.com/MaksimPeterburgskiy/sounddeck-studio/releases/latest)** and grab the `SoundDeck-Studio-Setup-x.y.z.exe` installer.
+
+The installer sets up the [VB-CABLE](https://vb-audio.com/Cable/) virtual audio driver automatically (skipped if you already have it), so the virtual microphone works out of the box. A portable `.exe` is also available if you prefer no installation, but the portable build does not auto-update.
+
+The app updates itself: when a new release is published, the installed app downloads it in the background and applies it on restart.
+
+> **Windows SmartScreen:** builds are currently unsigned, so the first install may show a SmartScreen warning. Click *More info -> Run anyway*.
 
 ## Features
 
-- Unlimited local soundboards and sound slots, constrained by storage and playback performance.
-- Drag-and-drop sound import into the active board.
-- App-managed media library under Electron `userData`.
-- Per-sound title, color, volume, fade, loop, retrigger behavior, play/stop toggle mode, hotkey, and output target.
-- Web Audio decoded-buffer caching for fast repeated triggers.
-- Multiple simultaneous sounds.
-- Stop all, pause, resume, per-sound stop.
-- Global hotkeys through Electron.
-- Corsair G-key binds through the iCUE SDK (`cue-sdk`): with iCUE running and the SDK enabled (iCUE Settings > Software and Games), press a G-key while binding a hotkey to assign `G1`-`G20`. G-key binds are routed via the iCUE session instead of `globalShortcut`.
-- Device settings for microphone passthrough, soundboard-to-virtual-cable, soundboard headphone monitoring, optional microphone headphone monitoring, and independent volumes.
-- Recorder screen that records a microphone clip and imports it into the active board.
-- Backup/export and restore/import of metadata.
+### Soundboard
+- Unlimited boards and sound pads, each with its own title, color, icon, volume, and hotkey
+- Drag-and-drop import of `.wav`, `.mp3`, `.ogg`, `.flac`, `.m4a`, `.aac`, and `.webm`
+- Sounds are copied into the app library, so they keep working if you move the originals
+- Loop, fade in/out, play/stop toggle, and retrigger modes (restart, overlap, stop)
+- Multiple sounds at once, with decoded-buffer caching for instant retriggers
+- Waveform previews and a clip editor with trim support
 
-## Run
+### Virtual microphone & routing
+- Route the soundboard into a virtual mic that Discord, OBS, and games see as a real input device
+- Mix your physical microphone into the virtual mic (passthrough)
+- Independent volume controls for mic, soundboard, and headphone monitoring
+- Pick exactly which device each bus plays to
 
-```powershell
+### Hotkeys
+- Global OS-level hotkeys that work while you're in-game
+- Corsair G-key support (`G1`-`G20`) via the iCUE SDK
+- Per-board switch hotkeys and an emergency stop-all (default `Ctrl+Alt+Space`)
+- Inline hotkey capture: click a pad and press the combo
+
+### Workflow
+- Minimize to system tray; single-instance (relaunching focuses the existing window)
+- Built-in recorder: capture a mic clip, trim it, drop it on the active board
+- Export/import boards as `.sdboard` files with embedded audio to share boards with friends
+
+## Quick start: virtual mic in Discord/OBS
+
+1. Install SoundDeck Studio (the installer adds VB-CABLE if needed; reboot if the driver asks).
+2. Open **Devices** and set **Virtual cable playback device** to `CABLE Input`.
+3. Enable **Soundboard to virtual mic** (and **Mic passthrough** if you want your voice mixed in).
+4. In Discord/OBS/your game, set the input device to `CABLE Output`.
+5. Keep **Monitor soundboard** pointed at your real headphones so you hear what you play.
+
+## Development
+
+Requires Windows 10/11 and Node.js 20+.
+
+```bash
+git clone https://github.com/MaksimPeterburgskiy/sounddeck-studio.git
+cd sounddeck-studio
 npm install
-npm start
+npm start          # dev server + Electron with hot reload
 ```
 
-For a renderer-only development server:
+| Command | Description |
+| --- | --- |
+| `npm start` | Run the app in development (Vite + Electron) |
+| `npm test` | Run unit tests (Vitest) |
+| `npm run build` | Type-check and bundle the renderer |
+| `npm run dist` | Build the Windows installer + portable exe into `release/` |
 
-```powershell
-npm run dev
+Tech stack: Electron, React 19, TypeScript, Vite, Web Audio API, and electron-builder.
+
+```
+electron/   Main process - window, tray, global hotkeys, library storage, Corsair, auto-update
+src/        Renderer - React UI
+src/lib/    Pure logic - board model, audio engine, hotkey parsing, waveforms (unit-tested)
+build/      Packaging resources - icon, NSIS installer script
+scripts/    Build helpers (VB-CABLE is downloaded at package time, not committed)
 ```
 
-To run the desktop app from the built files:
+## Contributing
 
-```powershell
-npm run build
-npm run electron
-```
+Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) first. In short: open an issue before large changes, target the `main` branch, keep PRs focused, and make sure `npm run build` and `npm test` pass.
 
-For verification:
+Releases are cut from the `prod` branch by maintainers via the [Release workflow](.github/workflows/release.yml).
 
-```powershell
-npm test
-npm run build
-```
+## License
 
-## Virtual Microphone Setup on Windows
+[MIT](LICENSE) © Maksim Peterburgskiy
 
-The app does not install a kernel audio driver. The recommended route is a signed virtual audio cable:
-
-1. Install [VB-CABLE](https://vb-audio.com/Cable/) or another trusted signed Windows virtual audio cable.
-2. Reboot if the driver installer requests it.
-3. Open SoundDeck Studio and go to **Devices**.
-4. Set **Virtual cable playback device** to `CABLE Input`.
-5. Enable **Soundboard to virtual mic**.
-6. In Discord, OBS, or your game, set the microphone/input device to `CABLE Output`.
-7. Keep **Monitor soundboard** pointed at your real headphones. Leave **Monitor microphone** off if you want to hear soundboard clips without hearing your own mic. Do not point monitor output back into the same virtual cable unless you intentionally want a loop.
-8. Enable **Mic passthrough** if you want your physical mic mixed with the soundboard into the virtual cable.
-
-## Manual Verification Checklist
-
-- Launch with `npm start`.
-- Create at least two boards and switch between them.
-- Drag in `.wav` and `.mp3` files; optionally test `.ogg`, `.flac`, `.m4a`, or `.webm`.
-- Confirm imported sounds keep playing after moving the original source file.
-- Click a pad and confirm immediate playback.
-- Trigger two pads at once and confirm overlap.
-- Toggle loop on a pad, play it, then stop it.
-- Set a pad to `overlap`, retrigger it, and confirm layered playback.
-- Set a pad to `Play / stop toggle`, trigger it once to play, then trigger it again while it is still playing and confirm it stops.
-- Bind a hotkey to a sound and trigger it while another app has focus.
-- Bind the emergency stop hotkey and confirm it stops all active sounds.
-- Install VB-CABLE, set `CABLE Input` as the virtual playback device, set Discord/OBS input to `CABLE Output`, and confirm soundboard audio appears as microphone input.
-- Enable mic passthrough and verify the physical mic is mixed into the virtual input.
-- Record a clip in the Recorder screen and confirm it appears on the current board.
-- Export a backup, restore it, and confirm boards and sound metadata return.
-
-## Production Driver Path
-
-A built-in virtual microphone driver would require a separate WDK project based on SysVAD or a commercial driver partnership. That path needs driver signing, elevated installation, crash-safe kernel development, and update infrastructure. This prototype uses the more practical Windows desktop approach: route to an existing signed virtual audio cable and expose clear setup controls.
+This project is an original work and is not affiliated with Voicemod or any other soundboard product.

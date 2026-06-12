@@ -270,10 +270,43 @@ function registerHotkeys(bindings) {
   return results;
 }
 
+function setupAutoUpdates() {
+  // Portable builds have no installer to hand updates to; only the NSIS
+  // install supports auto-update.
+  if (!app.isPackaged || process.env.PORTABLE_EXECUTABLE_DIR) return;
+  let autoUpdater;
+  try {
+    ({ autoUpdater } = require("electron-updater"));
+  } catch (error) {
+    console.error("electron-updater unavailable:", error);
+    return;
+  }
+  autoUpdater.on("error", (error) => console.error("Auto-update error:", error));
+  autoUpdater.on("update-downloaded", async (info) => {
+    const { response } = await dialog.showMessageBox(mainWindow, {
+      type: "info",
+      title: "Update ready",
+      message: `SoundDeck Studio ${info.version} has been downloaded.`,
+      detail: "Restart now to apply the update, or it will be installed the next time you quit the app.",
+      buttons: ["Restart & Update", "Later"],
+      defaultId: 0,
+      cancelId: 1
+    });
+    if (response === 0) {
+      isQuitting = true;
+      autoUpdater.quitAndInstall();
+    }
+  });
+  autoUpdater.checkForUpdates().catch((error) => {
+    console.error("Auto-update check failed:", error);
+  });
+}
+
 app.whenReady().then(async () => {
   await createWindow();
   createTray();
   corsair.start();
+  setupAutoUpdates();
 });
 
 app.on("before-quit", () => {
