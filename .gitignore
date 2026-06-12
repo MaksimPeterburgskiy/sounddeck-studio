@@ -3,3 +3,5 @@ release/
 dist/
 .claude/
 build/vbcable/
+build/installerSidebar.bmp
+build/installerHeader.bmp

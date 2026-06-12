@@ -28,7 +28,7 @@ import { acceleratorLooksReserved, formatBytes, formatDuration, makeBoard, norma
 import { eventToAccelerator, formatAccelerator } from "./lib/hotkeys";
 import { makeWaveform } from "./lib/waveform";
 import { installDevBridge } from "./lib/devBridge";
-import type { CorsairState, HotkeyBinding, HotkeyResult, SoundBoard, SoundLibrary, SoundSlot } from "./types";
+import type { CorsairState, HotkeyBinding, HotkeyResult, SoundBoard, SoundLibrary, SoundSlot, UpdateStatus } from "./types";
 import "./styles.css";
 
 installDevBridge();
@@ -48,7 +48,17 @@ function App() {
   const [dropActive, setDropActive] = useState(false);
   const [message, setMessage] = useState("Ready");
   const [corsairState, setCorsairState] = useState<CorsairState>("unavailable");
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
+  const [updateDismissed, setUpdateDismissed] = useState(false);
   const engineRef = useRef<AudioEngine | null>(null);
+
+  useEffect(() => {
+    return window.sounddeck.onUpdateStatus((status) => {
+      setUpdateStatus(status);
+      // A hidden download toast should still resurface once the update is ready.
+      if (status.state === "ready") setUpdateDismissed(false);
+    });
+  }, []);
 
   useEffect(() => {
     void window.sounddeck.getCorsairStatus().then(setCorsairState);
@@ -496,7 +506,47 @@ function App() {
           />
         )}
       </section>
+
+      {updateStatus && !updateDismissed && (
+        <UpdateToast
+          status={updateStatus}
+          onInstall={() => void window.sounddeck.installUpdate()}
+          onDismiss={() => setUpdateDismissed(true)}
+        />
+      )}
     </main>
+  );
+}
+
+function UpdateToast({ status, onInstall, onDismiss }: { status: UpdateStatus; onInstall: () => void; onDismiss: () => void }) {
+  const percent = Math.max(0, Math.min(100, Math.round(status.state === "downloading" ? status.percent ?? 0 : 100)));
+  return (
+    <aside className="updateToast" role="status" data-state={status.state}>
+      <div className="updateToastIcon">
+        {status.state === "downloading" ? <Download size={17} /> : <RotateCcw size={17} />}
+      </div>
+      <div className="updateToastBody">
+        {status.state === "downloading" ? (
+          <>
+            <strong>Downloading update{status.version ? ` ${status.version}` : ""}</strong>
+            <div className="updateProgress"><span style={{ width: `${percent}%` }} /></div>
+            <small>{percent}%</small>
+          </>
+        ) : (
+          <>
+            <strong>Update {status.version} ready</strong>
+            <small>Restarts and installs automatically.</small>
+            <div className="updateToastActions">
+              <button className="updatePrimary" onClick={onInstall}>Restart to Update</button>
+              <button className="updateLater" onClick={onDismiss}>Later</button>
+            </div>
+          </>
+        )}
+      </div>
+      {status.state === "downloading" && (
+        <button className="updateToastClose" title="Hide" aria-label="Hide update notification" onClick={onDismiss}><X size={14} /></button>
+      )}
+    </aside>
   );
 }
 

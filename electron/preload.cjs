@@ -24,6 +24,12 @@ contextBridge.exposeInMainWorld("sounddeck", {
     ipcRenderer.on("corsair-status", listener);
     return () => ipcRenderer.removeListener("corsair-status", listener);
   },
+  installUpdate: () => ipcRenderer.invoke("update:install"),
+  onUpdateStatus: (callback) => {
+    const listener = (_event, status) => callback(status);
+    ipcRenderer.on("update-status", listener);
+    return () => ipcRenderer.removeListener("update-status", listener);
+  },
   onCorsairKey: (callback) => {
     const listener = (_event, key) => callback(key);
     ipcRenderer.on("corsair-gkey", listener);

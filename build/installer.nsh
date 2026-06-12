@@ -1,6 +1,17 @@
 !include "LogicLib.nsh"
 !include "x64.nsh"
 
+; Expand the install log by default so users can watch what is happening,
+; and recolor it to match the app theme (lime text on charcoal).
+!macro customHeader
+  ShowInstDetails show
+  ShowUninstDetails show
+  !ifdef MUI_INSTFILESPAGE_COLORS
+    !undef MUI_INSTFILESPAGE_COLORS
+  !endif
+  !define MUI_INSTFILESPAGE_COLORS "C6F12E 0A0B0D"
+!macroend
+
 ; Install the bundled VB-Audio Virtual Cable driver if it is not present yet.
 ; VBCABLE_Setup_x64.exe flags: -i = install, -h = hidden (no UI).
 !macro customInstall
