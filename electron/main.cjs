@@ -4,10 +4,23 @@ const fs = require("node:fs/promises");
 const http = require("node:http");
 const https = require("node:https");
 const crypto = require("node:crypto");
+const { createCorsairBridge, isGKeyAccelerator } = require("./corsair.cjs");
 
 const isDev = !app.isPackaged;
 let mainWindow;
 let registered = new Map();
+let corsairBindings = new Map();
+
+const corsair = createCorsairBridge({
+  onKey: (key) => {
+    mainWindow?.webContents.send("corsair-gkey", key);
+    const binding = corsairBindings.get(key);
+    if (binding) mainWindow?.webContents.send("hotkey-trigger", binding);
+  },
+  onStateChange: (state) => {
+    mainWindow?.webContents.send("corsair-status", state);
+  }
+});
 
 function appRoot() {
   return path.join(app.getPath("userData"), "library");
@@ -175,10 +188,22 @@ function registerHotkeys(bindings) {
     globalShortcut.unregister(accelerator);
   }
   registered = new Map();
+  corsairBindings = new Map();
 
   const results = [];
   for (const binding of bindings) {
     if (!binding.accelerator) continue;
+    if (isGKeyAccelerator(binding.accelerator)) {
+      const key = binding.accelerator.trim().toUpperCase();
+      if (corsairBindings.has(key)) {
+        results.push({ ...binding, ok: false, reason: "duplicate" });
+        continue;
+      }
+      corsairBindings.set(key, binding);
+      const connected = corsair.isConnected();
+      results.push({ ...binding, ok: connected, reason: connected ? "" : "icue-not-connected" });
+      continue;
+    }
     if (registered.has(binding.accelerator)) {
       results.push({ ...binding, ok: false, reason: "duplicate" });
       continue;
@@ -196,10 +221,14 @@ function registerHotkeys(bindings) {
   return results;
 }
 
-app.whenReady().then(createWindow);
+app.whenReady().then(async () => {
+  await createWindow();
+  corsair.start();
+});
 
 app.on("will-quit", () => {
   globalShortcut.unregisterAll();
+  corsair.stop();
 });
 
 app.on("window-all-closed", () => {
@@ -304,6 +333,8 @@ ipcMain.handle("media:saveRecording", async (_event, payload) => {
 });
 
 ipcMain.handle("hotkeys:register", async (_event, bindings) => registerHotkeys(bindings));
+
+ipcMain.handle("corsair:status", async () => corsair.getState());
 
 ipcMain.handle("app:openExternal", async (_event, url) => {
   await shell.openExternal(url);

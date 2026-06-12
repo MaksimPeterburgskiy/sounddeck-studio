@@ -26,7 +26,7 @@ import { acceleratorLooksReserved, formatBytes, formatDuration, makeBoard, norma
 import { eventToAccelerator } from "./lib/hotkeys";
 import { makeWaveform } from "./lib/waveform";
 import { installDevBridge } from "./lib/devBridge";
-import type { HotkeyBinding, HotkeyResult, SoundBoard, SoundLibrary, SoundSlot } from "./types";
+import type { CorsairState, HotkeyBinding, HotkeyResult, SoundBoard, SoundLibrary, SoundSlot } from "./types";
 import "./styles.css";
 
 installDevBridge();
@@ -45,7 +45,13 @@ function App() {
   const [editingClipId, setEditingClipId] = useState<string>("");
   const [dropActive, setDropActive] = useState(false);
   const [message, setMessage] = useState("Ready");
+  const [corsairState, setCorsairState] = useState<CorsairState>("unavailable");
   const engineRef = useRef<AudioEngine | null>(null);
+
+  useEffect(() => {
+    void window.sounddeck.getCorsairStatus().then(setCorsairState);
+    return window.sounddeck.onCorsairStatus(setCorsairState);
+  }, []);
 
   useEffect(() => {
     window.sounddeck.loadLibrary().then((loaded) => setLibrary(normalizeLibrary(loaded)));
@@ -98,10 +104,11 @@ function App() {
     setHotkeyResults(results);
   }, []);
 
+  const corsairConnected = corsairState === "connected";
   useEffect(() => {
     if (!library) return;
     void registerHotkeys(library);
-  }, [library, registerHotkeys]);
+  }, [library, registerHotkeys, corsairConnected]);
 
   const triggerSound = useCallback(async (sound: SoundSlot) => {
     try {
@@ -354,6 +361,7 @@ function App() {
           <HotkeyPanel
             library={library}
             results={hotkeyResults}
+            corsairState={corsairState}
             onChangeSettings={changeSettings}
             onChangeSound={updateSound}
           />
@@ -647,9 +655,18 @@ function DevicePanel({ library, inputDevices, outputDevices, onRefresh, onChange
   );
 }
 
-function HotkeyPanel({ library, results, onChangeSettings, onChangeSound }: {
+const corsairStateLabels: Record<CorsairState, string> = {
+  unavailable: "Corsair iCUE SDK not available on this system.",
+  idle: "Connecting to Corsair iCUE...",
+  connecting: "Connecting to Corsair iCUE...",
+  connected: "Corsair iCUE connected — press a G-key while binding to use it.",
+  disconnected: "Corsair iCUE not detected. Start iCUE and enable the SDK (Settings > Software and Games) to bind G-keys."
+};
+
+function HotkeyPanel({ library, results, corsairState, onChangeSettings, onChangeSound }: {
   library: SoundLibrary;
   results: HotkeyResult[];
+  corsairState: CorsairState;
   onChangeSettings: (patch: Partial<SoundLibrary["settings"]>) => void;
   onChangeSound: (id: string, patch: Partial<SoundSlot>) => void;
 }) {
@@ -658,6 +675,9 @@ function HotkeyPanel({ library, results, onChangeSettings, onChangeSound }: {
     <div className="panel hotkeysPanel">
       <section className="hotkeysSection">
         <h2>Hotkeys</h2>
+        <p className={corsairState === "connected" ? "corsairStatus connected" : "corsairStatus"}>
+          {corsairStateLabels[corsairState]}
+        </p>
         <div className="hotkeyList">
           <div className="hotkeyRow emergency">
             <span className="dot stopDot" />
@@ -694,7 +714,14 @@ function HotkeyCapture({ value, onChange }: { value: string; onChange: (value: s
       setCapturing(false);
     };
     window.addEventListener("keydown", onKeyDown, true);
-    return () => window.removeEventListener("keydown", onKeyDown, true);
+    const offCorsair = window.sounddeck.onCorsairKey((key) => {
+      onChange(key);
+      setCapturing(false);
+    });
+    return () => {
+      window.removeEventListener("keydown", onKeyDown, true);
+      offCorsair();
+    };
   }, [capturing, onChange]);
 
   return (

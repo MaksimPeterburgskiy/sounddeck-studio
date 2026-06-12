@@ -16,5 +16,16 @@ contextBridge.exposeInMainWorld("sounddeck", {
     const listener = (_event, binding) => callback(binding);
     ipcRenderer.on("hotkey-trigger", listener);
     return () => ipcRenderer.removeListener("hotkey-trigger", listener);
+  },
+  getCorsairStatus: () => ipcRenderer.invoke("corsair:status"),
+  onCorsairStatus: (callback) => {
+    const listener = (_event, state) => callback(state);
+    ipcRenderer.on("corsair-status", listener);
+    return () => ipcRenderer.removeListener("corsair-status", listener);
+  },
+  onCorsairKey: (callback) => {
+    const listener = (_event, key) => callback(key);
+    ipcRenderer.on("corsair-gkey", listener);
+    return () => ipcRenderer.removeListener("corsair-gkey", listener);
   }
 });

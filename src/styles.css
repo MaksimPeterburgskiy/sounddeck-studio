@@ -783,6 +783,15 @@ input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent);
 
 .hotkeysPanel { grid-template-columns: minmax(0, 1fr); max-width: 980px; }
 .hotkeysSection { min-width: 0; }
+
+.corsairStatus {
+  margin: 0 0 12px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  color: var(--text-faint);
+}
+.corsairStatus.connected { color: var(--accent); }
 .hotkeyList { display: grid; gap: 8px; }
 
 .hotkeyRow {

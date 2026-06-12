@@ -36,6 +36,7 @@ Sources used:
 - Multiple simultaneous sounds.
 - Stop all, pause, resume, per-sound stop.
 - Global hotkeys through Electron.
+- Corsair G-key binds through the iCUE SDK (`cue-sdk`): with iCUE running and the SDK enabled (iCUE Settings > Software and Games), press a G-key while binding a hotkey to assign `G1`-`G20`. G-key binds are routed via the iCUE session instead of `globalShortcut`.
 - Device settings for microphone passthrough, soundboard-to-virtual-cable, soundboard headphone monitoring, optional microphone headphone monitoring, and independent volumes.
 - Recorder screen that records a microphone clip and imports it into the active board.
 - Backup/export and restore/import of metadata.

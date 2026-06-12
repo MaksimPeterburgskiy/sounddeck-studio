@@ -63,6 +63,15 @@ export function installDevBridge() {
     },
     onHotkeyTrigger() {
       return () => undefined;
+    },
+    async getCorsairStatus() {
+      return "unavailable";
+    },
+    onCorsairStatus() {
+      return () => undefined;
+    },
+    onCorsairKey() {
+      return () => undefined;
     }
   };
 }

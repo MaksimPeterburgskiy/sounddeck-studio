@@ -82,6 +82,8 @@ export interface HotkeyResult extends HotkeyBinding {
   reason: string;
 }
 
+export type CorsairState = "unavailable" | "idle" | "connecting" | "connected" | "disconnected";
+
 declare global {
   interface Window {
     sounddeck: {
@@ -97,6 +99,9 @@ declare global {
       openExternal: (url: string) => Promise<{ ok: boolean }>;
       getPathForFile: (file: File) => string;
       onHotkeyTrigger: (callback: (binding: HotkeyBinding) => void) => () => void;
+      getCorsairStatus: () => Promise<CorsairState>;
+      onCorsairStatus: (callback: (state: CorsairState) => void) => () => void;
+      onCorsairKey: (callback: (key: string) => void) => () => void;
     };
   }
 }
