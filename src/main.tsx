@@ -50,7 +50,12 @@ function App() {
   const [corsairState, setCorsairState] = useState<CorsairState>("unavailable");
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
   const [updateDismissed, setUpdateDismissed] = useState(false);
+  const [appVersion, setAppVersion] = useState("");
   const engineRef = useRef<AudioEngine | null>(null);
+
+  useEffect(() => {
+    void window.sounddeck.getVersion().then(setAppVersion).catch(() => undefined);
+  }, []);
 
   useEffect(() => {
     return window.sounddeck.onUpdateStatus((status) => {
@@ -394,6 +399,7 @@ function App() {
           <button className={view === "devices" ? "active" : ""} onClick={() => setView("devices")}><Settings size={18} /> Devices</button>
           <button className={view === "hotkeys" ? "active" : ""} onClick={() => setView("hotkeys")}><Keyboard size={18} /> Hotkeys</button>
         </div>
+        {appVersion && <div className="appVersion">v{appVersion}</div>}
       </aside>
 
       <section className="workspace">

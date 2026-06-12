@@ -297,6 +297,14 @@ small { color: var(--text-dim); font-size: 12px; }
   font-size: 12px;
 }
 
+.appVersion {
+  margin: -10px 6px 0;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
+}
+
 /* ---------- workspace ---------- */
 
 .workspace { min-width: 0; padding: clamp(14px, 2.4vw, 28px); }

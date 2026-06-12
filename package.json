@@ -7,9 +7,9 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "electron": "electron .",
-    "start": "concurrently -k \"npm run dev\" \"wait-on tcp:5173 && electron .\"",
+    "start": "npm run build && concurrently -k \"npm run dev\" \"wait-on tcp:5173 && electron .\"",
     "build": "tsc && vite build",
-    "dist": "node scripts/fetch-vbcable.mjs && node scripts/make-installer-art.mjs && npm run build && electron-builder --win",
+    "dist": "node -e \"fs.rmSync('release', { recursive: true, force: true })\" && node scripts/fetch-vbcable.mjs && node scripts/make-installer-art.mjs && npm run build && electron-builder --win",
     "test": "vitest run"
   },
   "build": {

@@ -270,6 +270,8 @@ function registerHotkeys(bindings) {
   return results;
 }
 
+const UPDATE_CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
+
 function setupAutoUpdates() {
   // Portable builds have no installer to hand updates to; only the NSIS
   // install supports auto-update.
@@ -291,9 +293,13 @@ function setupAutoUpdates() {
     // Silent install with auto-relaunch: no installer pages, no "run app?" prompt.
     autoUpdater.quitAndInstall(true, true);
   });
-  autoUpdater.checkForUpdates().catch((error) => {
+  const check = () => autoUpdater.checkForUpdates().catch((error) => {
     console.error("Auto-update check failed:", error);
   });
+  check();
+  // Long-running sessions (app lives in the tray) should still pick up new
+  // releases without a restart.
+  setInterval(check, UPDATE_CHECK_INTERVAL_MS);
 }
 
 app.whenReady().then(async () => {
@@ -468,3 +474,5 @@ ipcMain.handle("app:openExternal", async (_event, url) => {
   await shell.openExternal(url);
   return { ok: true };
 });
+
+ipcMain.handle("app:getVersion", () => app.getVersion());

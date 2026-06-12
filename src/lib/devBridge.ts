@@ -60,6 +60,9 @@ export function installDevBridge() {
       window.open(url, "_blank", "noopener,noreferrer");
       return { ok: true };
     },
+    async getVersion() {
+      return "dev";
+    },
     getPathForFile(file: File) {
       return file.name;
     },
