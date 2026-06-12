@@ -10,6 +10,8 @@ export interface SoundSlot {
   ext: string;
   size: number;
   duration?: number;
+  trimStartSec?: number;
+  trimEndSec?: number;
   color: string;
   icon: string;
   volume: number;

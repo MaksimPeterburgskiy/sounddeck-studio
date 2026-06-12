@@ -20,9 +20,9 @@ export class AudioEngine {
   private micStream?: MediaStream;
   private micNodes: Array<{ source: MediaStreamAudioSourceNode; gain: GainNode; context: AudioContext }> = [];
   private settings: AudioSettings;
-  private statusCallback: (status: EngineStatus) => void;
+  private statusCallback: (status: EngineStatus, activeSoundIds: string[]) => void;
 
-  constructor(settings: AudioSettings, statusCallback: (status: EngineStatus) => void) {
+  constructor(settings: AudioSettings, statusCallback: (status: EngineStatus, activeSoundIds: string[]) => void) {
     this.settings = settings;
     this.statusCallback = statusCallback;
     this.monitorContext = new AudioContext({ latencyHint: "interactive" });
@@ -50,6 +50,9 @@ export class AudioEngine {
     if (sound.retriggerMode === "restart") this.stop(sound.id);
     await Promise.all([this.monitorContext.resume(), this.virtualContext.resume()]);
     const contexts = this.contextsForTarget(sound.outputTarget);
+    const trimStart = Math.min(Math.max(0, sound.trimStartSec ?? 0), buffer.duration);
+    const trimEnd = Math.min(Math.max(trimStart + 0.01, sound.trimEndSec ?? buffer.duration), buffer.duration);
+    const clipDuration = Math.max(0.01, trimEnd - trimStart);
     const voice: ActiveVoice = { id: crypto.randomUUID(), soundId: sound.id, sources: [], gains: [], startedAt: performance.now(), fadeOutMs: sound.fadeOutMs };
 
     for (const route of contexts) {
@@ -59,12 +62,17 @@ export class AudioEngine {
       const totalGain = sound.volume * this.settings.soundboardVolume * route.volume;
       source.buffer = buffer;
       source.loop = sound.loop;
+      if (sound.loop) {
+        source.loopStart = trimStart;
+        source.loopEnd = trimEnd;
+      }
       source.connect(gain).connect(context.destination);
       const now = context.currentTime;
       gain.gain.setValueAtTime(sound.fadeInMs > 0 ? 0.0001 : totalGain, now);
       if (sound.fadeInMs > 0) gain.gain.exponentialRampToValueAtTime(Math.max(0.0001, totalGain), now + sound.fadeInMs / 1000);
       source.onended = () => this.removeVoice(sound.id, voice.id);
-      source.start();
+      if (sound.loop) source.start(0, trimStart);
+      else source.start(0, trimStart, clipDuration);
       voice.sources.push(source);
       voice.gains.push(gain);
     }
@@ -90,7 +98,7 @@ export class AudioEngine {
 
   async pauseAll() {
     await Promise.all([this.monitorContext.suspend(), this.virtualContext.suspend()]);
-    this.statusCallback("paused");
+    this.statusCallback("paused", [...this.active.keys()]);
   }
 
   async resumeAll() {
@@ -185,6 +193,6 @@ export class AudioEngine {
   }
 
   private emitStatus() {
-    this.statusCallback(this.active.size ? "playing" : "idle");
+    this.statusCallback(this.active.size ? "playing" : "idle", [...this.active.keys()]);
   }
 }

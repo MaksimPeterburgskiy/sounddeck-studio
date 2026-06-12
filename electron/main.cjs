@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, globalShortcut, shell } = require("electron");
+const { app, BrowserWindow, Menu, ipcMain, dialog, globalShortcut, shell } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs/promises");
 const http = require("node:http");
@@ -137,6 +137,7 @@ async function loadRenderer(window) {
 
 async function createWindow() {
   await ensureLibrary();
+  Menu.setApplicationMenu(null);
   mainWindow = new BrowserWindow({
     width: 1360,
     height: 860,
@@ -151,6 +152,20 @@ async function createWindow() {
       sandbox: false
     }
   });
+
+  if (isDev) {
+    mainWindow.webContents.on("before-input-event", (event, input) => {
+      if (input.type !== "keyDown") return;
+      if (input.key === "F12" || (input.control && input.shift && input.key.toUpperCase() === "I")) {
+        mainWindow.webContents.toggleDevTools();
+        event.preventDefault();
+      }
+      if (input.control && input.key.toUpperCase() === "R") {
+        mainWindow.webContents.reload();
+        event.preventDefault();
+      }
+    });
+  }
 
   await loadRenderer(mainWindow);
 }

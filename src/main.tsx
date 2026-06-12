@@ -6,10 +6,13 @@ import {
   Headphones,
   Keyboard,
   Mic,
+  Pencil,
   Play,
   Plus,
   Radio,
+  RotateCcw,
   Save,
+  Scissors,
   Settings,
   Square,
   Trash2,
@@ -38,6 +41,8 @@ function App() {
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const [hotkeyResults, setHotkeyResults] = useState<HotkeyResult[]>([]);
   const [engineStatus, setEngineStatus] = useState<EngineStatus>("idle");
+  const [playingIds, setPlayingIds] = useState<string[]>([]);
+  const [editingClipId, setEditingClipId] = useState<string>("");
   const [dropActive, setDropActive] = useState(false);
   const [message, setMessage] = useState("Ready");
   const engineRef = useRef<AudioEngine | null>(null);
@@ -53,7 +58,10 @@ function App() {
 
   useEffect(() => {
     if (!library) return;
-    if (!engineRef.current) engineRef.current = new AudioEngine(library.settings, setEngineStatus);
+    if (!engineRef.current) engineRef.current = new AudioEngine(library.settings, (status, activeIds) => {
+      setEngineStatus(status);
+      setPlayingIds(activeIds);
+    });
     void engineRef.current.configure(library.settings);
   }, [library?.settings]);
 
@@ -63,6 +71,7 @@ function App() {
   }, [library]);
 
   const selectedSound = useMemo(() => activeBoard?.sounds.find((sound) => sound.id === selectedSoundId) || null, [activeBoard, selectedSoundId]);
+  const editingClipSound = useMemo(() => activeBoard?.sounds.find((sound) => sound.id === editingClipId) || null, [activeBoard, editingClipId]);
 
   const refreshDevices = useCallback(async () => {
     try {
@@ -176,6 +185,7 @@ function App() {
       boards: current.boards.map((board) => board.id === current.activeBoardId ? { ...board, sounds: board.sounds.filter((sound) => sound.id !== soundId), updatedAt: now() } : board)
     }));
     if (selectedSoundId === soundId) setSelectedSoundId("");
+    if (editingClipId === soundId) setEditingClipId("");
   }
 
   function deleteBoard(boardId: string) {
@@ -244,7 +254,7 @@ function App() {
               }}
             >
               <span className="dot" style={{ background: board.color }} />
-              <input value={board.name} onChange={(event) => updateBoard(board.id, { name: event.target.value })} />
+              <span className="boardName">{board.name}</span>
               <button
                 className="deleteBoardButton"
                 title={library.boards.length <= 1 ? "Keep at least one board" : `Delete ${board.name}`}
@@ -273,7 +283,7 @@ function App() {
       <section className="workspace">
         <header className="topbar">
           <div>
-            <h1>{activeBoard.name}</h1>
+            <BoardTitle key={activeBoard.id} name={activeBoard.name} onRename={(name) => updateBoard(activeBoard.id, { name })} />
             <p>{activeBoard.sounds.length} sounds · {message}</p>
           </div>
           <div className="topActions">
@@ -302,10 +312,11 @@ function App() {
                   key={sound.id}
                   sound={sound}
                   selected={selectedSoundId === sound.id}
-                  playing={engineRef.current?.isPlaying(sound.id) || false}
+                  playing={playingIds.includes(sound.id)}
                   hotkeyProblem={hotkeyResults.some((result) => result.soundId === sound.id && !result.ok)}
                   onPlay={() => void triggerSound(sound)}
                   onStop={() => engineRef.current?.stop(sound.id)}
+                  onEditClip={() => setEditingClipId(sound.id)}
                   onSelect={() => setSelectedSoundId(sound.id)}
                   onDelete={() => deleteSound(sound.id)}
                   onChange={(patch) => updateSound(sound.id, patch)}
@@ -314,6 +325,17 @@ function App() {
               {!activeBoard.sounds.length && <div className="empty">Drop sounds to build this board.</div>}
             </div>
             {selectedSound && <SoundEditor sound={selectedSound} onChange={(patch) => updateSound(selectedSound.id, patch)} onClose={() => setSelectedSoundId("")} />}
+            {editingClipSound && (
+              <ClipEditor
+                sound={editingClipSound}
+                engine={engineRef.current}
+                playing={playingIds.includes(editingClipSound.id)}
+                onPlay={() => void triggerSound(editingClipSound)}
+                onStop={() => engineRef.current?.stop(editingClipSound.id)}
+                onChange={(patch) => updateSound(editingClipSound.id, patch)}
+                onClose={() => setEditingClipId("")}
+              />
+            )}
           </div>
         )}
 
@@ -357,6 +379,62 @@ function App() {
   );
 }
 
+function BoardTitle({ name, onRename }: { name: string; onRename: (name: string) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(name);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (editing) {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    }
+  }, [editing]);
+
+  function commit() {
+    const trimmed = draft.trim();
+    if (trimmed && trimmed !== name) onRename(trimmed);
+    setEditing(false);
+  }
+
+  if (editing) {
+    return (
+      <input
+        ref={inputRef}
+        className="boardTitleInput"
+        style={{ width: `${Math.min(Math.max(draft.length + 3, 12), 42)}ch` }}
+        value={draft}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={commit}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") commit();
+          if (event.key === "Escape") {
+            setDraft(name);
+            setEditing(false);
+          }
+        }}
+      />
+    );
+  }
+
+  return (
+    <div className="boardTitle">
+      <h1>{name}</h1>
+      <button
+        className="boardTitleEdit"
+        title="Rename board"
+        aria-label="Rename board"
+        onClick={() => {
+          setDraft(name);
+          setEditing(true);
+        }}
+      >
+        <Pencil size={15} />
+      </button>
+    </div>
+  );
+}
+
 function SoundPad(props: {
   sound: SoundSlot;
   selected: boolean;
@@ -364,11 +442,15 @@ function SoundPad(props: {
   hotkeyProblem: boolean;
   onPlay: () => void;
   onStop: () => void;
+  onEditClip: () => void;
   onSelect: () => void;
   onDelete: () => void;
   onChange: (patch: Partial<SoundSlot>) => void;
 }) {
   const { sound } = props;
+  const clipDuration = Number.isFinite(sound.duration)
+    ? Math.max(0, Math.min(sound.trimEndSec ?? sound.duration!, sound.duration!) - Math.max(0, sound.trimStartSec ?? 0))
+    : sound.duration;
   return (
     <article
       className={`pad${props.selected ? " selected" : ""}${props.playing ? " playing" : ""}`}
@@ -377,14 +459,16 @@ function SoundPad(props: {
       <button className="padMain" onClick={props.onPlay} onDoubleClick={props.onSelect}>
         <span className="padIcon" style={{ background: sound.color }}>{sound.title.slice(0, 1).toUpperCase()}</span>
         <strong>{sound.title}</strong>
-        <span>{formatDuration(sound.duration)} · {formatBytes(sound.size)}</span>
+        <span>{formatDuration(clipDuration)} · {formatBytes(sound.size)}</span>
         <Wave peaks={sound.waveform} color={sound.color} />
       </button>
       <div className="padControls">
-        <button title="Play" onClick={props.onPlay}><Play size={15} /></button>
-        <button title="Stop" onClick={props.onStop}><Square size={15} /></button>
+        <button title={props.playing ? "Stop" : "Play"} onClick={props.playing ? props.onStop : props.onPlay}>
+          {props.playing ? <Square size={15} /> : <Play size={15} />}
+        </button>
+        <button title="Edit clip" onClick={props.onEditClip}><Scissors size={15} /></button>
         <button title="Loop" className={sound.loop ? "toggled" : ""} onClick={() => props.onChange({ loop: !sound.loop })}>∞</button>
-        <button title="Edit" onClick={props.onSelect}><Settings size={15} /></button>
+        <button title="Settings" onClick={props.onSelect}><Settings size={15} /></button>
         <button title="Delete" onClick={props.onDelete}><Trash2 size={15} /></button>
       </div>
       <div className="padMeta">
@@ -413,6 +497,117 @@ function SoundEditor({ sound, onChange, onClose }: { sound: SoundSlot; onChange:
       <label className="check"><input type="checkbox" checked={sound.loop} onChange={(event) => onChange({ loop: event.target.checked })} /> Loop</label>
       <HotkeyCapture value={sound.hotkey} onChange={(hotkey) => onChange({ hotkey })} />
     </aside>
+  );
+}
+
+function ClipEditor({ sound, engine, playing, onPlay, onStop, onChange, onClose }: {
+  sound: SoundSlot;
+  engine: AudioEngine | null;
+  playing: boolean;
+  onPlay: () => void;
+  onStop: () => void;
+  onChange: (patch: Partial<SoundSlot>) => void;
+  onClose: () => void;
+}) {
+  const [buffer, setBuffer] = useState<AudioBuffer | null>(null);
+  const [loadError, setLoadError] = useState(false);
+  const trackRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let alive = true;
+    setBuffer(null);
+    setLoadError(false);
+    engine?.preload(sound).then((decoded) => {
+      if (alive) setBuffer(decoded);
+    }).catch(() => {
+      if (alive) setLoadError(true);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [engine, sound.id]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+
+  const duration = buffer?.duration ?? sound.duration ?? 0;
+  const peaks = useMemo(() => buffer ? makeWaveform(buffer, 120) : sound.waveform || [], [buffer, sound.waveform]);
+  const start = Math.min(Math.max(0, sound.trimStartSec ?? 0), duration);
+  const end = Math.min(Math.max(start, sound.trimEndSec ?? duration), duration) || duration;
+  const trimRef = useRef({ start, end });
+  trimRef.current = { start, end };
+  const trimmed = start > 0.005 || end < duration - 0.005;
+
+  function dragHandle(which: "start" | "end") {
+    return (event: React.PointerEvent) => {
+      if (!duration) return;
+      event.preventDefault();
+      const move = (moveEvent: PointerEvent) => {
+        const rect = trackRef.current?.getBoundingClientRect();
+        if (!rect || !rect.width) return;
+        const time = Math.min(Math.max(0, ((moveEvent.clientX - rect.left) / rect.width) * duration), duration);
+        if (which === "start") onChange({ trimStartSec: Math.min(time, trimRef.current.end - 0.05) });
+        else onChange({ trimEndSec: Math.max(time, trimRef.current.start + 0.05) });
+      };
+      const up = () => {
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", up);
+      };
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", up);
+      move(event.nativeEvent);
+    };
+  }
+
+  const startPct = duration ? (start / duration) * 100 : 0;
+  const endPct = duration ? (end / duration) * 100 : 100;
+
+  return (
+    <div
+      className="modalOverlay"
+      onPointerDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <div className="clipEditor">
+        <header>
+          <strong>Clip editor</strong>
+          <span className="clipTitle">{sound.title}</span>
+          <button onClick={onClose}><X size={16} /></button>
+        </header>
+        {loadError && <p className="clipError">Could not load audio for this clip.</p>}
+        <div className={`clipTrack${buffer ? "" : " loading"}`} ref={trackRef}>
+          <div className="clipWave">
+            {(peaks.length ? peaks : Array.from({ length: 120 }, () => 0.2)).map((peak, index, all) => {
+              const position = (index + 0.5) / all.length;
+              const inside = duration ? position * duration >= start && position * duration <= end : true;
+              return <i key={index} className={inside ? "" : "outside"} style={{ height: `${Math.max(8, peak * 100)}%`, background: sound.color }} />;
+            })}
+          </div>
+          <div className="clipRegion" style={{ left: `${startPct}%`, width: `${Math.max(0, endPct - startPct)}%` }} />
+          <div className="clipHandle start" style={{ left: `${startPct}%` }} onPointerDown={dragHandle("start")} role="slider" aria-label="Clip start" aria-valuenow={start} aria-valuemin={0} aria-valuemax={duration} tabIndex={0} />
+          <div className="clipHandle end" style={{ left: `${endPct}%` }} onPointerDown={dragHandle("end")} role="slider" aria-label="Clip end" aria-valuenow={end} aria-valuemin={0} aria-valuemax={duration} tabIndex={0} />
+        </div>
+        <div className="clipTimes">
+          <span>Start <em>{start.toFixed(2)}s</em></span>
+          <span>End <em>{end.toFixed(2)}s</em></span>
+          <span>Length <em>{Math.max(0, end - start).toFixed(2)}s</em></span>
+          <span>Source <em>{duration.toFixed(2)}s</em></span>
+        </div>
+        <div className="clipActions">
+          <button className="clipPreview" onClick={playing ? onStop : onPlay} disabled={!duration}>
+            {playing ? <Square size={15} /> : <Play size={15} />}{playing ? "Stop" : "Preview"}
+          </button>
+          <button onClick={() => onChange({ trimStartSec: 0, trimEndSec: undefined })} disabled={!trimmed}><RotateCcw size={15} /> Reset trim</button>
+          <button onClick={onClose}><Save size={15} /> Done</button>
+        </div>
+      </div>
+    </div>
   );
 }
 
