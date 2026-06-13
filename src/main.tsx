@@ -1008,7 +1008,10 @@ function ClipEditor({ sound, engine, playing, onPlay, onStop, onChange, onClose 
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape") {
+        if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+        onClose();
+      }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
