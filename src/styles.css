@@ -936,7 +936,46 @@ input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent);
   color: var(--text-faint);
   font-family: var(--font-mono);
 }
-.clipTimes em { color: var(--accent); font-style: normal; }
+.clipTimes em { color: var(--accent); font-style: normal; font-size: 12px; }
+
+.clipTimes > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 28px;
+}
+
+.clipTimes label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.clipTimes input[type="number"] {
+  width: 80px;
+  padding: 4px 8px;
+  border: 1px solid var(--line-bright);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-align: right;
+  -moz-appearance: textfield;
+}
+.clipTimes input[type="number"]::-webkit-inner-spin-button,
+.clipTimes input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.clipTimes input[type="number"]:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.clipTimeUnit {
+  color: var(--accent);
+  font-size: 11px;
+}
 
 .clipActions { display: flex; flex-wrap: wrap; gap: 10px; }
 .clipActions button {
