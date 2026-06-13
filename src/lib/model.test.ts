@@ -14,6 +14,28 @@ describe("model helpers", () => {
     expect(library.activeBoardId).toBe("a");
     expect(library.settings.stopAllHotkey).toBe("Ctrl+Alt+Space");
     expect(library.settings.cycleBoardsHotkey).toBe("");
+    expect(library.settings.micVirtualVolume).toBe(1);
+    expect(library.settings.micMonitorVolume).toBe(1);
+    expect(library.settings.soundboardVirtualVolume).toBe(1);
+    expect(library.settings.soundboardMonitorVolume).toBe(1);
+  });
+
+  it("uses 100% defaults instead of migrating legacy shared volume settings", () => {
+    const library = normalizeLibrary({
+      version: 1,
+      activeBoardId: "a",
+      settings: {
+        micVolume: 0.6,
+        soundboardVolume: 0.7,
+        monitorVolume: 0.5
+      } as unknown as SoundLibrary["settings"],
+      boards: [{ id: "a", name: "A", color: "#fff", icon: "zap", createdAt: "", updatedAt: "", sounds: [] }]
+    });
+
+    expect(library.settings.micVirtualVolume).toBe(1);
+    expect(library.settings.micMonitorVolume).toBe(1);
+    expect(library.settings.soundboardVirtualVolume).toBe(1);
+    expect(library.settings.soundboardMonitorVolume).toBe(1);
   });
 
   it("migrates legacy Electron accelerators to canonical tokens", () => {

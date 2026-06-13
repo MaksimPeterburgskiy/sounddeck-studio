@@ -8,9 +8,10 @@ const defaultSettings: SoundLibrary["settings"] = {
   soundboardToVirtualMic: false,
   monitorToHeadphones: true,
   monitorMicToHeadphones: false,
-  micVolume: 1,
-  soundboardVolume: 1,
-  monitorVolume: 1,
+  micVirtualVolume: 1,
+  micMonitorVolume: 1,
+  soundboardVirtualVolume: 1,
+  soundboardMonitorVolume: 1,
   monitorDeviceId: "",
   microphoneDeviceId: "",
   stopAllHotkey: "Ctrl+Alt+Space",
@@ -77,7 +78,21 @@ export function soundFromImport(result: MediaImportResult, index: number, output
 export function normalizeLibrary(library: SoundLibrary): SoundLibrary {
   const boards = library.boards?.length ? library.boards : [makeBoard(1)];
   const activeBoardId = boards.some((board) => board.id === library.activeBoardId) ? library.activeBoardId : boards[0].id;
-  const settings = { ...defaultSettings, ...library.settings };
+  type LegacySettings = Partial<SoundLibrary["settings"]> & { micVolume?: number; soundboardVolume?: number; monitorVolume?: number };
+  const incomingSettings = (library.settings || {}) as LegacySettings;
+  const currentSettings = { ...incomingSettings };
+  delete currentSettings.micVolume;
+  delete currentSettings.soundboardVolume;
+  delete currentSettings.monitorVolume;
+  const volumeOr = (value: unknown, fallback: number) => typeof value === "number" && Number.isFinite(value) ? value : fallback;
+  const settings = {
+    ...defaultSettings,
+    ...currentSettings,
+    micVirtualVolume: volumeOr(currentSettings.micVirtualVolume, defaultSettings.micVirtualVolume),
+    micMonitorVolume: volumeOr(currentSettings.micMonitorVolume, defaultSettings.micMonitorVolume),
+    soundboardVirtualVolume: volumeOr(currentSettings.soundboardVirtualVolume, defaultSettings.soundboardVirtualVolume),
+    soundboardMonitorVolume: volumeOr(currentSettings.soundboardMonitorVolume, defaultSettings.soundboardMonitorVolume)
+  };
   settings.stopAllHotkey = normalizeAccelerator(settings.stopAllHotkey);
   settings.cycleBoardsHotkey = normalizeAccelerator(settings.cycleBoardsHotkey);
   return {

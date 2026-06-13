@@ -44,9 +44,10 @@ export interface AudioSettings {
   soundboardToVirtualMic: boolean;
   monitorToHeadphones: boolean;
   monitorMicToHeadphones: boolean;
-  micVolume: number;
-  soundboardVolume: number;
-  monitorVolume: number;
+  micVirtualVolume: number;
+  micMonitorVolume: number;
+  soundboardVirtualVolume: number;
+  soundboardMonitorVolume: number;
   monitorDeviceId: string;
   microphoneDeviceId: string;
   stopAllHotkey: string;
@@ -65,6 +66,7 @@ export interface MediaImportResult {
   id?: string;
   title?: string;
   sourcePath: string;
+  sourceUrl?: string;
   mediaPath?: string;
   storedName?: string;
   ext?: string;
@@ -100,6 +102,7 @@ declare global {
       importBoard: () => Promise<{ ok: boolean; canceled?: boolean; reason?: string; board?: SoundBoard }>;
       revealLibrary: () => Promise<{ ok: boolean }>;
       importMedia: (paths: string[]) => Promise<MediaImportResult[]>;
+      downloadMedia: (urls: string[]) => Promise<MediaImportResult[]>;
       readMedia: (mediaPath: string) => Promise<ArrayBuffer>;
       deleteMedia: (mediaPath: string) => Promise<{ ok: boolean; reason?: string }>;
       saveRecording: (payload: { title: string; ext: string; bytes: ArrayBuffer }) => Promise<MediaImportResult>;

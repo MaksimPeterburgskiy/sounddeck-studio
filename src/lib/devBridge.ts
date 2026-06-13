@@ -18,9 +18,10 @@ export function installDevBridge() {
           soundboardToVirtualMic: false,
           monitorToHeadphones: true,
           monitorMicToHeadphones: false,
-          micVolume: 0.85,
-          soundboardVolume: 0.9,
-          monitorVolume: 0.8,
+          micVirtualVolume: 1,
+          micMonitorVolume: 1,
+          soundboardVirtualVolume: 1,
+          soundboardMonitorVolume: 1,
           monitorDeviceId: "",
           microphoneDeviceId: "",
           stopAllHotkey: "Ctrl+Alt+Space",
@@ -44,6 +45,9 @@ export function installDevBridge() {
     },
     async importMedia(paths: string[]) {
       return paths.map((sourcePath): MediaImportResult => ({ ok: false, sourcePath, reason: "Run in Electron to import media" }));
+    },
+    async downloadMedia(urls: string[]) {
+      return urls.map((url): MediaImportResult => ({ ok: false, sourcePath: url, sourceUrl: url, reason: "Run in Electron to download URL audio" }));
     },
     async readMedia() {
       throw new Error("Run in Electron to read app-managed media");
