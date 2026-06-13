@@ -159,20 +159,20 @@ export class AudioEngine {
   }
 
   private contextsForTarget(target: OutputTarget) {
-    const contexts: Array<{ context: AudioContext; volume: number; bus: GainNode }> = [];
+    const contexts: Array<{ context: AudioContext; bus: GainNode }> = [];
     if ((target === "monitor" || target === "both") && this.settings.monitorToHeadphones) {
-      contexts.push({ context: this.monitorContext, volume: this.settings.monitorVolume, bus: this.monitorBus });
+      contexts.push({ context: this.monitorContext, bus: this.monitorBus });
     }
     if ((target === "virtual" || target === "both") && this.settings.soundboardToVirtualMic) {
-      contexts.push({ context: this.virtualContext, volume: 1, bus: this.virtualBus });
+      contexts.push({ context: this.virtualContext, bus: this.virtualBus });
     }
-    if (!contexts.length) contexts.push({ context: this.monitorContext, volume: this.settings.monitorVolume, bus: this.monitorBus });
+    if (!contexts.length) contexts.push({ context: this.monitorContext, bus: this.monitorBus });
     return contexts;
   }
 
   private applyBusVolumes() {
-    this.monitorBus.gain.setTargetAtTime(this.settings.soundboardVolume * this.settings.monitorVolume, this.monitorContext.currentTime, 0.02);
-    this.virtualBus.gain.setTargetAtTime(this.settings.soundboardVolume, this.virtualContext.currentTime, 0.02);
+    this.monitorBus.gain.setTargetAtTime(this.settings.soundboardMonitorVolume, this.monitorContext.currentTime, 0.02);
+    this.virtualBus.gain.setTargetAtTime(this.settings.soundboardVirtualVolume, this.virtualContext.currentTime, 0.02);
   }
 
   private async setSink(context: AudioContext, deviceId: string) {
@@ -198,7 +198,7 @@ export class AudioEngine {
         if (route.context === this.monitorContext && !this.settings.monitorMicToHeadphones) continue;
         const source = route.context.createMediaStreamSource(this.micStream);
         const gain = route.context.createGain();
-        gain.gain.value = this.settings.micVolume * route.volume;
+        gain.gain.value = route.context === this.monitorContext ? this.settings.micMonitorVolume : this.settings.micVirtualVolume;
         source.connect(gain).connect(route.context.destination);
         this.micNodes.push({ source, gain, context: route.context });
       }

@@ -44,9 +44,10 @@ export interface AudioSettings {
   soundboardToVirtualMic: boolean;
   monitorToHeadphones: boolean;
   monitorMicToHeadphones: boolean;
-  micVolume: number;
-  soundboardVolume: number;
-  monitorVolume: number;
+  micVirtualVolume: number;
+  micMonitorVolume: number;
+  soundboardVirtualVolume: number;
+  soundboardMonitorVolume: number;
   monitorDeviceId: string;
   microphoneDeviceId: string;
   stopAllHotkey: string;
