@@ -45,6 +45,9 @@ export function installDevBridge() {
     async importMedia(paths: string[]) {
       return paths.map((sourcePath): MediaImportResult => ({ ok: false, sourcePath, reason: "Run in Electron to import media" }));
     },
+    async downloadMedia(urls: string[]) {
+      return urls.map((url): MediaImportResult => ({ ok: false, sourcePath: url, sourceUrl: url, reason: "Run in Electron to download URL audio" }));
+    },
     async readMedia() {
       throw new Error("Run in Electron to read app-managed media");
     },

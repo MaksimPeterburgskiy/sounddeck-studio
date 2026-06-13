@@ -961,6 +961,117 @@ input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent);
 }
 .clipActions .clipPreview:hover:not(:disabled) { background: var(--accent); color: #0a0b0d; border-color: var(--accent); }
 
+/* ---------- URL import ---------- */
+
+.urlImportDialog {
+  display: grid;
+  gap: 16px;
+  width: min(560px, 100%);
+  padding: 20px;
+  border: 1px solid var(--line-bright);
+  border-radius: 14px;
+  background: rgba(17, 19, 24, 0.96);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.6);
+  animation: inspectorIn 0.25s cubic-bezier(0.2, 0.9, 0.3, 1) both;
+}
+.urlImportDialog header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.urlImportDialog header strong {
+  font-family: var(--font-display);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.urlImportDialog header button {
+  display: inline-grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  color: var(--text-dim);
+  background: var(--surface-3);
+}
+.urlImportDialog header button:hover:not(:disabled) { color: var(--text); border-color: var(--line-bright); }
+.urlImportDialog label {
+  display: grid;
+  gap: 8px;
+  color: var(--text-dim);
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.urlImportDialog textarea {
+  width: 100%;
+  min-height: 150px;
+  resize: vertical;
+  padding: 12px;
+  border: 1px solid var(--line-bright);
+  border-radius: var(--radius-sm);
+  background: var(--bg-deep);
+  color: var(--text);
+  font: 500 13px/1.5 var(--font-mono);
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.urlImportDialog textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.urlImportFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+.urlImportFooter span {
+  min-width: 0;
+  color: var(--text-dim);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.urlImportFooter button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 9px;
+  min-height: 40px;
+  padding: 9px 16px;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: #0a0b0d;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  transition: box-shadow 0.2s ease, opacity 0.14s ease;
+}
+.urlImportFooter button:hover:not(:disabled) { box-shadow: 0 0 18px var(--accent-glow); }
+.urlImportDialog button:disabled, .urlImportDialog textarea:disabled { cursor: default; opacity: 0.55; }
+.urlImportErrors {
+  display: grid;
+  gap: 8px;
+  max-height: 120px;
+  overflow: auto;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--danger) 45%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--danger) 9%, transparent);
+}
+.urlImportErrors p {
+  margin: 0;
+  color: var(--danger);
+  font: 500 12px/1.45 var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
 /* ---------- panels (devices / hotkeys / recorder) ---------- */
 
 .panel { display: grid; grid-template-columns: minmax(420px, 640px) minmax(300px, 1fr); gap: 18px; align-items: start; }
@@ -1211,4 +1322,6 @@ input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent);
   .topbar { align-items: flex-start; flex-direction: column; }
   .hotkeyRow { grid-template-columns: 12px minmax(0, 1fr); }
   .hotkeyRow .hotkeyCapture { grid-column: 1 / -1; }
+  .urlImportFooter { align-items: stretch; flex-direction: column; }
+  .urlImportFooter button { justify-content: center; }
 }
