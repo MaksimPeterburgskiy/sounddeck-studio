@@ -4,6 +4,8 @@ const fs = require("node:fs/promises");
 const http = require("node:http");
 const https = require("node:https");
 const crypto = require("node:crypto");
+const os = require("node:os");
+const { spawn } = require("node:child_process");
 const { createCorsairBridge, isGKeyAccelerator } = require("./corsair.cjs");
 const { createHotkeyEngine } = require("./hotkeys.cjs");
 
@@ -50,6 +52,27 @@ function libraryFile() {
 
 function mediaRoot() {
   return path.join(appRoot(), "media");
+}
+
+function bundledYtDlpCandidates() {
+  const fileName = process.platform === "win32" ? "yt-dlp.exe" : "yt-dlp";
+  const packagedCandidates = [
+    path.join(process.resourcesPath || "", "app.asar.unpacked", "node_modules", "youtube-dl-exec", "bin", fileName),
+    path.join(process.resourcesPath || "", "app", "node_modules", "youtube-dl-exec", "bin", fileName),
+    path.join(process.resourcesPath || "", "node_modules", "youtube-dl-exec", "bin", fileName)
+  ];
+  const devCandidates = [
+    path.join(__dirname, "..", "node_modules", "youtube-dl-exec", "bin", fileName)
+  ];
+  const candidates = app.isPackaged ? [...packagedCandidates, ...devCandidates] : [...devCandidates, ...packagedCandidates];
+
+  try {
+    candidates.push(require("youtube-dl-exec").constants.YOUTUBE_DL_PATH);
+  } catch {
+    // Fallback candidates below cover normal dev and packaged layouts.
+  }
+
+  return [...new Set(candidates.filter(Boolean))];
 }
 
 async function ensureLibrary() {
@@ -113,6 +136,10 @@ function inferMime(ext) {
   }[normalized] || "application/octet-stream";
 }
 
+function allowedAudioExtensions() {
+  return new Set([".wav", ".mp3", ".ogg", ".flac", ".m4a", ".aac", ".webm"]);
+}
+
 async function readJson(filePath) {
   return JSON.parse(await fs.readFile(filePath, "utf8"));
 }
@@ -123,6 +150,153 @@ async function fileExists(filePath) {
     return true;
   } catch {
     return false;
+  }
+}
+
+async function importMediaPaths(filePaths) {
+  await ensureLibrary();
+  const allowed = allowedAudioExtensions();
+  const imported = [];
+  for (const sourcePath of filePaths) {
+    try {
+      const stat = await fs.stat(sourcePath);
+      if (!stat.isFile()) continue;
+      const ext = path.extname(sourcePath).toLowerCase();
+      if (!allowed.has(ext)) {
+        imported.push({ ok: false, sourcePath, reason: "unsupported-format" });
+        continue;
+      }
+      const id = crypto.randomUUID();
+      const baseName = sanitizeName(path.basename(sourcePath, ext));
+      const storedName = `${id}${ext}`;
+      const dest = path.join(mediaRoot(), storedName);
+      await fs.copyFile(sourcePath, dest);
+      imported.push({
+        ok: true,
+        id,
+        title: baseName,
+        sourcePath,
+        mediaPath: dest,
+        storedName,
+        ext,
+        mime: inferMime(ext),
+        size: stat.size
+      });
+    } catch (error) {
+      imported.push({ ok: false, sourcePath, reason: error?.message || "failed-to-import" });
+    }
+  }
+  return imported;
+}
+
+function isHttpUrl(value) {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "https:" || parsed.protocol === "http:";
+  } catch {
+    return false;
+  }
+}
+
+function runYtDlp(args, cwd) {
+  const bundledCandidates = bundledYtDlpCandidates().map((command) => ({ command, args }));
+  const candidates = process.platform === "win32"
+    ? [
+        ...bundledCandidates,
+        { command: "yt-dlp.exe", args },
+        { command: "yt-dlp", args },
+        { command: "py", args: ["-m", "yt_dlp", ...args] },
+        { command: "python", args: ["-m", "yt_dlp", ...args] }
+      ]
+    : [
+        ...bundledCandidates,
+        { command: "yt-dlp", args },
+        { command: "python3", args: ["-m", "yt_dlp", ...args] },
+        { command: "python", args: ["-m", "yt_dlp", ...args] }
+      ];
+
+  return new Promise((resolve, reject) => {
+    let index = 0;
+    const failures = [];
+
+    const tryNext = () => {
+      const candidate = candidates[index++];
+      if (!candidate) {
+        reject(new Error(`yt-dlp could not be started. Reinstall dependencies or make sure yt-dlp is on PATH, then try again. Tried: ${failures.join("; ")}`));
+        return;
+      }
+
+      let child;
+      try {
+        child = spawn(candidate.command, candidate.args, {
+          cwd,
+          windowsHide: true,
+          shell: false
+        });
+      } catch (error) {
+        failures.push(`${candidate.command}: ${error?.message || error}`);
+        tryNext();
+        return;
+      }
+      let stdout = "";
+      let stderr = "";
+      let candidateFinished = false;
+
+      child.stdout?.on("data", (chunk) => {
+        stdout += chunk.toString();
+      });
+      child.stderr?.on("data", (chunk) => {
+        stderr += chunk.toString();
+      });
+      child.on("error", (error) => {
+        if (candidateFinished) return;
+        candidateFinished = true;
+        failures.push(`${candidate.command}: ${error.message}`);
+        if (["ENOENT", "ENOTDIR", "EACCES"].includes(error.code)) {
+          tryNext();
+        } else {
+          reject(new Error(`${candidate.command} could not be started: ${error.message}`));
+        }
+      });
+      child.on("close", (code) => {
+        if (candidateFinished) return;
+        candidateFinished = true;
+        if (code === 0) resolve({ stdout, stderr });
+        else {
+          const output = (stderr || stdout).trim();
+          const reason = output || `exited with code ${code}`;
+          failures.push(`${candidate.command}: ${reason}`);
+          if (code === -4058 || /No module named yt_dlp/i.test(output)) tryNext();
+          else reject(new Error(`${candidate.command} ${reason}`));
+        }
+      });
+    };
+
+    tryNext();
+  });
+}
+
+async function listFilesRecursive(root) {
+  const entries = await fs.readdir(root, { withFileTypes: true });
+  const files = [];
+  for (const entry of entries) {
+    const fullPath = path.join(root, entry.name);
+    if (entry.isDirectory()) files.push(...await listFilesRecursive(fullPath));
+    else if (entry.isFile()) files.push(fullPath);
+  }
+  return files;
+}
+
+async function removeTempDir(tempDir) {
+  try {
+    await fs.rm(tempDir, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 200
+    });
+  } catch (error) {
+    console.warn(`Could not remove temporary download folder ${tempDir}:`, error);
   }
 }
 
@@ -391,35 +565,46 @@ ipcMain.handle("board:import", async () => {
 });
 
 ipcMain.handle("media:import", async (_event, filePaths) => {
+  return importMediaPaths(Array.isArray(filePaths) ? filePaths : []);
+});
+
+ipcMain.handle("media:download", async (_event, urls) => {
   await ensureLibrary();
-  const allowed = new Set([".wav", ".mp3", ".ogg", ".flac", ".m4a", ".aac", ".webm"]);
-  const imported = [];
-  for (const sourcePath of filePaths) {
-    const stat = await fs.stat(sourcePath);
-    if (!stat.isFile()) continue;
-    const ext = path.extname(sourcePath).toLowerCase();
-    if (!allowed.has(ext)) {
-      imported.push({ ok: false, sourcePath, reason: "unsupported-format" });
+  const requestedUrls = Array.isArray(urls) ? urls.map((url) => String(url).trim()).filter(Boolean) : [];
+  const allowed = allowedAudioExtensions();
+  const results = [];
+  for (const url of requestedUrls) {
+    if (!isHttpUrl(url)) {
+      results.push({ ok: false, sourceUrl: url, sourcePath: url, reason: "Enter a valid http or https URL." });
       continue;
     }
-    const id = crypto.randomUUID();
-    const baseName = sanitizeName(path.basename(sourcePath, ext));
-    const storedName = `${id}${ext}`;
-    const dest = path.join(mediaRoot(), storedName);
-    await fs.copyFile(sourcePath, dest);
-    imported.push({
-      ok: true,
-      id,
-      title: baseName,
-      sourcePath,
-      mediaPath: dest,
-      storedName,
-      ext,
-      mime: inferMime(ext),
-      size: stat.size
-    });
+
+    let tempDir = "";
+    try {
+      tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "sounddeck-ytdlp-"));
+      await runYtDlp([
+        "--no-playlist",
+        "--format",
+        "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best",
+        "--output",
+        "%(title).180B.%(ext)s",
+        url
+      ], tempDir);
+      const downloaded = (await listFilesRecursive(tempDir))
+        .filter((filePath) => allowed.has(path.extname(filePath).toLowerCase()));
+      if (!downloaded.length) {
+        results.push({ ok: false, sourceUrl: url, sourcePath: url, reason: "yt-dlp did not produce a supported audio file." });
+        continue;
+      }
+      const imported = await importMediaPaths(downloaded);
+      results.push(...imported.map((result) => ({ ...result, sourceUrl: url })));
+    } catch (error) {
+      results.push({ ok: false, sourceUrl: url, sourcePath: url, reason: error?.message || "Download failed." });
+    } finally {
+      if (tempDir) await removeTempDir(tempDir);
+    }
   }
-  return imported;
+  return results;
 });
 
 ipcMain.handle("media:delete", async (_event, mediaPath) => {

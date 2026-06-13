@@ -23,6 +23,9 @@
       "electron/**",
       "package.json"
     ],
+    "asarUnpack": [
+      "node_modules/youtube-dl-exec/bin/**"
+    ],
     "extraResources": [
       {
         "from": "build/vbcable",
@@ -74,7 +77,8 @@
   "dependencies": {
     "cue-sdk": "^4.0.84",
     "electron-updater": "^6.8.9",
-    "uiohook-napi": "^1.5.5"
+    "uiohook-napi": "^1.5.5",
+    "youtube-dl-exec": "^3.1.7"
   },
   "devDependencies": {
     "@types/node": "^25.9.3",

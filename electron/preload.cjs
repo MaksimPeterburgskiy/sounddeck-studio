@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld("sounddeck", {
   importBoard: () => ipcRenderer.invoke("board:import"),
   revealLibrary: () => ipcRenderer.invoke("library:reveal"),
   importMedia: (paths) => ipcRenderer.invoke("media:import", paths),
+  downloadMedia: (urls) => ipcRenderer.invoke("media:download", urls),
   readMedia: (mediaPath) => ipcRenderer.invoke("media:read", mediaPath),
   deleteMedia: (mediaPath) => ipcRenderer.invoke("media:delete", mediaPath),
   saveRecording: (payload) => ipcRenderer.invoke("media:saveRecording", payload),

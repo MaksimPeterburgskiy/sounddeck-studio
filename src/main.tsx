@@ -6,6 +6,7 @@ import {
   Headphones,
   Image as ImageIcon,
   Keyboard,
+  Link,
   Mic,
   MoreVertical,
   Pencil,
@@ -28,7 +29,7 @@ import { acceleratorLooksReserved, formatBytes, formatDuration, makeBoard, norma
 import { claimCaptureSlot, eventToToken, formatAccelerator, MODIFIER_TOKENS, normalizeAccelerator, orderTokens } from "./lib/hotkeys";
 import { makeWaveform } from "./lib/waveform";
 import { installDevBridge } from "./lib/devBridge";
-import type { CorsairState, HotkeyBinding, HotkeyResult, SoundBoard, SoundLibrary, SoundSlot, UpdateStatus } from "./types";
+import type { CorsairState, HotkeyBinding, HotkeyResult, MediaImportResult, SoundBoard, SoundLibrary, SoundSlot, UpdateStatus } from "./types";
 import "./styles.css";
 
 installDevBridge();
@@ -45,6 +46,7 @@ function App() {
   const [engineStatus, setEngineStatus] = useState<EngineStatus>("idle");
   const [playingIds, setPlayingIds] = useState<string[]>([]);
   const [editingClipId, setEditingClipId] = useState<string>("");
+  const [urlImportOpen, setUrlImportOpen] = useState(false);
   const [dropActive, setDropActive] = useState(false);
   const [message, setMessage] = useState("Ready");
   const [corsairState, setCorsairState] = useState<CorsairState>("unavailable");
@@ -214,20 +216,31 @@ function App() {
     }));
   }
 
-  async function importFiles(files: File[]) {
+  function addImportedSounds(results: MediaImportResult[], emptyMessage: string) {
     if (!activeBoard) return;
-    const paths = files.map((file) => window.sounddeck.getPathForFile(file)).filter(Boolean);
-    if (!paths.length) return;
-    const results = await window.sounddeck.importMedia(paths);
-    const imported = results.map((result, index) => soundFromImport(result, activeBoard.sounds.length + index, "both")).filter(Boolean) as SoundSlot[];
+    const successful = results.filter((result) => result.ok);
+    const imported = successful.map((result, index) => soundFromImport(result, activeBoard.sounds.length + index, "both")).filter(Boolean) as SoundSlot[];
     updateLibrary((current) => ({
       ...current,
       boards: current.boards.map((board) => board.id === activeBoard.id ? { ...board, sounds: [...board.sounds, ...imported], updatedAt: now() } : board)
     }));
-    setMessage(imported.length ? `Imported ${imported.length} sound${imported.length === 1 ? "" : "s"}` : "No supported audio files found");
+    setMessage(imported.length ? `Imported ${imported.length} sound${imported.length === 1 ? "" : "s"}` : emptyMessage);
     for (const sound of imported) {
       engineRef.current?.preload(sound).then((buffer) => updateSound(sound.id, { duration: buffer.duration, waveform: makeWaveform(buffer) })).catch(() => undefined);
     }
+  }
+
+  async function importFiles(files: File[]) {
+    const paths = files.map((file) => window.sounddeck.getPathForFile(file)).filter(Boolean);
+    if (!paths.length) return;
+    addImportedSounds(await window.sounddeck.importMedia(paths), "No supported audio files found");
+  }
+
+  async function importUrls(urls: string[]) {
+    setMessage(`Importing ${urls.length} URL${urls.length === 1 ? "" : "s"}...`);
+    const results = await window.sounddeck.downloadMedia(urls);
+    addImportedSounds(results, "No downloadable audio found");
+    return results;
   }
 
   function selectBoard(boardId: string) {
@@ -424,18 +437,23 @@ function App() {
                 <BoardTitle key={activeBoard.id} name={activeBoard.name} onRename={(name) => updateBoard(activeBoard.id, { name })} />
                 <p>{activeBoard.sounds.length} sounds · {message}</p>
               </div>
-              <div className="boardHotkeyControl" title="Global hotkey that switches to this board">
-                <Keyboard size={15} />
-                <span>Switch key</span>
-                <HotkeyCapture value={activeBoard.switchHotkey || ""} onChange={(switchHotkey) => updateBoard(activeBoard.id, { switchHotkey })} />
-              </div>
+              {view === "board" && (
+                <div className="boardHotkeyControl" title="Global hotkey that switches to this board">
+                  <Keyboard size={15} />
+                  <span>Switch key</span>
+                  <HotkeyCapture value={activeBoard.switchHotkey || ""} onChange={(switchHotkey) => updateBoard(activeBoard.id, { switchHotkey })} />
+                </div>
+              )}
             </>
           )}
-          <div className="topActions">
-            <button onClick={() => void window.sounddeck.revealLibrary()}><FolderOpen size={16} /> Library</button>
-            <button title={`Save "${activeBoard.name}" with its sounds to a file`} onClick={() => void window.sounddeck.exportBoard(activeBoard)}><Upload size={16} /> Export</button>
-            <button title="Replace this board with an exported board file" onClick={() => void restoreBoard()}><Download size={16} /> Import</button>
-          </div>
+          {view === "board" && (
+            <div className="topActions">
+              <button onClick={() => void window.sounddeck.revealLibrary()}><FolderOpen size={16} /> Library</button>
+              <button title="Import audio from a web URL" onClick={() => setUrlImportOpen(true)}><Link size={16} /> Import URL</button>
+              <button title={`Save "${activeBoard.name}" with its sounds to a file`} onClick={() => void window.sounddeck.exportBoard(activeBoard)}><Upload size={16} /> Export</button>
+              <button title="Replace this board with an exported board file" onClick={() => void restoreBoard()}><Download size={16} /> Import</button>
+            </div>
+          )}
         </header>
 
         {view === "board" && (
@@ -529,7 +547,77 @@ function App() {
           onDismiss={() => setUpdateDismissed(true)}
         />
       )}
+
+      {urlImportOpen && (
+        <UrlImportModal
+          onClose={() => setUrlImportOpen(false)}
+          onImport={importUrls}
+        />
+      )}
     </main>
+  );
+}
+
+function UrlImportModal({ onClose, onImport }: { onClose: () => void; onImport: (urls: string[]) => Promise<MediaImportResult[]> }) {
+  const [urls, setUrls] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState("");
+  const [results, setResults] = useState<MediaImportResult[]>([]);
+  const parsedUrls = urls.split(/\r?\n/).map((url) => url.trim()).filter(Boolean);
+  const failures = results.filter((result) => !result.ok);
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    if (!parsedUrls.length || busy) return;
+    setBusy(true);
+    setStatus("Importing audio...");
+    setResults([]);
+    try {
+      const imported = await onImport(parsedUrls);
+      setResults(imported);
+      const importedCount = imported.filter((result) => result.ok).length;
+      const failedCount = imported.filter((result) => !result.ok).length;
+      setStatus(importedCount
+        ? `Imported ${importedCount} sound${importedCount === 1 ? "" : "s"}${failedCount ? `, ${failedCount} failed` : ""}.`
+        : "No sounds were imported.");
+      if (importedCount && !failedCount) setUrls("");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Import failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="modalOverlay" role="presentation">
+      <form className="urlImportDialog" onSubmit={submit}>
+        <header>
+          <strong>Import URL</strong>
+          <button type="button" onClick={onClose} disabled={busy} aria-label="Close URL import"><X size={16} /></button>
+        </header>
+        <label>
+          URLs
+          <textarea
+            value={urls}
+            disabled={busy}
+            placeholder="https://..."
+            onChange={(event) => setUrls(event.target.value)}
+            autoFocus
+          />
+        </label>
+        <div className="urlImportFooter">
+          <span>{status || "One URL per line."}</span>
+          <button type="submit" disabled={!parsedUrls.length || busy}><Download size={16} /> {busy ? "Importing" : "Import"}</button>
+        </div>
+        {failures.length > 0 && (
+          <div className="urlImportErrors">
+            {failures.map((result) => (
+              <p key={`${result.sourceUrl || result.sourcePath}-${result.reason}`}>{result.sourceUrl || result.sourcePath}: {result.reason}</p>
+            ))}
+          </div>
+        )}
+      </form>
+    </div>
   );
 }
 
