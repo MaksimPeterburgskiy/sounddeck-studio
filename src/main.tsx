@@ -951,7 +951,12 @@ function TrimInput({ label, value, min, max, onChange }: {
   }, [value, focused]);
 
   const commit = () => {
-    const v = Number(text);
+    const trimmed = text.trim();
+    if (trimmed === "") {
+      setText(value.toFixed(2));
+      return;
+    }
+    const v = Number(trimmed);
     if (Number.isFinite(v)) onChange(Math.min(Math.max(min, v), max));
     else setText(value.toFixed(2));
   };
@@ -1045,7 +1050,10 @@ function ClipEditor({ sound, engine, playing, onPlay, onStop, onChange, onClose 
     <div
       className="modalOverlay"
       onPointerDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
+        if (event.target === event.currentTarget) {
+          if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+          onClose();
+        }
       }}
     >
       <div className="clipEditor">
@@ -1069,9 +1077,9 @@ function ClipEditor({ sound, engine, playing, onPlay, onStop, onChange, onClose 
           <div className="clipHandle end" style={{ left: `${endPct}%` }} onPointerDown={dragHandle("end")} role="slider" aria-label="Clip end" aria-valuenow={end} aria-valuemin={0} aria-valuemax={duration} tabIndex={0} />
         </div>
         <div className="clipTimes">
-          <TrimInput label="Start" value={start} min={0} max={end - 0.05} onChange={(v) => onChange({ trimStartSec: v })} />
-          <TrimInput label="End" value={end} min={start + 0.05} max={duration} onChange={(v) => onChange({ trimEndSec: v })} />
-          <TrimInput label="Length" value={Math.max(0, end - start)} min={0.05} max={duration - start} onChange={(v) => onChange({ trimEndSec: Math.min(start + v, duration) })} />
+          <TrimInput label="Start" value={start} min={0} max={Math.max(0, end - 0.05)} onChange={(v) => onChange({ trimStartSec: v })} />
+          <TrimInput label="End" value={end} min={Math.min(start + 0.05, duration)} max={duration} onChange={(v) => onChange({ trimEndSec: v })} />
+          <TrimInput label="Length" value={Math.max(0, end - start)} min={Math.min(0.05, duration - start)} max={Math.max(0, duration - start)} onChange={(v) => onChange({ trimEndSec: Math.min(start + v, duration) })} />
           <span>Source <em>{duration.toFixed(2)}s</em></span>
         </div>
         <div className="clipActions">
