@@ -158,29 +158,33 @@ async function importMediaPaths(filePaths) {
   const allowed = allowedAudioExtensions();
   const imported = [];
   for (const sourcePath of filePaths) {
-    const stat = await fs.stat(sourcePath);
-    if (!stat.isFile()) continue;
-    const ext = path.extname(sourcePath).toLowerCase();
-    if (!allowed.has(ext)) {
-      imported.push({ ok: false, sourcePath, reason: "unsupported-format" });
-      continue;
+    try {
+      const stat = await fs.stat(sourcePath);
+      if (!stat.isFile()) continue;
+      const ext = path.extname(sourcePath).toLowerCase();
+      if (!allowed.has(ext)) {
+        imported.push({ ok: false, sourcePath, reason: "unsupported-format" });
+        continue;
+      }
+      const id = crypto.randomUUID();
+      const baseName = sanitizeName(path.basename(sourcePath, ext));
+      const storedName = `${id}${ext}`;
+      const dest = path.join(mediaRoot(), storedName);
+      await fs.copyFile(sourcePath, dest);
+      imported.push({
+        ok: true,
+        id,
+        title: baseName,
+        sourcePath,
+        mediaPath: dest,
+        storedName,
+        ext,
+        mime: inferMime(ext),
+        size: stat.size
+      });
+    } catch (error) {
+      imported.push({ ok: false, sourcePath, reason: error?.message || "failed-to-import" });
     }
-    const id = crypto.randomUUID();
-    const baseName = sanitizeName(path.basename(sourcePath, ext));
-    const storedName = `${id}${ext}`;
-    const dest = path.join(mediaRoot(), storedName);
-    await fs.copyFile(sourcePath, dest);
-    imported.push({
-      ok: true,
-      id,
-      title: baseName,
-      sourcePath,
-      mediaPath: dest,
-      storedName,
-      ext,
-      mime: inferMime(ext),
-      size: stat.size
-    });
   }
   return imported;
 }
@@ -222,26 +226,41 @@ function runYtDlp(args, cwd) {
         return;
       }
 
-      const child = spawn(candidate.command, candidate.args, {
-        cwd,
-        windowsHide: true,
-        shell: false
-      });
+      let child;
+      try {
+        child = spawn(candidate.command, candidate.args, {
+          cwd,
+          windowsHide: true,
+          shell: false
+        });
+      } catch (error) {
+        failures.push(`${candidate.command}: ${error?.message || error}`);
+        tryNext();
+        return;
+      }
       let stdout = "";
       let stderr = "";
+      let candidateFinished = false;
 
-      child.stdout.on("data", (chunk) => {
+      child.stdout?.on("data", (chunk) => {
         stdout += chunk.toString();
       });
-      child.stderr.on("data", (chunk) => {
+      child.stderr?.on("data", (chunk) => {
         stderr += chunk.toString();
       });
       child.on("error", (error) => {
+        if (candidateFinished) return;
+        candidateFinished = true;
         failures.push(`${candidate.command}: ${error.message}`);
-        if (["ENOENT", "ENOTDIR", "EACCES"].includes(error.code)) tryNext();
-        else reject(new Error(`${candidate.command} could not be started: ${error.message}`));
+        if (["ENOENT", "ENOTDIR", "EACCES"].includes(error.code)) {
+          tryNext();
+        } else {
+          reject(new Error(`${candidate.command} could not be started: ${error.message}`));
+        }
       });
       child.on("close", (code) => {
+        if (candidateFinished) return;
+        candidateFinished = true;
         if (code === 0) resolve({ stdout, stderr });
         else {
           const output = (stderr || stdout).trim();
@@ -560,8 +579,9 @@ ipcMain.handle("media:download", async (_event, urls) => {
       continue;
     }
 
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "sounddeck-ytdlp-"));
+    let tempDir = "";
     try {
+      tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "sounddeck-ytdlp-"));
       await runYtDlp([
         "--no-playlist",
         "--format",
@@ -579,9 +599,9 @@ ipcMain.handle("media:download", async (_event, urls) => {
       const imported = await importMediaPaths(downloaded);
       results.push(...imported.map((result) => ({ ...result, sourceUrl: url })));
     } catch (error) {
-      results.push({ ok: false, sourceUrl: url, sourcePath: url, reason: error.message || "Download failed." });
+      results.push({ ok: false, sourceUrl: url, sourcePath: url, reason: error?.message || "Download failed." });
     } finally {
-      await removeTempDir(tempDir);
+      if (tempDir) await removeTempDir(tempDir);
     }
   }
   return results;

@@ -218,7 +218,8 @@ function App() {
 
   function addImportedSounds(results: MediaImportResult[], emptyMessage: string) {
     if (!activeBoard) return;
-    const imported = results.map((result, index) => soundFromImport(result, activeBoard.sounds.length + index, "both")).filter(Boolean) as SoundSlot[];
+    const successful = results.filter((result) => result.ok);
+    const imported = successful.map((result, index) => soundFromImport(result, activeBoard.sounds.length + index, "both")).filter(Boolean) as SoundSlot[];
     updateLibrary((current) => ({
       ...current,
       boards: current.boards.map((board) => board.id === activeBoard.id ? { ...board, sounds: [...board.sounds, ...imported], updatedAt: now() } : board)
