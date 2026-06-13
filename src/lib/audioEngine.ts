@@ -41,11 +41,13 @@ export class AudioEngine {
   }
 
   async configure(settings: AudioSettings, virtualSinkId: string) {
+    const shouldConfigureMic = this.shouldConfigureMic(settings);
     this.settings = settings;
     this.applyBusVolumes();
     await this.setSink(this.monitorContext, settings.monitorDeviceId);
     await this.setSink(this.virtualContext, virtualSinkId);
-    await this.configureMic();
+    if (shouldConfigureMic) await this.configureMic();
+    else this.applyMicVolumes();
   }
 
   async preload(sound: SoundSlot) {
@@ -159,20 +161,40 @@ export class AudioEngine {
   }
 
   private contextsForTarget(target: OutputTarget) {
-    const contexts: Array<{ context: AudioContext; volume: number; bus: GainNode }> = [];
+    const contexts: Array<{ context: AudioContext; bus: GainNode }> = [];
     if ((target === "monitor" || target === "both") && this.settings.monitorToHeadphones) {
-      contexts.push({ context: this.monitorContext, volume: this.settings.monitorVolume, bus: this.monitorBus });
+      contexts.push({ context: this.monitorContext, bus: this.monitorBus });
     }
     if ((target === "virtual" || target === "both") && this.settings.soundboardToVirtualMic) {
-      contexts.push({ context: this.virtualContext, volume: 1, bus: this.virtualBus });
+      contexts.push({ context: this.virtualContext, bus: this.virtualBus });
     }
-    if (!contexts.length) contexts.push({ context: this.monitorContext, volume: this.settings.monitorVolume, bus: this.monitorBus });
+    if (!contexts.length) contexts.push({ context: this.monitorContext, bus: this.monitorBus });
     return contexts;
   }
 
   private applyBusVolumes() {
-    this.monitorBus.gain.setTargetAtTime(this.settings.soundboardVolume * this.settings.monitorVolume, this.monitorContext.currentTime, 0.02);
-    this.virtualBus.gain.setTargetAtTime(this.settings.soundboardVolume, this.virtualContext.currentTime, 0.02);
+    this.monitorBus.gain.setTargetAtTime(this.settings.soundboardMonitorVolume, this.monitorContext.currentTime, 0.02);
+    this.virtualBus.gain.setTargetAtTime(this.settings.soundboardVirtualVolume, this.virtualContext.currentTime, 0.02);
+  }
+
+  private shouldConfigureMic(nextSettings: AudioSettings) {
+    return (
+      (nextSettings.micPassthrough && !this.micStream) ||
+      this.settings.micPassthrough !== nextSettings.micPassthrough ||
+      this.settings.microphoneDeviceId !== nextSettings.microphoneDeviceId ||
+      this.settings.soundboardToVirtualMic !== nextSettings.soundboardToVirtualMic ||
+      this.settings.monitorToHeadphones !== nextSettings.monitorToHeadphones ||
+      this.settings.monitorMicToHeadphones !== nextSettings.monitorMicToHeadphones
+    );
+  }
+
+  private applyMicVolumes() {
+    for (const node of this.micNodes) {
+      const targetVolume = node.context === this.monitorContext ? this.settings.micMonitorVolume : this.settings.micVirtualVolume;
+      const now = node.context.currentTime;
+      node.gain.gain.cancelScheduledValues(now);
+      node.gain.gain.setTargetAtTime(targetVolume, now, 0.02);
+    }
   }
 
   private async setSink(context: AudioContext, deviceId: string) {
@@ -198,7 +220,7 @@ export class AudioEngine {
         if (route.context === this.monitorContext && !this.settings.monitorMicToHeadphones) continue;
         const source = route.context.createMediaStreamSource(this.micStream);
         const gain = route.context.createGain();
-        gain.gain.value = this.settings.micVolume * route.volume;
+        gain.gain.value = route.context === this.monitorContext ? this.settings.micMonitorVolume : this.settings.micVirtualVolume;
         source.connect(gain).connect(route.context.destination);
         this.micNodes.push({ source, gain, context: route.context });
       }
