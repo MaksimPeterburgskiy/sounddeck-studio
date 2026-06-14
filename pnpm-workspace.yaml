@@ -1,0 +1,7 @@
+allowBuilds:
+  cue-sdk: true
+  electron-winstaller: true
+  uiohook-napi: true
+  youtube-dl-exec: true
+
+strictDepBuilds: true

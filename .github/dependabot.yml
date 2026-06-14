@@ -1,5 +1,6 @@
 version: 2
 updates:
+  # GitHub's Dependabot YAML value for pnpm is still "npm".
   - package-ecosystem: npm
     directory: /
     schedule:

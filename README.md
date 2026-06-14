@@ -66,21 +66,22 @@ The app updates itself: when a new release is published, the installed app downl
 
 ## Development
 
-Requires Windows 10/11 and Node.js 20+.
+Requires Windows 10/11, Node.js 22.12+, and pnpm 10.27+ via Corepack.
 
 ```bash
 git clone https://github.com/MaksimPeterburgskiy/sounddeck-studio.git
 cd sounddeck-studio
-npm install
-npm start          # dev server + Electron with hot reload
+corepack enable
+pnpm install
+pnpm start          # dev server + Electron with hot reload
 ```
 
 | Command | Description |
 | --- | --- |
-| `npm start` | Run the app in development (Vite + Electron) |
-| `npm test` | Run unit tests (Vitest) |
-| `npm run build` | Type-check and bundle the renderer |
-| `npm run dist` | Build the Windows installer + portable exe into `release/` |
+| `pnpm start` | Run the app in development (Vite + Electron) |
+| `pnpm test` | Run unit tests (Vitest) |
+| `pnpm run build` | Type-check and bundle the renderer |
+| `pnpm run dist` | Build the Windows installer + portable exe into `release/` |
 
 Tech stack: Electron, React 19, TypeScript, Vite, Web Audio API, and electron-builder.
 
@@ -94,7 +95,7 @@ scripts/    Build helpers (VB-CABLE is downloaded at package time, not committed
 
 ## Contributing
 
-Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) first. In short: open an issue before large changes, target the `main` branch, keep PRs focused, and make sure `npm run build` and `npm test` pass.
+Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) first. In short: open an issue before large changes, target the `main` branch, keep PRs focused, and make sure `pnpm run build` and `pnpm test` pass.
 
 Releases are cut from the `prod` branch by maintainers via the [Release workflow](.github/workflows/release.yml).
 

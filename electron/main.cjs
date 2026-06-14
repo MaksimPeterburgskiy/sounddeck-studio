@@ -335,7 +335,7 @@ async function loadRenderer(window) {
       await window.loadFile(builtIndex);
       return;
     }
-    throw new Error(`Renderer not available. Start Vite with "npm run dev" or build first with "npm run build". Tried ${devUrl} and ${builtIndex}.`);
+    throw new Error(`Renderer not available. Start Vite with "pnpm run dev" or build first with "pnpm run build". Tried ${devUrl} and ${builtIndex}.`);
   }
 
   await window.loadFile(builtIndex);
