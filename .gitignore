@@ -2,6 +2,7 @@ node_modules/
 release/
 dist/
 .claude/
+.codex/
 build/vbcable/
 build/installerSidebar.bmp
 build/installerHeader.bmp

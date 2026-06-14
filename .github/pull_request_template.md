@@ -4,10 +4,10 @@
 
 ## How was it tested?
 
-<!-- e.g. ran `npm test`, manually verified in `npm start`, built the installer -->
+<!-- e.g. ran `pnpm test`, manually verified in `pnpm start`, built the installer -->
 
 ## Checklist
 
-- [ ] `npm run build` and `npm test` pass locally
+- [ ] `pnpm run build` and `pnpm test` pass locally
 - [ ] Added/updated tests for logic changes in `src/lib/`
 - [ ] Screenshots or recording attached (for UI changes)
