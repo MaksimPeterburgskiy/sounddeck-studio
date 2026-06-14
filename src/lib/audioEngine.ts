@@ -1,4 +1,5 @@
 import type { AudioSettings, OutputTarget, SoundSlot } from "../types";
+import { makeMicrophoneConstraints, normalizeSelectableDeviceId } from "./devices";
 
 interface ActiveVoice {
   id: string;
@@ -24,7 +25,12 @@ export class AudioEngine {
   private active = new Map<string, ActiveVoice[]>();
   private micStream?: MediaStream;
   private micNodes: Array<{ source: MediaStreamAudioSourceNode; gain: GainNode; context: AudioContext }> = [];
+  private micConfigureGeneration = 0;
+  private configureGeneration = 0;
+  private disposed = false;
   private settings: AudioSettings;
+  private virtualSinkId = "";
+  private virtualSinkReady = false;
   private statusCallback: (status: EngineStatus, activeSoundIds: string[]) => void;
 
   constructor(settings: AudioSettings, statusCallback: (status: EngineStatus, activeSoundIds: string[]) => void) {
@@ -41,11 +47,30 @@ export class AudioEngine {
   }
 
   async configure(settings: AudioSettings, virtualSinkId: string) {
-    const shouldConfigureMic = this.shouldConfigureMic(settings);
+    if (this.disposed) return;
+    const generation = this.configureGeneration + 1;
+    this.configureGeneration = generation;
+    const previousVirtualSinkId = this.virtualSinkId;
+    const previousVirtualSinkReady = this.virtualSinkReady;
+    const shouldConfigureMicForSettings = this.shouldConfigureMic(settings);
     this.settings = settings;
+    this.virtualSinkId = virtualSinkId;
+    await this.setSink(this.monitorContext, settings.monitorDeviceId, true);
+    if (generation !== this.configureGeneration || this.disposed) {
+      await this.restoreLatestSinks();
+      return;
+    }
+    const nextVirtualSinkReady = virtualSinkId ? await this.setSink(this.virtualContext, virtualSinkId, false) : false;
+    if (generation !== this.configureGeneration || this.disposed) {
+      await this.restoreLatestSinks();
+      return;
+    }
+    this.virtualSinkReady = nextVirtualSinkReady;
+    const shouldConfigureMic =
+      shouldConfigureMicForSettings ||
+      previousVirtualSinkId !== virtualSinkId ||
+      previousVirtualSinkReady !== this.virtualSinkReady;
     this.applyBusVolumes();
-    await this.setSink(this.monitorContext, settings.monitorDeviceId);
-    await this.setSink(this.virtualContext, virtualSinkId);
     if (shouldConfigureMic) await this.configureMic();
     else this.applyMicVolumes();
   }
@@ -64,6 +89,7 @@ export class AudioEngine {
     if (sound.retriggerMode === "restart") this.stop(sound.id);
     await Promise.all([this.monitorContext.resume(), this.virtualContext.resume()]);
     const contexts = this.contextsForTarget(sound.outputTarget);
+    if (!contexts.length) return;
     const trimStart = Math.min(Math.max(0, sound.trimStartSec ?? 0), buffer.duration);
     const trimEnd = Math.min(Math.max(trimStart + 0.01, sound.trimEndSec ?? buffer.duration), buffer.duration);
     const clipDuration = Math.max(0.01, trimEnd - trimStart);
@@ -155,26 +181,31 @@ export class AudioEngine {
   }
 
   async dispose() {
+    this.disposed = true;
+    this.configureGeneration += 1;
     this.stopAll();
+    this.micConfigureGeneration += 1;
     this.stopMic();
     await Promise.allSettled([this.monitorContext.close(), this.virtualContext.close(), this.decodeContext.close()]);
   }
 
   private contextsForTarget(target: OutputTarget) {
     const contexts: Array<{ context: AudioContext; bus: GainNode }> = [];
-    if ((target === "monitor" || target === "both") && this.settings.monitorToHeadphones) {
+    const wantsMonitor = (target === "monitor" || target === "both") && this.settings.monitorToHeadphones;
+    const wantsVirtual = (target === "virtual" || target === "both") && this.settings.soundboardToVirtualMic;
+    if (wantsMonitor) {
       contexts.push({ context: this.monitorContext, bus: this.monitorBus });
     }
-    if ((target === "virtual" || target === "both") && this.settings.soundboardToVirtualMic) {
-      contexts.push({ context: this.virtualContext, bus: this.virtualBus });
+    if (wantsVirtual) {
+      if (this.virtualSinkReady) contexts.push({ context: this.virtualContext, bus: this.virtualBus });
     }
-    if (!contexts.length) contexts.push({ context: this.monitorContext, bus: this.monitorBus });
+    if (!contexts.length && !wantsMonitor && !wantsVirtual) contexts.push({ context: this.monitorContext, bus: this.monitorBus });
     return contexts;
   }
 
   private applyBusVolumes() {
     this.monitorBus.gain.setTargetAtTime(this.settings.soundboardMonitorVolume, this.monitorContext.currentTime, 0.02);
-    this.virtualBus.gain.setTargetAtTime(this.settings.soundboardVirtualVolume, this.virtualContext.currentTime, 0.02);
+    this.virtualBus.gain.setTargetAtTime(this.virtualSinkReady ? this.settings.soundboardVirtualVolume : 0, this.virtualContext.currentTime, 0.02);
   }
 
   private shouldConfigureMic(nextSettings: AudioSettings) {
@@ -197,35 +228,81 @@ export class AudioEngine {
     }
   }
 
-  private async setSink(context: AudioContext, deviceId: string) {
+  private async setSink(context: AudioContext, deviceId: string, fallbackToDefault: boolean) {
     const maybeContext = context as AudioContext & { setSinkId?: (sinkId: string) => Promise<void> };
-    if (!maybeContext.setSinkId || !deviceId) return;
+    if (!maybeContext.setSinkId) return deviceId === "";
     try {
       await maybeContext.setSinkId(deviceId);
+      return true;
     } catch (error) {
       console.warn("Audio output device switch failed", error);
+      if (deviceId && fallbackToDefault) {
+        try {
+          await maybeContext.setSinkId("");
+          return true;
+        } catch (fallbackError) {
+          console.warn("Audio output fallback to system default failed", fallbackError);
+        }
+      }
+      return false;
     }
   }
 
+  private async restoreLatestSinks() {
+    if (this.disposed) return;
+    const generation = this.configureGeneration;
+    await this.setSink(this.monitorContext, this.settings.monitorDeviceId, true);
+    if (generation !== this.configureGeneration || this.disposed) return;
+    const virtualSinkReady = this.virtualSinkId ? await this.setSink(this.virtualContext, this.virtualSinkId, false) : false;
+    if (generation !== this.configureGeneration || this.disposed) return;
+    this.virtualSinkReady = virtualSinkReady;
+    this.applyBusVolumes();
+  }
+
   private async configureMic() {
+    const generation = this.micConfigureGeneration + 1;
+    this.micConfigureGeneration = generation;
     this.stopMic();
     if (!this.settings.micPassthrough) return;
+    const microphoneDeviceId = normalizeSelectableDeviceId(this.settings.microphoneDeviceId);
     const constraints: MediaStreamConstraints = {
-      audio: this.settings.microphoneDeviceId ? { deviceId: { exact: this.settings.microphoneDeviceId }, echoCancellation: false, noiseSuppression: false } : true
+      audio: makeMicrophoneConstraints(microphoneDeviceId)
     };
+    let stream: MediaStream;
     try {
-      this.micStream = await navigator.mediaDevices.getUserMedia(constraints);
+      stream = await navigator.mediaDevices.getUserMedia(constraints);
+    } catch (error) {
+      if (!microphoneDeviceId) {
+        if (generation === this.micConfigureGeneration) console.warn("Microphone passthrough failed", error);
+        return;
+      }
+      if (generation === this.micConfigureGeneration) console.warn("Selected microphone failed; retrying with system default", error);
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: makeMicrophoneConstraints("") });
+      } catch (fallbackError) {
+        if (generation === this.micConfigureGeneration) console.warn("Microphone passthrough fallback failed", fallbackError);
+        return;
+      }
+    }
+
+    if (generation !== this.micConfigureGeneration || !this.settings.micPassthrough) {
+      stream.getTracks().forEach((track) => track.stop());
+      return;
+    }
+    this.micStream = stream;
+
+    try {
       const contexts = this.contextsForTarget("both");
       for (const route of contexts) {
         if (route.context === this.monitorContext && !this.settings.monitorMicToHeadphones) continue;
-        const source = route.context.createMediaStreamSource(this.micStream);
+        const source = route.context.createMediaStreamSource(stream);
         const gain = route.context.createGain();
         gain.gain.value = route.context === this.monitorContext ? this.settings.micMonitorVolume : this.settings.micVirtualVolume;
         source.connect(gain).connect(route.context.destination);
         this.micNodes.push({ source, gain, context: route.context });
       }
     } catch (error) {
-      console.warn("Microphone passthrough failed", error);
+      if (generation === this.micConfigureGeneration) console.warn("Microphone passthrough failed", error);
     }
   }
 
