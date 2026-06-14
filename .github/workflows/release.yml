@@ -26,13 +26,16 @@ jobs:
           # PAT so version/tag pushes pass branch protection (GITHUB_TOKEN can't).
           token: ${{ secrets.RELEASE_TOKEN }}
 
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 11.6.0
+          run_install: false
+
       - uses: actions/setup-node@v6
         with:
           node-version: 24
           cache: pnpm
-
-      - name: Enable Corepack
-        run: corepack enable
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile

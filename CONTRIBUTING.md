@@ -4,7 +4,7 @@ Thanks for your interest in contributing! This document explains how the project
 
 ## Development setup
 
-Requirements: **Windows 10/11**, **Node.js 22.12+**, and **pnpm 10.27+** via Corepack.
+Requirements: **Windows 10/11**, **Node.js 22.12+**, and **pnpm 11.6+** via Corepack.
 
 ```bash
 git clone https://github.com/MaksimPeterburgskiy/sounddeck-studio.git
