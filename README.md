@@ -8,7 +8,8 @@
 
 [![Latest release](https://img.shields.io/github/v/release/MaksimPeterburgskiy/sounddeck-studio?label=download&color=1db7a6)](https://github.com/MaksimPeterburgskiy/sounddeck-studio/releases/latest)
 [![CI](https://github.com/MaksimPeterburgskiy/sounddeck-studio/actions/workflows/ci.yml/badge.svg)](https://github.com/MaksimPeterburgskiy/sounddeck-studio/actions/workflows/ci.yml)
-[![Downloads](https://img.shields.io/github/downloads/MaksimPeterburgskiy/sounddeck-studio/total?color=1db7a6)](https://github.com/MaksimPeterburgskiy/sounddeck-studio/releases)
+<!-- The downloads badge is generated from .exe assets on the latest release only. This is the closest GitHub-only approximation of current installs, but still includes auto-update downloads. -->
+[![Latest downloads](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FMaksimPeterburgskiy%2Fsounddeck-studio%2Fmain%2Fdocs%2Fdownloads-badge.json)](https://github.com/MaksimPeterburgskiy/sounddeck-studio/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 Play sounds into Discord, OBS, or any game as if they came from your microphone, with your boards, your hotkeys, and no subscription.
