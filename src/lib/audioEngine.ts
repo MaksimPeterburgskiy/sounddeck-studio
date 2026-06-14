@@ -26,6 +26,8 @@ export class AudioEngine {
   private micStream?: MediaStream;
   private micNodes: Array<{ source: MediaStreamAudioSourceNode; gain: GainNode; context: AudioContext }> = [];
   private micConfigureGeneration = 0;
+  private configureGeneration = 0;
+  private disposed = false;
   private settings: AudioSettings;
   private virtualSinkId = "";
   private virtualSinkReady = false;
@@ -45,11 +47,29 @@ export class AudioEngine {
   }
 
   async configure(settings: AudioSettings, virtualSinkId: string) {
-    const shouldConfigureMic = this.shouldConfigureMic(settings) || this.virtualSinkId !== virtualSinkId;
+    if (this.disposed) return;
+    const generation = this.configureGeneration + 1;
+    this.configureGeneration = generation;
+    const previousVirtualSinkId = this.virtualSinkId;
+    const previousVirtualSinkReady = this.virtualSinkReady;
+    const shouldConfigureMicForSettings = this.shouldConfigureMic(settings);
     this.settings = settings;
-    await this.setSink(this.monitorContext, settings.monitorDeviceId, true);
     this.virtualSinkId = virtualSinkId;
-    this.virtualSinkReady = virtualSinkId ? await this.setSink(this.virtualContext, virtualSinkId, false) : false;
+    await this.setSink(this.monitorContext, settings.monitorDeviceId, true);
+    if (generation !== this.configureGeneration || this.disposed) {
+      await this.restoreLatestSinks();
+      return;
+    }
+    const nextVirtualSinkReady = virtualSinkId ? await this.setSink(this.virtualContext, virtualSinkId, false) : false;
+    if (generation !== this.configureGeneration || this.disposed) {
+      await this.restoreLatestSinks();
+      return;
+    }
+    this.virtualSinkReady = nextVirtualSinkReady;
+    const shouldConfigureMic =
+      shouldConfigureMicForSettings ||
+      previousVirtualSinkId !== virtualSinkId ||
+      previousVirtualSinkReady !== this.virtualSinkReady;
     this.applyBusVolumes();
     if (shouldConfigureMic) await this.configureMic();
     else this.applyMicVolumes();
@@ -161,6 +181,8 @@ export class AudioEngine {
   }
 
   async dispose() {
+    this.disposed = true;
+    this.configureGeneration += 1;
     this.stopAll();
     this.micConfigureGeneration += 1;
     this.stopMic();
@@ -224,6 +246,17 @@ export class AudioEngine {
       }
       return false;
     }
+  }
+
+  private async restoreLatestSinks() {
+    if (this.disposed) return;
+    const generation = this.configureGeneration;
+    await this.setSink(this.monitorContext, this.settings.monitorDeviceId, true);
+    if (generation !== this.configureGeneration || this.disposed) return;
+    const virtualSinkReady = this.virtualSinkId ? await this.setSink(this.virtualContext, this.virtualSinkId, false) : false;
+    if (generation !== this.configureGeneration || this.disposed) return;
+    this.virtualSinkReady = virtualSinkReady;
+    this.applyBusVolumes();
   }
 
   private async configureMic() {

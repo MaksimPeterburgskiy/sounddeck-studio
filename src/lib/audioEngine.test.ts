@@ -34,7 +34,10 @@ class FakeAudioContext {
   currentTime = 0;
   destination = {};
   mediaSources: FakeMediaStreamAudioSourceNode[] = [];
-  setSinkId = vi.fn(async () => undefined);
+  sinkId = "";
+  setSinkId = vi.fn(async (sinkId: string) => {
+    this.sinkId = sinkId;
+  });
 
   constructor() {
     FakeAudioContext.instances.push(this);
@@ -69,6 +72,14 @@ function fakeStream() {
   const track = { stop: vi.fn() };
   const stream = { getTracks: () => [track] } as unknown as MediaStream;
   return { stream, track };
+}
+
+async function waitForMockCalls(mock: ReturnType<typeof vi.fn>, count: number) {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    if (mock.mock.calls.length >= count) return;
+    await Promise.resolve();
+  }
+  expect(mock).toHaveBeenCalledTimes(count);
 }
 
 const settings: AudioSettings = {
@@ -109,6 +120,8 @@ describe("AudioEngine mic routing", () => {
     const engine = new AudioEngine(settings, vi.fn());
 
     const firstConfigure = engine.configure(settings, "cable-device");
+    await waitForMockCalls(getUserMedia, 1);
+
     const secondConfigure = engine.configure(settings, "cable-device");
 
     secondOpen.resolve(second.stream);
@@ -121,6 +134,58 @@ describe("AudioEngine mic routing", () => {
     expect(first.track.stop).toHaveBeenCalledTimes(1);
     expect(second.track.stop).not.toHaveBeenCalled();
     expect(virtualContext.mediaSources.map((source) => source.stream)).toEqual([second.stream]);
+
+    await engine.dispose();
+  });
+
+  it("rebuilds mic routing when virtual sink readiness changes for the same device", async () => {
+    const first = fakeStream();
+    const second = fakeStream();
+    const getUserMedia = vi.fn()
+      .mockResolvedValueOnce(first.stream)
+      .mockResolvedValueOnce(second.stream);
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const engine = new AudioEngine(settings, vi.fn());
+    const virtualContext = FakeAudioContext.instances[1];
+    virtualContext.setSinkId.mockRejectedValueOnce(new DOMException("temporary failure", "AbortError"));
+
+    await engine.configure(settings, "cable-device");
+    await engine.configure(settings, "cable-device");
+
+    expect(getUserMedia).toHaveBeenCalledTimes(2);
+    expect(first.track.stop).toHaveBeenCalledTimes(1);
+    expect(second.track.stop).not.toHaveBeenCalled();
+    expect(virtualContext.mediaSources.map((source) => source.stream)).toEqual([second.stream]);
+
+    await engine.dispose();
+  });
+
+  it("ignores stale configure results when cable detection changes during sink switching", async () => {
+    const delayedMonitorSwitch = deferred<void>();
+    const stream = fakeStream();
+    const getUserMedia = vi.fn().mockResolvedValue(stream.stream);
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+    const engine = new AudioEngine(settings, vi.fn());
+    const monitorContext = FakeAudioContext.instances[0];
+    const virtualContext = FakeAudioContext.instances[1];
+    monitorContext.setSinkId
+      .mockReturnValueOnce(delayedMonitorSwitch.promise)
+      .mockResolvedValue(undefined);
+
+    const staleConfigure = engine.configure(settings, "");
+    const latestConfigure = engine.configure(settings, "cable-device");
+
+    await latestConfigure;
+    delayedMonitorSwitch.resolve();
+    await staleConfigure;
+
+    const internals = engine as unknown as { virtualSinkId: string; virtualSinkReady: boolean };
+    expect(internals.virtualSinkId).toBe("cable-device");
+    expect(internals.virtualSinkReady).toBe(true);
+    expect(virtualContext.setSinkId).toHaveBeenLastCalledWith("cable-device");
+    expect(getUserMedia).toHaveBeenCalledTimes(1);
+    expect(stream.track.stop).not.toHaveBeenCalled();
 
     await engine.dispose();
   });
