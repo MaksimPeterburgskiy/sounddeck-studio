@@ -25,6 +25,7 @@ import {
   X
 } from "lucide-react";
 import { AudioEngine } from "./lib/audioEngine";
+import { findCableInputDeviceId, getDefaultDeviceLabel, isSelectableMediaDevice, makeMicrophoneConstraints, normalizeSelectableDeviceId } from "./lib/devices";
 import { acceleratorLooksReserved, formatBytes, formatDuration, makeBoard, normalizeLibrary, now, soundFromImport } from "./lib/model";
 import { claimCaptureSlot, eventToToken, formatAccelerator, MODIFIER_TOKENS, normalizeAccelerator, orderTokens } from "./lib/hotkeys";
 import { makeWaveform } from "./lib/waveform";
@@ -82,7 +83,7 @@ function App() {
   }, [library]);
 
   // The virtual mic sink is always the VB-CABLE playback device; detected by label, never user-picked.
-  const cableDeviceId = useMemo(() => devices.find((device) => device.kind === "audiooutput" && /cable input/i.test(device.label))?.deviceId ?? "", [devices]);
+  const cableDeviceId = useMemo(() => findCableInputDeviceId(devices), [devices]);
 
   useEffect(() => {
     if (!library) return;
@@ -123,6 +124,14 @@ function App() {
 
   useEffect(() => {
     void refreshDevices();
+  }, [refreshDevices]);
+
+  useEffect(() => {
+    const mediaDevices = navigator.mediaDevices;
+    if (!mediaDevices?.addEventListener) return;
+    const handleDeviceChange = () => void refreshDevices();
+    mediaDevices.addEventListener("devicechange", handleDeviceChange);
+    return () => mediaDevices.removeEventListener("devicechange", handleDeviceChange);
   }, [refreshDevices]);
 
   const registerHotkeys = useCallback(async (current: SoundLibrary) => {
@@ -351,13 +360,18 @@ function App() {
   }
 
   function changeSettings(patch: Partial<SoundLibrary["settings"]>) {
-    updateLibrary((current) => ({ ...current, settings: { ...current.settings, ...patch } }));
+    const normalizedPatch = { ...patch };
+    if ("microphoneDeviceId" in normalizedPatch) normalizedPatch.microphoneDeviceId = normalizeSelectableDeviceId(normalizedPatch.microphoneDeviceId);
+    if ("monitorDeviceId" in normalizedPatch) normalizedPatch.monitorDeviceId = normalizeSelectableDeviceId(normalizedPatch.monitorDeviceId);
+    updateLibrary((current) => ({ ...current, settings: { ...current.settings, ...normalizedPatch } }));
   }
 
   if (!library || !activeBoard) return <div className="boot">Loading SoundDeck Studio...</div>;
 
-  const outputDevices = devices.filter((device) => device.kind === "audiooutput");
-  const inputDevices = devices.filter((device) => device.kind === "audioinput");
+  const outputDevices = devices.filter((device) => device.kind === "audiooutput" && isSelectableMediaDevice(device));
+  const inputDevices = devices.filter((device) => device.kind === "audioinput" && isSelectableMediaDevice(device));
+  const defaultInputLabel = getDefaultDeviceLabel(devices, "audioinput");
+  const defaultOutputLabel = getDefaultDeviceLabel(devices, "audiooutput");
 
   return (
     <main
@@ -507,6 +521,8 @@ function App() {
             library={library}
             inputDevices={inputDevices}
             outputDevices={outputDevices}
+            defaultInputLabel={defaultInputLabel}
+            defaultOutputLabel={defaultOutputLabel}
             onRefresh={refreshDevices}
             onChange={changeSettings}
           />
@@ -1136,21 +1152,25 @@ function ClipEditor({ sound, engine, playing, onPlay, onStop, onChange, onClose 
   );
 }
 
-function DevicePanel({ library, inputDevices, outputDevices, onRefresh, onChange }: {
+function DevicePanel({ library, inputDevices, outputDevices, defaultInputLabel, defaultOutputLabel, onRefresh, onChange }: {
   library: SoundLibrary;
   inputDevices: MediaDeviceInfo[];
   outputDevices: MediaDeviceInfo[];
+  defaultInputLabel: string;
+  defaultOutputLabel: string;
   onRefresh: () => void;
   onChange: (patch: Partial<SoundLibrary["settings"]>) => void;
 }) {
   const settings = library.settings;
+  const defaultInputOption = defaultInputLabel ? `System default (${defaultInputLabel})` : "System default";
+  const defaultOutputOption = defaultOutputLabel ? `System default (${defaultOutputLabel})` : "System default";
   return (
     <div className="panel">
       <section>
         <h2>Audio Routing</h2>
         <div className="toggleRow"><label><input type="checkbox" checked={settings.micPassthrough} onChange={(event) => onChange({ micPassthrough: event.target.checked })} /> Mic passthrough</label><label><input type="checkbox" checked={settings.soundboardToVirtualMic} onChange={(event) => onChange({ soundboardToVirtualMic: event.target.checked })} /> Soundboard to virtual mic</label><label><input type="checkbox" checked={settings.monitorToHeadphones} onChange={(event) => onChange({ monitorToHeadphones: event.target.checked })} /> Monitor soundboard</label><label><input type="checkbox" checked={settings.monitorMicToHeadphones} onChange={(event) => onChange({ monitorMicToHeadphones: event.target.checked })} /> Monitor microphone</label></div>
-        <label><Mic size={16} /> Microphone<select value={settings.microphoneDeviceId} onChange={(event) => onChange({ microphoneDeviceId: event.target.value })}><option value="">System default</option>{inputDevices.map((device) => <option key={device.deviceId} value={device.deviceId}>{device.label || `Input ${device.deviceId.slice(0, 6)}`}</option>)}</select></label>
-        <label><Headphones size={16} /> Headphones / monitor<select value={settings.monitorDeviceId} onChange={(event) => onChange({ monitorDeviceId: event.target.value })}><option value="">System default</option>{outputDevices.map((device) => <option key={device.deviceId} value={device.deviceId}>{device.label || `Output ${device.deviceId.slice(0, 6)}`}</option>)}</select></label>
+        <label><Mic size={16} /> Microphone<select value={settings.microphoneDeviceId} onChange={(event) => onChange({ microphoneDeviceId: event.target.value })}><option value="">{defaultInputOption}</option>{inputDevices.map((device) => <option key={device.deviceId} value={device.deviceId}>{device.label || `Input ${device.deviceId.slice(0, 6)}`}</option>)}</select></label>
+        <label><Headphones size={16} /> Headphones / monitor<select value={settings.monitorDeviceId} onChange={(event) => onChange({ monitorDeviceId: event.target.value })}><option value="">{defaultOutputOption}</option>{outputDevices.map((device) => <option key={device.deviceId} value={device.deviceId}>{device.label || `Output ${device.deviceId.slice(0, 6)}`}</option>)}</select></label>
         <VolumeField label="Mic volume (virtual mic)" value={settings.micVirtualVolume} onChange={(micVirtualVolume) => onChange({ micVirtualVolume })} />
         <VolumeField label="Mic volume (monitoring)" value={settings.micMonitorVolume} onChange={(micMonitorVolume) => onChange({ micMonitorVolume })} />
         <VolumeField label="Soundboard volume (virtual mic)" value={settings.soundboardVirtualVolume} onChange={(soundboardVirtualVolume) => onChange({ soundboardVirtualVolume })} />
@@ -1254,7 +1274,15 @@ function RecorderPanel({ inputDevices, micDeviceId, onImport }: { inputDevices: 
 
   async function start() {
     chunks.current = [];
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: micDeviceId ? { deviceId: { exact: micDeviceId } } : true });
+    const selectedMicId = normalizeSelectableDeviceId(micDeviceId);
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: makeMicrophoneConstraints(selectedMicId) });
+    } catch (error) {
+      if (!selectedMicId) throw error;
+      console.warn("Selected recording microphone failed; retrying with system default", error);
+      stream = await navigator.mediaDevices.getUserMedia({ audio: makeMicrophoneConstraints("") });
+    }
     const next = new MediaRecorder(stream, { mimeType: "audio/webm" });
     next.ondataavailable = (event) => chunks.current.push(event.data);
     next.onstop = async () => {

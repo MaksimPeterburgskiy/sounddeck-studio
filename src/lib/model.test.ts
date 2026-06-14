@@ -38,6 +38,21 @@ describe("model helpers", () => {
     expect(library.settings.soundboardMonitorVolume).toBe(1);
   });
 
+  it("normalizes browser audio role aliases back to system default", () => {
+    const library = normalizeLibrary({
+      version: 1,
+      activeBoardId: "a",
+      settings: {
+        microphoneDeviceId: "default",
+        monitorDeviceId: "communications"
+      } as SoundLibrary["settings"],
+      boards: [{ id: "a", name: "A", color: "#fff", icon: "zap", createdAt: "", updatedAt: "", sounds: [] }]
+    });
+
+    expect(library.settings.microphoneDeviceId).toBe("");
+    expect(library.settings.monitorDeviceId).toBe("");
+  });
+
   it("migrates legacy Electron accelerators to canonical tokens", () => {
     const library = normalizeLibrary({
       version: 1,

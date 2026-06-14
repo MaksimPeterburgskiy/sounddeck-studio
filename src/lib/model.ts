@@ -1,4 +1,5 @@
 import type { MediaImportResult, OutputTarget, SoundBoard, SoundLibrary, SoundSlot } from "../types";
+import { normalizeSelectableDeviceId } from "./devices";
 import { normalizeAccelerator } from "./hotkeys";
 
 const palette = ["#1db7a6", "#ffcf5c", "#ff6b6b", "#8f7cff", "#4ba3ff", "#74d66b", "#ef7bd5", "#f6903d"];
@@ -95,6 +96,8 @@ export function normalizeLibrary(library: SoundLibrary): SoundLibrary {
   };
   settings.stopAllHotkey = normalizeAccelerator(settings.stopAllHotkey);
   settings.cycleBoardsHotkey = normalizeAccelerator(settings.cycleBoardsHotkey);
+  settings.monitorDeviceId = normalizeSelectableDeviceId(settings.monitorDeviceId);
+  settings.microphoneDeviceId = normalizeSelectableDeviceId(settings.microphoneDeviceId);
   return {
     ...library,
     activeBoardId,
