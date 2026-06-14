@@ -25,6 +25,7 @@ export class AudioEngine {
   private active = new Map<string, ActiveVoice[]>();
   private micStream?: MediaStream;
   private micNodes: Array<{ source: MediaStreamAudioSourceNode; gain: GainNode; context: AudioContext }> = [];
+  private micConfigureGeneration = 0;
   private settings: AudioSettings;
   private virtualSinkId = "";
   private virtualSinkReady = false;
@@ -161,6 +162,7 @@ export class AudioEngine {
 
   async dispose() {
     this.stopAll();
+    this.micConfigureGeneration += 1;
     this.stopMic();
     await Promise.allSettled([this.monitorContext.close(), this.virtualContext.close(), this.decodeContext.close()]);
   }
@@ -225,40 +227,49 @@ export class AudioEngine {
   }
 
   private async configureMic() {
+    const generation = this.micConfigureGeneration + 1;
+    this.micConfigureGeneration = generation;
     this.stopMic();
     if (!this.settings.micPassthrough) return;
     const microphoneDeviceId = normalizeSelectableDeviceId(this.settings.microphoneDeviceId);
     const constraints: MediaStreamConstraints = {
       audio: makeMicrophoneConstraints(microphoneDeviceId)
     };
+    let stream: MediaStream;
     try {
-      this.micStream = await navigator.mediaDevices.getUserMedia(constraints);
+      stream = await navigator.mediaDevices.getUserMedia(constraints);
     } catch (error) {
       if (!microphoneDeviceId) {
-        console.warn("Microphone passthrough failed", error);
+        if (generation === this.micConfigureGeneration) console.warn("Microphone passthrough failed", error);
         return;
       }
-      console.warn("Selected microphone failed; retrying with system default", error);
+      if (generation === this.micConfigureGeneration) console.warn("Selected microphone failed; retrying with system default", error);
       try {
-        this.micStream = await navigator.mediaDevices.getUserMedia({ audio: makeMicrophoneConstraints("") });
+        stream = await navigator.mediaDevices.getUserMedia({ audio: makeMicrophoneConstraints("") });
       } catch (fallbackError) {
-        console.warn("Microphone passthrough fallback failed", fallbackError);
+        if (generation === this.micConfigureGeneration) console.warn("Microphone passthrough fallback failed", fallbackError);
         return;
       }
     }
+
+    if (generation !== this.micConfigureGeneration || !this.settings.micPassthrough) {
+      stream.getTracks().forEach((track) => track.stop());
+      return;
+    }
+    this.micStream = stream;
 
     try {
       const contexts = this.contextsForTarget("both");
       for (const route of contexts) {
         if (route.context === this.monitorContext && !this.settings.monitorMicToHeadphones) continue;
-        const source = route.context.createMediaStreamSource(this.micStream);
+        const source = route.context.createMediaStreamSource(stream);
         const gain = route.context.createGain();
         gain.gain.value = route.context === this.monitorContext ? this.settings.micMonitorVolume : this.settings.micVirtualVolume;
         source.connect(gain).connect(route.context.destination);
         this.micNodes.push({ source, gain, context: route.context });
       }
     } catch (error) {
-      console.warn("Microphone passthrough failed", error);
+      if (generation === this.micConfigureGeneration) console.warn("Microphone passthrough failed", error);
     }
   }
 
