@@ -1040,6 +1040,49 @@ function SoundEditor({ sound, onChange, onClose }: { sound: SoundSlot; onChange:
   );
 }
 
+function TrimInput({ label, value, min, max, onChange }: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  onChange: (v: number) => void;
+}) {
+  const [text, setText] = useState(value.toFixed(2));
+  const [focused, setFocused] = useState(false);
+
+  useEffect(() => {
+    if (!focused) setText(value.toFixed(2));
+  }, [value, focused]);
+
+  const commit = () => {
+    const trimmed = text.trim();
+    if (trimmed === "") {
+      setText(value.toFixed(2));
+      return;
+    }
+    const v = Number(trimmed);
+    if (Number.isFinite(v)) onChange(Math.min(Math.max(min, v), max));
+    else setText(value.toFixed(2));
+  };
+
+  return (
+    <label>{label}
+      <input
+        type="number"
+        min={min}
+        max={max}
+        step={0.01}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onFocus={() => setFocused(true)}
+        onBlur={() => { setFocused(false); commit(); }}
+        onKeyDown={(e) => { if (e.key === "Enter") { e.currentTarget.blur(); } }}
+      />
+      <span className="clipTimeUnit">s</span>
+    </label>
+  );
+}
+
 function ClipEditor({ sound, engine, playing, onPlay, onStop, onChange, onClose }: {
   sound: SoundSlot;
   engine: AudioEngine | null;
@@ -1069,7 +1112,10 @@ function ClipEditor({ sound, engine, playing, onPlay, onStop, onChange, onClose 
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape") {
+        if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+        onClose();
+      }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
@@ -1111,7 +1157,10 @@ function ClipEditor({ sound, engine, playing, onPlay, onStop, onChange, onClose 
     <div
       className="modalOverlay"
       onPointerDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
+        if (event.target === event.currentTarget) {
+          if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+          onClose();
+        }
       }}
     >
       <div className="clipEditor">
@@ -1135,9 +1184,9 @@ function ClipEditor({ sound, engine, playing, onPlay, onStop, onChange, onClose 
           <div className="clipHandle end" style={{ left: `${endPct}%` }} onPointerDown={dragHandle("end")} role="slider" aria-label="Clip end" aria-valuenow={end} aria-valuemin={0} aria-valuemax={duration} tabIndex={0} />
         </div>
         <div className="clipTimes">
-          <span>Start <em>{start.toFixed(2)}s</em></span>
-          <span>End <em>{end.toFixed(2)}s</em></span>
-          <span>Length <em>{Math.max(0, end - start).toFixed(2)}s</em></span>
+          <TrimInput label="Start" value={start} min={0} max={Math.max(0, end - 0.05)} onChange={(v) => onChange({ trimStartSec: v })} />
+          <TrimInput label="End" value={end} min={Math.min(start + 0.05, duration)} max={duration} onChange={(v) => onChange({ trimEndSec: v })} />
+          <TrimInput label="Length" value={Math.max(0, end - start)} min={Math.min(0.05, duration - start)} max={Math.max(0, duration - start)} onChange={(v) => onChange({ trimEndSec: Math.min(start + v, duration) })} />
           <span>Source <em>{duration.toFixed(2)}s</em></span>
         </div>
         <div className="clipActions">
