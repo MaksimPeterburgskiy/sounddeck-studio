@@ -628,6 +628,8 @@ small { color: var(--text-dim); font-size: 12px; }
   background: transparent;
   opacity: 0;
   cursor: grab;
+  /* Stop the browser claiming the gesture for scroll/pan on touch screens. */
+  touch-action: none;
   transition: color 0.12s ease, background 0.12s ease, border-color 0.12s ease, opacity 0.15s ease;
 }
 .pad:hover .padDrag, .padDrag:focus-visible { opacity: 1; }
