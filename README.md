@@ -103,4 +103,3 @@ Releases are cut from the `prod` branch by maintainers via the [Release workflow
 
 [MIT](LICENSE) © Maksim Peterburgskiy
 
-This project is an original work and is not affiliated with Voicemod or any other soundboard product.
