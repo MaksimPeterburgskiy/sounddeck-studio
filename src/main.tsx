@@ -55,6 +55,9 @@ function App() {
   const gridRef = useRef<HTMLDivElement>(null);
   const padRectsRef = useRef<Map<string, { x: number; y: number }>>(new Map());
   const flipAnimsRef = useRef<Map<string, Animation>>(new Map());
+  // Tears down an in-flight pad drag (listeners, ghost, capture) if the
+  // component unmounts mid-drag so global listeners never leak.
+  const dragCleanupRef = useRef<(() => void) | null>(null);
   const [corsairState, setCorsairState] = useState<CorsairState>("unavailable");
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
   const [updateDismissed, setUpdateDismissed] = useState(false);
@@ -64,6 +67,8 @@ function App() {
   useEffect(() => {
     void window.sounddeck.getVersion().then(setAppVersion).catch(() => undefined);
   }, []);
+
+  useEffect(() => () => dragCleanupRef.current?.(), []);
 
   useEffect(() => {
     return window.sounddeck.onUpdateStatus((status) => {
@@ -403,6 +408,13 @@ function App() {
     const offsetX = event.clientX - rect.left;
     const offsetY = event.clientY - rect.top;
 
+    // Sidebar board buttons don't move during a drag, so cache their rects
+    // once. Hit-testing them by coordinate each frame avoids the forced
+    // synchronous layout that document.elementFromPoint would trigger right
+    // after we write the ghost's transform.
+    const boardRects = Array.from(document.querySelectorAll<HTMLElement>(".boardButton[data-board-id]"))
+      .map((button) => ({ id: button.dataset.boardId as string, rect: button.getBoundingClientRect() }));
+
     const ghost = pad.cloneNode(true) as HTMLElement;
     ghost.className = "pad padDragImage";
     ghost.style.width = `${rect.width}px`;
@@ -417,24 +429,17 @@ function App() {
     let frame = 0;
     let lastReorder = 0;
 
-    const apply = () => {
-      frame = 0;
-      ghost.style.transform = `translate(${lastX - offsetX}px, ${lastY - offsetY}px)`;
-      const el = document.elementFromPoint(lastX, lastY) as HTMLElement | null;
-      const overBoard = el?.closest(".boardButton[data-board-id]") as HTMLElement | null;
-      const boardId = overBoard?.dataset.boardId;
-      if (boardId && boardId !== startBoardId) {
-        setDragOverBoardId(boardId);
-        return;
-      }
-      setDragOverBoardId("");
-      // Throttle reorders so a fast sweep resolves in calm steps.
-      const stamp = performance.now();
-      if (stamp - lastReorder < 70) return;
+    const boardUnderPointer = () => {
+      const hit = boardRects.find(({ rect: box }) => lastX >= box.left && lastX <= box.right && lastY >= box.top && lastY <= box.bottom);
+      return hit && hit.id !== startBoardId ? hit.id : "";
+    };
+
+    // Move the dragged pad to the grid cell its centre currently overlaps.
+    const placeAtPointer = () => {
       const grid = gridRef.current;
       if (!grid) return;
       // Treat the whole grid (including the dragged pad's own cell) as a
-      // uniform row x column matrix and resolve the cursor to a target cell,
+      // uniform row x column matrix and resolve the card to a target cell,
       // then move the pad there. Including the dragged cell keeps the grid
       // hole-free, so "end of a row" is a real cell and the corners are stable.
       // Layout coords (offset*) are used so in-flight slide animations don't
@@ -476,8 +481,23 @@ function App() {
         if (col < 0) col = cols - 1; // right of the last column
         target = Math.min(rowIdx * cols + col, total - 1);
       }
-      lastReorder = stamp;
       movePadToIndex(soundId, target);
+    };
+
+    const apply = () => {
+      frame = 0;
+      ghost.style.transform = `translate(${lastX - offsetX}px, ${lastY - offsetY}px)`;
+      const boardId = boardUnderPointer();
+      if (boardId) {
+        setDragOverBoardId(boardId);
+        return;
+      }
+      setDragOverBoardId("");
+      // Throttle reorders so a fast sweep resolves in calm steps.
+      const stamp = performance.now();
+      if (stamp - lastReorder < 70) return;
+      lastReorder = stamp;
+      placeAtPointer();
     };
 
     const onMove = (moveEvent: PointerEvent) => {
@@ -486,7 +506,7 @@ function App() {
       if (!frame) frame = requestAnimationFrame(apply);
     };
 
-    const finish = (commit: boolean, dropBoardId?: string) => {
+    const teardown = () => {
       if (frame) cancelAnimationFrame(frame);
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
@@ -499,6 +519,11 @@ function App() {
       }
       ghost.remove();
       document.body.classList.remove("draggingPad");
+      dragCleanupRef.current = null;
+    };
+
+    const finish = (commit: boolean, dropBoardId?: string) => {
+      teardown();
       setDraggingSoundId("");
       setDragOverBoardId("");
       if (!commit) restorePadOrder(originalOrder);
@@ -506,10 +531,17 @@ function App() {
     };
 
     const onUp = (upEvent: PointerEvent) => {
-      const el = document.elementFromPoint(upEvent.clientX, upEvent.clientY) as HTMLElement | null;
-      const overBoard = el?.closest(".boardButton[data-board-id]") as HTMLElement | null;
-      const boardId = overBoard?.dataset.boardId;
-      finish(true, boardId && boardId !== startBoardId ? boardId : undefined);
+      lastX = upEvent.clientX;
+      lastY = upEvent.clientY;
+      const boardId = boardUnderPointer();
+      if (boardId) {
+        finish(true, boardId);
+        return;
+      }
+      // Flush a final placement: a quick release can land before the next
+      // throttled/animation-frame reorder, leaving the pad a slot behind.
+      placeAtPointer();
+      finish(true);
     };
     const onCancel = () => finish(false);
     const onKey = (keyEvent: KeyboardEvent) => {
@@ -520,6 +552,7 @@ function App() {
     window.addEventListener("pointerup", onUp);
     window.addEventListener("pointercancel", onCancel);
     window.addEventListener("keydown", onKey);
+    dragCleanupRef.current = teardown;
   }
 
   function deleteBoard(boardId: string) {
@@ -587,13 +620,13 @@ function App() {
     <main
       className="app"
       onDragOver={(event) => {
-        if (!event.dataTransfer.types.includes("Files")) return;
+        if (!event.dataTransfer?.types?.includes("Files")) return;
         event.preventDefault();
         setDropActive(true);
       }}
       onDragLeave={() => setDropActive(false)}
       onDrop={(event) => {
-        if (!event.dataTransfer.types.includes("Files")) return;
+        if (!event.dataTransfer?.types?.includes("Files")) return;
         event.preventDefault();
         setDropActive(false);
         void importFiles(Array.from(event.dataTransfer.files));
