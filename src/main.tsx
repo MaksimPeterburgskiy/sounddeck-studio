@@ -88,9 +88,12 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!library) return;
+    // Hold persistence while a pad drag is live: the order mutates many times
+    // per drag, and saving each transient step risks an out-of-order write
+    // landing last. The final drop/cancel state saves once when the drag ends.
+    if (!library || draggingSoundId) return;
     void window.sounddeck.saveLibrary(library);
-  }, [library]);
+  }, [library, draggingSoundId]);
 
   // The virtual mic sink is always the VB-CABLE playback device; detected by label, never user-picked.
   const cableDeviceId = useMemo(() => findCableInputDeviceId(devices), [devices]);
@@ -197,9 +200,11 @@ function App() {
 
   const corsairConnected = corsairState === "connected";
   useEffect(() => {
-    if (!library) return;
+    // Reordering doesn't change bindings; skip re-registration during a drag
+    // and let it run once on the settled order when the drag ends.
+    if (!library || draggingSoundId) return;
     void registerHotkeys(library);
-  }, [library, registerHotkeys, corsairConnected]);
+  }, [library, draggingSoundId, registerHotkeys, corsairConnected]);
 
   const triggerSound = useCallback(async (sound: SoundSlot) => {
     try {
@@ -358,36 +363,41 @@ function App() {
   }
 
   // Live reorder while dragging: move the grabbed sound to a target slot
-  // (index among the other pads) so the grid reflows under the cursor.
-  function movePadToIndex(sourceId: string, index: number) {
-    updateLibrary((current) => ({
-      ...current,
-      boards: current.boards.map((board) => {
-        if (board.id !== current.activeBoardId) return board;
-        const from = board.sounds.findIndex((sound) => sound.id === sourceId);
-        if (from < 0) return board;
-        const sounds = [...board.sounds];
-        const [moved] = sounds.splice(from, 1);
-        const dest = Math.max(0, Math.min(index, sounds.length));
-        if (dest === from) return board;
-        sounds.splice(dest, 0, moved);
-        return { ...board, sounds, updatedAt: now() };
-      })
-    }));
+  // (index among the other pads) so the grid reflows under the cursor. Acts on
+  // the board the drag started from (boardId), not whatever is active now, and
+  // returns the unchanged library when the slot is the same so a stationary
+  // drag doesn't spam saves / hotkey re-registration.
+  function movePadToIndex(boardId: string, sourceId: string, index: number) {
+    updateLibrary((current) => {
+      const board = current.boards.find((candidate) => candidate.id === boardId);
+      if (!board) return current;
+      const from = board.sounds.findIndex((sound) => sound.id === sourceId);
+      if (from < 0) return current;
+      const sounds = [...board.sounds];
+      const [moved] = sounds.splice(from, 1);
+      const dest = Math.max(0, Math.min(index, sounds.length));
+      if (dest === from) return current;
+      sounds.splice(dest, 0, moved);
+      return {
+        ...current,
+        boards: current.boards.map((candidate) => (candidate.id === boardId ? { ...candidate, sounds, updatedAt: now() } : candidate))
+      };
+    });
   }
 
-  // Restore a specific order (used when a drag is cancelled with Escape).
-  function restorePadOrder(orderedIds: string[]) {
-    updateLibrary((current) => ({
-      ...current,
-      boards: current.boards.map((board) => {
-        if (board.id !== current.activeBoardId) return board;
-        const byId = new Map(board.sounds.map((sound) => [sound.id, sound]));
-        const sounds = orderedIds.map((id) => byId.get(id)).filter(Boolean) as SoundSlot[];
-        if (sounds.length !== board.sounds.length) return board;
-        return { ...board, sounds };
-      })
-    }));
+  // Restore a specific order on a board (used when a drag is cancelled).
+  function restorePadOrder(boardId: string, orderedIds: string[]) {
+    updateLibrary((current) => {
+      const board = current.boards.find((candidate) => candidate.id === boardId);
+      if (!board) return current;
+      const byId = new Map(board.sounds.map((sound) => [sound.id, sound]));
+      const sounds = orderedIds.map((id) => byId.get(id)).filter(Boolean) as SoundSlot[];
+      if (sounds.length !== board.sounds.length) return current;
+      return {
+        ...current,
+        boards: current.boards.map((candidate) => (candidate.id === boardId ? { ...candidate, sounds } : candidate))
+      };
+    });
   }
 
   // Pointer-driven drag (not native HTML5 DnD, which fires too coarsely to
@@ -411,9 +421,13 @@ function App() {
     // Sidebar board buttons don't move during a drag, so cache their rects
     // once. Hit-testing them by coordinate each frame avoids the forced
     // synchronous layout that document.elementFromPoint would trigger right
-    // after we write the ghost's transform.
+    // after we write the ghost's transform. The board list is a scroller, so
+    // also capture its viewport and drop buttons scrolled out of view — their
+    // off-screen rects must not register as drop targets.
+    const boardsViewport = document.querySelector<HTMLElement>(".boards")?.getBoundingClientRect() ?? null;
     const boardRects = Array.from(document.querySelectorAll<HTMLElement>(".boardButton[data-board-id]"))
-      .map((button) => ({ id: button.dataset.boardId as string, rect: button.getBoundingClientRect() }));
+      .map((button) => ({ id: button.dataset.boardId as string, rect: button.getBoundingClientRect() }))
+      .filter(({ rect }) => !boardsViewport || (rect.bottom > boardsViewport.top && rect.top < boardsViewport.bottom));
 
     const ghost = pad.cloneNode(true) as HTMLElement;
     ghost.className = "pad padDragImage";
@@ -430,6 +444,8 @@ function App() {
     let lastReorder = 0;
 
     const boardUnderPointer = () => {
+      // Only inside the visible scroller — keeps clipped/off-screen rows out.
+      if (boardsViewport && (lastY < boardsViewport.top || lastY > boardsViewport.bottom)) return "";
       const hit = boardRects.find(({ rect: box }) => lastX >= box.left && lastX <= box.right && lastY >= box.top && lastY <= box.bottom);
       return hit && hit.id !== startBoardId ? hit.id : "";
     };
@@ -481,7 +497,7 @@ function App() {
         if (col < 0) col = cols - 1; // right of the last column
         target = Math.min(rowIdx * cols + col, total - 1);
       }
-      movePadToIndex(soundId, target);
+      movePadToIndex(startBoardId, soundId, target);
     };
 
     const apply = () => {
@@ -526,7 +542,7 @@ function App() {
       teardown();
       setDraggingSoundId("");
       setDragOverBoardId("");
-      if (!commit) restorePadOrder(originalOrder);
+      if (!commit) restorePadOrder(startBoardId, originalOrder);
       else if (dropBoardId) moveSound(soundId, dropBoardId);
     };
 
