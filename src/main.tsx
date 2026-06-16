@@ -418,16 +418,22 @@ function App() {
     const offsetX = event.clientX - rect.left;
     const offsetY = event.clientY - rect.top;
 
-    // Sidebar board buttons don't move during a drag, so cache their rects
-    // once. Hit-testing them by coordinate each frame avoids the forced
-    // synchronous layout that document.elementFromPoint would trigger right
-    // after we write the ghost's transform. The board list is a scroller, so
-    // also capture its viewport and drop buttons scrolled out of view — their
-    // off-screen rects must not register as drop targets.
-    const boardsViewport = document.querySelector<HTMLElement>(".boards")?.getBoundingClientRect() ?? null;
-    const boardRects = Array.from(document.querySelectorAll<HTMLElement>(".boardButton[data-board-id]"))
-      .map((button) => ({ id: button.dataset.boardId as string, rect: button.getBoundingClientRect() }))
-      .filter(({ rect }) => !boardsViewport || (rect.bottom > boardsViewport.top && rect.top < boardsViewport.bottom));
+    // Cache sidebar board rects instead of hit-testing via elementFromPoint
+    // each frame (which would force a synchronous layout after the ghost
+    // transform write). The board list is a 300px scroller, so capture its
+    // viewport, drop buttons scrolled out of view, and re-read on scroll so a
+    // board revealed mid-drag becomes targetable and stale rects never match.
+    const boardsEl = document.querySelector<HTMLElement>(".boards");
+    let boardsViewport = boardsEl?.getBoundingClientRect() ?? null;
+    let boardRects: { id: string; rect: DOMRect }[] = [];
+    const refreshBoardRects = () => {
+      boardsViewport = boardsEl?.getBoundingClientRect() ?? null;
+      boardRects = Array.from(document.querySelectorAll<HTMLElement>(".boardButton[data-board-id]"))
+        .map((button) => ({ id: button.dataset.boardId as string, rect: button.getBoundingClientRect() }))
+        .filter(({ rect }) => !boardsViewport || (rect.bottom > boardsViewport.top && rect.top < boardsViewport.bottom));
+    };
+    refreshBoardRects();
+    boardsEl?.addEventListener("scroll", refreshBoardRects, { passive: true });
 
     const ghost = pad.cloneNode(true) as HTMLElement;
     ghost.className = "pad padDragImage";
@@ -528,6 +534,7 @@ function App() {
       window.removeEventListener("pointerup", onUp);
       window.removeEventListener("pointercancel", onCancel);
       window.removeEventListener("keydown", onKey);
+      boardsEl?.removeEventListener("scroll", refreshBoardRects);
       try {
         handle.releasePointerCapture?.(pointerId);
       } catch {
