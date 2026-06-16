@@ -1,14 +1,14 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   Download,
   FolderOpen,
+  GripVertical,
   Headphones,
   Image as ImageIcon,
   Keyboard,
   Link,
   Mic,
-  MoreVertical,
   Pencil,
   Play,
   Plus,
@@ -49,7 +49,12 @@ function App() {
   const [editingClipId, setEditingClipId] = useState<string>("");
   const [urlImportOpen, setUrlImportOpen] = useState(false);
   const [dropActive, setDropActive] = useState(false);
+  const [draggingSoundId, setDraggingSoundId] = useState<string>("");
+  const [dragOverBoardId, setDragOverBoardId] = useState<string>("");
   const [message, setMessage] = useState("Ready");
+  const gridRef = useRef<HTMLDivElement>(null);
+  const padRectsRef = useRef<Map<string, { x: number; y: number }>>(new Map());
+  const flipAnimsRef = useRef<Map<string, Animation>>(new Map());
   const [corsairState, setCorsairState] = useState<CorsairState>("unavailable");
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
   const [updateDismissed, setUpdateDismissed] = useState(false);
@@ -112,6 +117,41 @@ function App() {
 
   const selectedSound = useMemo(() => activeBoard?.sounds.find((sound) => sound.id === selectedSoundId) || null, [activeBoard, selectedSoundId]);
   const editingClipSound = useMemo(() => activeBoard?.sounds.find((sound) => sound.id === editingClipId) || null, [activeBoard, editingClipId]);
+
+  // FLIP: smoothly slide pads to their new slots whenever the order changes.
+  // Positions are read from offsetLeft/offsetTop (layout coords, immune to any
+  // in-flight transform) so rapid reorders don't compound into jumpy deltas,
+  // and each slide is a fresh Web-Animations tween that replaces the last.
+  const padOrderKey = activeBoard ? `${activeBoard.id}:${activeBoard.sounds.map((sound) => sound.id).join(",")}` : "";
+  useLayoutEffect(() => {
+    const grid = gridRef.current;
+    if (!grid) return;
+    const previous = padRectsRef.current;
+    const anims = flipAnimsRef.current;
+    const next = new Map<string, { x: number; y: number }>();
+    const pads = grid.querySelectorAll<HTMLElement>(".pad");
+    pads.forEach((el) => {
+      const id = el.dataset.soundId;
+      if (!id) return;
+      const pos = { x: el.offsetLeft, y: el.offsetTop };
+      next.set(id, pos);
+      const old = previous.get(id);
+      if (!old) return;
+      const dx = old.x - pos.x;
+      const dy = old.y - pos.y;
+      if (!dx && !dy) return;
+      anims.get(id)?.cancel();
+      const anim = el.animate(
+        [{ transform: `translate(${dx}px, ${dy}px)` }, { transform: "translate(0px, 0px)" }],
+        { duration: 260, easing: "cubic-bezier(0.25, 0.8, 0.25, 1)" }
+      );
+      anims.set(id, anim);
+      anim.onfinish = () => {
+        if (anims.get(id) === anim) anims.delete(id);
+      };
+    });
+    padRectsRef.current = next;
+  }, [padOrderKey]);
 
   const refreshDevices = useCallback(async () => {
     try {
@@ -312,6 +352,176 @@ function App() {
     if (editingClipId === soundId) setEditingClipId("");
   }
 
+  // Live reorder while dragging: move the grabbed sound to a target slot
+  // (index among the other pads) so the grid reflows under the cursor.
+  function movePadToIndex(sourceId: string, index: number) {
+    updateLibrary((current) => ({
+      ...current,
+      boards: current.boards.map((board) => {
+        if (board.id !== current.activeBoardId) return board;
+        const from = board.sounds.findIndex((sound) => sound.id === sourceId);
+        if (from < 0) return board;
+        const sounds = [...board.sounds];
+        const [moved] = sounds.splice(from, 1);
+        const dest = Math.max(0, Math.min(index, sounds.length));
+        if (dest === from) return board;
+        sounds.splice(dest, 0, moved);
+        return { ...board, sounds, updatedAt: now() };
+      })
+    }));
+  }
+
+  // Restore a specific order (used when a drag is cancelled with Escape).
+  function restorePadOrder(orderedIds: string[]) {
+    updateLibrary((current) => ({
+      ...current,
+      boards: current.boards.map((board) => {
+        if (board.id !== current.activeBoardId) return board;
+        const byId = new Map(board.sounds.map((sound) => [sound.id, sound]));
+        const sounds = orderedIds.map((id) => byId.get(id)).filter(Boolean) as SoundSlot[];
+        if (sounds.length !== board.sounds.length) return board;
+        return { ...board, sounds };
+      })
+    }));
+  }
+
+  // Pointer-driven drag (not native HTML5 DnD, which fires too coarsely to
+  // follow the cursor smoothly). A clone floats under the pointer at 60fps,
+  // the grid reorders live, and dropping on a sidebar board moves the sound.
+  function startPadDrag(soundId: string, event: React.PointerEvent) {
+    if (event.button !== 0) return;
+    const grid = gridRef.current;
+    const pad = grid?.querySelector(`.pad[data-sound-id="${CSS.escape(soundId)}"]`) as HTMLElement | null;
+    if (!pad || !library) return;
+    event.preventDefault();
+    const handle = event.currentTarget as HTMLElement;
+    const pointerId = event.pointerId;
+    handle.setPointerCapture?.(pointerId);
+    const startBoardId = library.activeBoardId;
+    const originalOrder = activeBoard ? activeBoard.sounds.map((sound) => sound.id) : [];
+    const rect = pad.getBoundingClientRect();
+    const offsetX = event.clientX - rect.left;
+    const offsetY = event.clientY - rect.top;
+
+    const ghost = pad.cloneNode(true) as HTMLElement;
+    ghost.className = "pad padDragImage";
+    ghost.style.width = `${rect.width}px`;
+    ghost.style.height = `${rect.height}px`;
+    ghost.style.transform = `translate(${rect.left}px, ${rect.top}px)`;
+    document.body.appendChild(ghost);
+    document.body.classList.add("draggingPad");
+    setDraggingSoundId(soundId);
+
+    let lastX = event.clientX;
+    let lastY = event.clientY;
+    let frame = 0;
+    let lastReorder = 0;
+
+    const apply = () => {
+      frame = 0;
+      ghost.style.transform = `translate(${lastX - offsetX}px, ${lastY - offsetY}px)`;
+      const el = document.elementFromPoint(lastX, lastY) as HTMLElement | null;
+      const overBoard = el?.closest(".boardButton[data-board-id]") as HTMLElement | null;
+      const boardId = overBoard?.dataset.boardId;
+      if (boardId && boardId !== startBoardId) {
+        setDragOverBoardId(boardId);
+        return;
+      }
+      setDragOverBoardId("");
+      // Throttle reorders so a fast sweep resolves in calm steps.
+      const stamp = performance.now();
+      if (stamp - lastReorder < 70) return;
+      const grid = gridRef.current;
+      if (!grid) return;
+      // Treat the whole grid (including the dragged pad's own cell) as a
+      // uniform row x column matrix and resolve the cursor to a target cell,
+      // then move the pad there. Including the dragged cell keeps the grid
+      // hole-free, so "end of a row" is a real cell and the corners are stable.
+      // Layout coords (offset*) are used so in-flight slide animations don't
+      // skew the boxes.
+      const pads = Array.from(grid.querySelectorAll<HTMLElement>(".pad[data-sound-id]"));
+      if (!pads.length) return;
+      const origin = (pads[0].offsetParent ?? document.body).getBoundingClientRect();
+      const boxes = pads.map((padEl) => ({
+        top: origin.top + padEl.offsetTop,
+        bottom: origin.top + padEl.offsetTop + padEl.offsetHeight,
+        right: origin.left + padEl.offsetLeft + padEl.offsetWidth
+      }));
+      const total = boxes.length;
+      // Resolve placement from the dragged card's centre (not the grab point,
+      // which sits in a corner) — it tracks where the card visually sits.
+      const pointX = lastX - offsetX + rect.width / 2;
+      const pointY = lastY - offsetY + rect.height / 2;
+      // Column count = pads sharing the first row's top.
+      let cols = 0;
+      while (cols < total && boxes[cols].top <= boxes[0].top + 4) cols += 1;
+      cols = Math.max(1, cols);
+      const colRights = boxes.slice(0, cols).map((box) => box.right);
+      // Distinct rows, top to bottom.
+      const rows: { top: number; bottom: number }[] = [];
+      for (const box of boxes) {
+        const last = rows[rows.length - 1];
+        if (!last || box.top > last.top + 4) rows.push({ top: box.top, bottom: box.bottom });
+        else last.bottom = Math.max(last.bottom, box.bottom);
+      }
+      let target: number;
+      if (pointY > rows[rows.length - 1].bottom) {
+        target = total - 1; // below everything → end of the list
+      } else {
+        // Both axes use the cell's far edge (bottom / right) so the card's
+        // centre maps into whichever cell it visually overlaps.
+        let rowIdx = rows.findIndex((row) => pointY <= row.bottom);
+        if (rowIdx < 0) rowIdx = 0; // above the grid → first row
+        let col = colRights.findIndex((right) => pointX <= right);
+        if (col < 0) col = cols - 1; // right of the last column
+        target = Math.min(rowIdx * cols + col, total - 1);
+      }
+      lastReorder = stamp;
+      movePadToIndex(soundId, target);
+    };
+
+    const onMove = (moveEvent: PointerEvent) => {
+      lastX = moveEvent.clientX;
+      lastY = moveEvent.clientY;
+      if (!frame) frame = requestAnimationFrame(apply);
+    };
+
+    const finish = (commit: boolean, dropBoardId?: string) => {
+      if (frame) cancelAnimationFrame(frame);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onCancel);
+      window.removeEventListener("keydown", onKey);
+      try {
+        handle.releasePointerCapture?.(pointerId);
+      } catch {
+        // pointer already released
+      }
+      ghost.remove();
+      document.body.classList.remove("draggingPad");
+      setDraggingSoundId("");
+      setDragOverBoardId("");
+      if (!commit) restorePadOrder(originalOrder);
+      else if (dropBoardId) moveSound(soundId, dropBoardId);
+    };
+
+    const onUp = (upEvent: PointerEvent) => {
+      const el = document.elementFromPoint(upEvent.clientX, upEvent.clientY) as HTMLElement | null;
+      const overBoard = el?.closest(".boardButton[data-board-id]") as HTMLElement | null;
+      const boardId = overBoard?.dataset.boardId;
+      finish(true, boardId && boardId !== startBoardId ? boardId : undefined);
+    };
+    const onCancel = () => finish(false);
+    const onKey = (keyEvent: KeyboardEvent) => {
+      if (keyEvent.key === "Escape") finish(false);
+    };
+
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onCancel);
+    window.addEventListener("keydown", onKey);
+  }
+
   function deleteBoard(boardId: string) {
     if (library && library.boards.length > 1) {
       const boardToDelete = library.boards.find((board) => board.id === boardId);
@@ -377,11 +587,13 @@ function App() {
     <main
       className="app"
       onDragOver={(event) => {
+        if (!event.dataTransfer.types.includes("Files")) return;
         event.preventDefault();
         setDropActive(true);
       }}
       onDragLeave={() => setDropActive(false)}
       onDrop={(event) => {
+        if (!event.dataTransfer.types.includes("Files")) return;
         event.preventDefault();
         setDropActive(false);
         void importFiles(Array.from(event.dataTransfer.files));
@@ -400,7 +612,8 @@ function App() {
           {library.boards.map((board) => (
             <div
               key={board.id}
-              className={board.id === activeBoard.id ? "boardButton active" : "boardButton"}
+              data-board-id={board.id}
+              className={`${board.id === activeBoard.id ? "boardButton active" : "boardButton"}${dragOverBoardId === board.id && board.id !== activeBoard.id ? " dropTarget" : ""}`}
               role="button"
               tabIndex={0}
               onClick={() => selectBoard(board.id)}
@@ -480,7 +693,7 @@ function App() {
                 <input type="file" multiple accept=".wav,.mp3,.ogg,.flac,.m4a,.aac,.webm,audio/*" onChange={(event) => void importFiles(Array.from(event.currentTarget.files || []))} />
               </label>
             </div>
-            <div className="soundGrid">
+            <div className="soundGrid" ref={gridRef}>
               {activeBoard.sounds.map((sound) => (
                 <SoundPad
                   key={sound.id}
@@ -495,8 +708,8 @@ function App() {
                   onSelect={() => setSelectedSoundId(sound.id)}
                   onDelete={() => deleteSound(sound.id)}
                   onChange={(patch) => updateSound(sound.id, patch)}
-                  otherBoards={library.boards.filter((board) => board.id !== activeBoard.id)}
-                  onMove={(boardId) => moveSound(sound.id, boardId)}
+                  dragging={draggingSoundId === sound.id}
+                  onGrabStart={(event) => startPadDrag(sound.id, event)}
                 />
               ))}
               {!activeBoard.sounds.length && <div className="empty">Drop sounds to build this board.</div>}
@@ -737,66 +950,26 @@ function SoundPad(props: {
   onSelect: () => void;
   onDelete: () => void;
   onChange: (patch: Partial<SoundSlot>) => void;
-  otherBoards: SoundBoard[];
-  onMove: (boardId: string) => void;
+  dragging: boolean;
+  onGrabStart: (event: React.PointerEvent) => void;
 }) {
   const { sound } = props;
-  const [menuOpen, setMenuOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!menuOpen) return;
-    const onPointerDown = (event: PointerEvent) => {
-      if (!menuRef.current?.contains(event.target as Node)) setMenuOpen(false);
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setMenuOpen(false);
-    };
-    window.addEventListener("pointerdown", onPointerDown);
-    window.addEventListener("keydown", onKeyDown);
-    return () => {
-      window.removeEventListener("pointerdown", onPointerDown);
-      window.removeEventListener("keydown", onKeyDown);
-    };
-  }, [menuOpen]);
   const clipDuration = Number.isFinite(sound.duration)
     ? Math.max(0, Math.min(sound.trimEndSec ?? sound.duration!, sound.duration!) - Math.max(0, sound.trimStartSec ?? 0))
     : sound.duration;
   return (
     <article
-      className={`pad${props.selected ? " selected" : ""}${props.playing ? " playing" : ""}`}
+      className={`pad${props.selected ? " selected" : ""}${props.playing ? " playing" : ""}${props.dragging ? " dragging" : ""}`}
+      data-sound-id={sound.id}
       style={{ "--pad": sound.color } as React.CSSProperties}
     >
-      <div className="padMenu" ref={menuRef}>
-        <button
-          className={menuOpen ? "padMenuButton open" : "padMenuButton"}
-          title="More options"
-          aria-label="More options"
-          aria-haspopup="menu"
-          aria-expanded={menuOpen}
-          onClick={() => setMenuOpen((open) => !open)}
-        >
-          <MoreVertical size={15} />
-        </button>
-        {menuOpen && (
-          <div className="padMenuDropdown" role="menu">
-            <div className="padMenuLabel">Move to board</div>
-            {props.otherBoards.map((board) => (
-              <button
-                key={board.id}
-                role="menuitem"
-                onClick={() => {
-                  setMenuOpen(false);
-                  props.onMove(board.id);
-                }}
-              >
-                <span className="dot" style={{ background: board.color }} />
-                {board.name}
-              </button>
-            ))}
-            {!props.otherBoards.length && <div className="padMenuEmpty">No other boards</div>}
-          </div>
-        )}
+      <div
+        className="padDrag"
+        title="Drag to reorder, or onto a board to move it"
+        aria-label="Drag to reorder, or onto a board to move it"
+        onPointerDown={props.onGrabStart}
+      >
+        <GripVertical size={15} />
       </div>
       <button className="padMain" onClick={props.onSelect}>
         <PadIcon sound={sound} />
