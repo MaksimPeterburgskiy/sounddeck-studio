@@ -1,4 +1,5 @@
 const roleDeviceIds = new Set(["default", "communications"]);
+const macBlackHole2chPattern = /^blackhole\s+2ch(?:\s+\(virtual\))?$/i;
 
 export interface VirtualAudioCandidate {
   platform: "win32" | "darwin" | "linux";
@@ -53,8 +54,8 @@ export function findVirtualAudioCandidates(devices: MediaDeviceInfo[], platform:
 
   if (normalizedPlatform === "darwin") {
     for (const output of outputs) {
-      if (/^blackhole\s+2ch$/i.test(output.label.trim())) {
-        candidates.push(candidateFromDevice(output, "darwin", "macos-bundled-blackhole", "BlackHole 2ch", true));
+      if (macBlackHole2chPattern.test(output.label.trim())) {
+        candidates.push(candidateFromDevice(output, "darwin", "macos-bundled-blackhole", output.label.trim(), true));
       } else if (/blackhole/i.test(output.label)) {
         candidates.push(candidateFromDevice(output, "darwin", "macos-bundled-blackhole", "BlackHole 2ch", false, "known"));
       }

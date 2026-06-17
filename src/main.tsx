@@ -1745,8 +1745,8 @@ function virtualRouteCopy(platform: SoundDeckPlatform) {
   if (platform === "darwin") {
     return {
       title: "Managed macOS virtual mic",
-      inputLabel: "BlackHole 2ch",
-      inputPattern: /^blackhole\s+2ch$/i,
+      inputLabel: "BlackHole 2ch (Virtual)",
+      inputPattern: /^blackhole\s+2ch(?:\s+\(virtual\))?$/i,
       description: "The macOS package installs SoundDeck's bundled BlackHole 2ch driver. SoundDeck selects the BlackHole 2ch output automatically, and target apps use the matching BlackHole 2ch microphone.",
       missing: "BlackHole 2ch is not visible. Refresh devices after install, or repair the SoundDeck audio driver.",
       repairUrl: "https://github.com/MaksimPeterburgskiy/sounddeck-studio/releases/latest"

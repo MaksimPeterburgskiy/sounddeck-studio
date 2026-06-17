@@ -8,6 +8,7 @@ tmp/
 .codex/
 build/vbcable/
 build/blackhole/
+build/extra-pkgs/
 build/icon.icns
 build/icon.png
 build/installerSidebar.bmp
