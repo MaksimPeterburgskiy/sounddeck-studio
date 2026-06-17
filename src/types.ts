@@ -12,6 +12,7 @@ export interface SoundSlot {
   duration?: number;
   trimStartSec?: number;
   trimEndSec?: number;
+  playbackRate?: number;
   color: string;
   icon: string;
   image?: string;
@@ -75,6 +76,16 @@ export interface MediaImportResult {
   reason?: string;
 }
 
+export interface MediaCropResult {
+  ok: boolean;
+  reason?: string;
+  mediaPath?: string;
+  storedName?: string;
+  ext?: string;
+  mime?: string;
+  size?: number;
+}
+
 export interface HotkeyBinding {
   type: "sound" | "stop-all" | "board" | "cycle-board";
   soundId?: string;
@@ -105,6 +116,7 @@ declare global {
       downloadMedia: (urls: string[]) => Promise<MediaImportResult[]>;
       readMedia: (mediaPath: string) => Promise<ArrayBuffer>;
       deleteMedia: (mediaPath: string) => Promise<{ ok: boolean; reason?: string }>;
+      cropMedia: (payload: { mediaPath: string; ext: string; startSec: number; endSec: number; rate: number }) => Promise<MediaCropResult>;
       saveRecording: (payload: { title: string; ext: string; bytes: ArrayBuffer }) => Promise<MediaImportResult>;
       registerHotkeys: (bindings: HotkeyBinding[]) => Promise<HotkeyResult[]>;
       setHotkeyCapture: (active: boolean) => Promise<{ ok: boolean }>;

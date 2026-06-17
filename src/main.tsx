@@ -9,10 +9,12 @@ import {
   Keyboard,
   Link,
   Mic,
+  Pause,
   Pencil,
   Play,
   Plus,
   Radio,
+  RefreshCcw,
   RotateCcw,
   Save,
   Scissors,
@@ -775,9 +777,6 @@ function App() {
               <ClipEditor
                 sound={editingClipSound}
                 engine={engineRef.current}
-                playing={playingIds.includes(editingClipSound.id)}
-                onPlay={() => void triggerSound(editingClipSound)}
-                onStop={() => engineRef.current?.stop(editingClipSound.id)}
                 onChange={(patch) => updateSound(editingClipSound.id, patch)}
                 onClose={() => setEditingClipId("")}
               />
@@ -1312,17 +1311,56 @@ function TrimInput({ label, value, min, max, onChange }: {
   );
 }
 
-function ClipEditor({ sound, engine, playing, onPlay, onStop, onChange, onClose }: {
+function SpeedInput({ value, min, max, onChange }: { value: number; min: number; max: number; onChange: (v: number) => void }) {
+  const [text, setText] = useState(value.toFixed(2));
+  const [focused, setFocused] = useState(false);
+
+  useEffect(() => {
+    if (!focused) setText(value.toFixed(2));
+  }, [value, focused]);
+
+  const commit = () => {
+    const trimmed = text.trim();
+    if (trimmed === "") {
+      setText(value.toFixed(2));
+      return;
+    }
+    const v = Number(trimmed);
+    if (Number.isFinite(v) && v > 0) onChange(Math.min(Math.max(min, v), max));
+    else setText(value.toFixed(2));
+  };
+
+  return (
+    <label>Speed
+      <input
+        type="number"
+        min={min}
+        max={max}
+        step={0.25}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onFocus={() => setFocused(true)}
+        onBlur={() => { setFocused(false); commit(); }}
+        onKeyDown={(e) => { if (e.key === "Enter") { e.currentTarget.blur(); } }}
+      />
+      <span className="clipTimeUnit">×</span>
+    </label>
+  );
+}
+
+function ClipEditor({ sound, engine, onChange, onClose }: {
   sound: SoundSlot;
   engine: AudioEngine | null;
-  playing: boolean;
-  onPlay: () => void;
-  onStop: () => void;
   onChange: (patch: Partial<SoundSlot>) => void;
   onClose: () => void;
 }) {
   const [buffer, setBuffer] = useState<AudioBuffer | null>(null);
   const [loadError, setLoadError] = useState(false);
+  const [previewState, setPreviewState] = useState<"stopped" | "playing" | "paused">("stopped");
+  const [playheadSec, setPlayheadSec] = useState(0);
+  const [showDone, setShowDone] = useState(false);
+  const [cropping, setCropping] = useState(false);
+  const [cropError, setCropError] = useState("");
   const trackRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -1337,31 +1375,90 @@ function ClipEditor({ sound, engine, playing, onPlay, onStop, onChange, onClose 
     return () => {
       alive = false;
     };
-  }, [engine, sound.id]);
+  }, [engine, sound.id, sound.mediaPath]);
+
+  // Stop preview playback when leaving the editor.
+  useEffect(() => () => { engine?.previewStop(); }, [engine]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
-        onClose();
+        if (showDone) setShowDone(false);
+        else onClose();
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onClose]);
+  }, [onClose, showDone]);
 
   const duration = buffer?.duration ?? sound.duration ?? 0;
   const peaks = useMemo(() => buffer ? makeWaveform(buffer, 120) : sound.waveform || [], [buffer, sound.waveform]);
   const start = Math.min(Math.max(0, sound.trimStartSec ?? 0), duration);
   const end = Math.min(Math.max(start, sound.trimEndSec ?? duration), duration) || duration;
+  const rate = sound.playbackRate ?? 1;
   const trimRef = useRef({ start, end });
   trimRef.current = { start, end };
   const trimmed = start > 0.005 || end < duration - 0.005;
+  const edited = trimmed || Math.abs(rate - 1) > 0.001;
+
+  // Keep the playhead inside the trimmed region as it (or the trim) changes.
+  useEffect(() => {
+    setPlayheadSec((current) => Math.min(Math.max(current, start), end));
+  }, [start, end]);
+
+  // Drive the playhead from the engine while previewing.
+  useEffect(() => {
+    if (previewState !== "playing" || !engine) return;
+    let frame = 0;
+    const tick = () => {
+      const pos = engine.getPreviewPosition();
+      if (pos !== null) setPlayheadSec(Math.min(pos, end));
+      if (!engine.isPreviewing()) {
+        setPreviewState("stopped");
+        return;
+      }
+      frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+  }, [previewState, engine, end]);
+
+  function playPreview() {
+    if (!engine || !duration) return;
+    const from = playheadSec >= end - 0.01 || playheadSec < start ? start : playheadSec;
+    void engine.previewPlay(sound, from, rate);
+    setPlayheadSec(from);
+    setPreviewState("playing");
+  }
+
+  function pausePreview() {
+    if (!engine) return;
+    engine.previewPause();
+    const pos = engine.getPreviewPosition();
+    if (pos !== null) setPlayheadSec(Math.min(Math.max(pos, start), end));
+    setPreviewState("paused");
+  }
+
+  function restartPreview() {
+    if (!engine || !duration) return;
+    void engine.previewRestart(sound, rate);
+    setPlayheadSec(start);
+    setPreviewState("playing");
+  }
+
+  function changeRate(v: number) {
+    onChange({ playbackRate: v });
+    if (previewState === "playing" && engine) {
+      void engine.previewPlay(sound, playheadSec, v);
+    }
+  }
 
   function dragHandle(which: "start" | "end") {
     return (event: React.PointerEvent) => {
       if (!duration) return;
       event.preventDefault();
+      event.stopPropagation();
       const move = (moveEvent: PointerEvent) => {
         const rect = trackRef.current?.getBoundingClientRect();
         if (!rect || !rect.width) return;
@@ -1379,8 +1476,97 @@ function ClipEditor({ sound, engine, playing, onPlay, onStop, onChange, onClose 
     };
   }
 
+  function seekFromClientX(clientX: number) {
+    const rect = trackRef.current?.getBoundingClientRect();
+    if (!rect || !rect.width || !duration) return start;
+    return Math.min(Math.max(((clientX - rect.left) / rect.width) * duration, start), end);
+  }
+
+  function scrub(event: React.PointerEvent) {
+    if (!duration || !engine) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const resume = previewState === "playing";
+    if (resume) {
+      engine.previewPause();
+      setPreviewState("paused");
+    }
+    const move = (moveEvent: PointerEvent) => {
+      const time = seekFromClientX(moveEvent.clientX);
+      setPlayheadSec(time);
+      engine.previewSeek(sound, time, false, rate);
+    };
+    const up = (upEvent: PointerEvent) => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      const time = seekFromClientX(upEvent.clientX);
+      setPlayheadSec(time);
+      if (resume) {
+        void engine.previewPlay(sound, time, rate);
+        setPreviewState("playing");
+      } else {
+        engine.previewSeek(sound, time, false, rate);
+      }
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    move(event.nativeEvent);
+  }
+
+  async function cutPermanently() {
+    if (!engine || cropping) return;
+    setCropping(true);
+    setCropError("");
+    const oldPath = sound.mediaPath;
+    try {
+      const result = await window.sounddeck.cropMedia({ mediaPath: sound.mediaPath, ext: sound.ext, startSec: start, endSec: end, rate });
+      if (!result.ok || !result.mediaPath) {
+        setCropError(result.reason || "Could not cut clip.");
+        setCropping(false);
+        return;
+      }
+      engine.invalidate(sound.id);
+      let nextDuration: number | undefined;
+      let nextWaveform: number[] | undefined;
+      try {
+        const decoded = await engine.preload({ ...sound, mediaPath: result.mediaPath, trimStartSec: 0, trimEndSec: undefined });
+        nextDuration = decoded.duration;
+        nextWaveform = makeWaveform(decoded);
+      } catch {
+        // Keep going even if we cannot recompute the waveform/duration.
+      }
+      onChange({
+        mediaPath: result.mediaPath,
+        storedName: result.storedName,
+        size: result.size,
+        ext: result.ext,
+        mime: result.mime,
+        trimStartSec: 0,
+        trimEndSec: undefined,
+        playbackRate: 1,
+        duration: nextDuration,
+        waveform: nextWaveform
+      });
+      if (oldPath && oldPath !== result.mediaPath) await window.sounddeck.deleteMedia(oldPath).catch(() => undefined);
+      onClose();
+    } catch (error) {
+      setCropError(error instanceof Error ? error.message : "Could not cut clip.");
+      setCropping(false);
+    }
+  }
+
+  function openDone() {
+    engine?.previewStop();
+    setPreviewState("stopped");
+    setCropError("");
+    setShowDone(true);
+  }
+
   const startPct = duration ? (start / duration) * 100 : 0;
   const endPct = duration ? (end / duration) * 100 : 100;
+  const playheadPct = duration ? (Math.min(Math.max(playheadSec, 0), duration) / duration) * 100 : 0;
+  const relPlayhead = Math.max(0, playheadSec - start);
+  const clipLength = Math.max(0, end - start);
 
   return (
     <div
@@ -1399,7 +1585,7 @@ function ClipEditor({ sound, engine, playing, onPlay, onStop, onChange, onClose 
           <button onClick={onClose}><X size={16} /></button>
         </header>
         {loadError && <p className="clipError">Could not load audio for this clip.</p>}
-        <div className={`clipTrack${buffer ? "" : " loading"}`} ref={trackRef}>
+        <div className={`clipTrack${buffer ? "" : " loading"}`} ref={trackRef} onPointerDown={scrub}>
           <div className="clipWave">
             {(peaks.length ? peaks : Array.from({ length: 120 }, () => 0.2)).map((peak, index, all) => {
               const position = (index + 0.5) / all.length;
@@ -1408,24 +1594,44 @@ function ClipEditor({ sound, engine, playing, onPlay, onStop, onChange, onClose 
             })}
           </div>
           <div className="clipRegion" style={{ left: `${startPct}%`, width: `${Math.max(0, endPct - startPct)}%` }} />
-          <Playhead engine={engine} soundId={sound.id} duration={duration} active={playing} />
+          {duration > 0 && <div className="clipPlayhead" style={{ left: `${playheadPct}%` }} onPointerDown={scrub} role="slider" aria-label="Playhead" aria-valuenow={playheadSec} aria-valuemin={start} aria-valuemax={end} tabIndex={0} />}
           <div className="clipHandle start" style={{ left: `${startPct}%` }} onPointerDown={dragHandle("start")} role="slider" aria-label="Clip start" aria-valuenow={start} aria-valuemin={0} aria-valuemax={duration} tabIndex={0} />
           <div className="clipHandle end" style={{ left: `${endPct}%` }} onPointerDown={dragHandle("end")} role="slider" aria-label="Clip end" aria-valuenow={end} aria-valuemin={0} aria-valuemax={duration} tabIndex={0} />
         </div>
         <div className="clipTimes">
           <TrimInput label="Start" value={start} min={0} max={Math.max(0, end - 0.05)} onChange={(v) => onChange({ trimStartSec: v })} />
           <TrimInput label="End" value={end} min={Math.min(start + 0.05, duration)} max={duration} onChange={(v) => onChange({ trimEndSec: v })} />
-          <TrimInput label="Length" value={Math.max(0, end - start)} min={Math.min(0.05, duration - start)} max={Math.max(0, duration - start)} onChange={(v) => onChange({ trimEndSec: Math.min(start + v, duration) })} />
-          <span>Source <em>{duration.toFixed(2)}s</em></span>
+          <TrimInput label="Length" value={clipLength} min={Math.min(0.05, duration - start)} max={Math.max(0, duration - start)} onChange={(v) => onChange({ trimEndSec: Math.min(start + v, duration) })} />
+          <SpeedInput value={rate} min={0.25} max={4} onChange={changeRate} />
+          <span className="clipPlayheadTime">Playhead <em>{relPlayhead.toFixed(2)}s</em> / {clipLength.toFixed(2)}s</span>
         </div>
         <div className="clipActions">
-          <button className="clipPreview" onClick={playing ? onStop : onPlay} disabled={!duration}>
-            {playing ? <Square size={15} /> : <Play size={15} />}{playing ? "Stop" : "Preview"}
+          <button className="clipPreview" onClick={previewState === "playing" ? pausePreview : playPreview} disabled={!duration}>
+            {previewState === "playing" ? <Pause size={15} /> : <Play size={15} />}{previewState === "playing" ? "Pause" : previewState === "paused" ? "Resume" : "Play"}
           </button>
-          <button onClick={() => onChange({ trimStartSec: 0, trimEndSec: undefined })} disabled={!trimmed}><RotateCcw size={15} /> Reset trim</button>
-          <button onClick={onClose}><Save size={15} /> Done</button>
+          <button onClick={restartPreview} disabled={!duration}><RotateCcw size={15} /> Restart</button>
+          <button onClick={() => onChange({ trimStartSec: 0, trimEndSec: undefined, playbackRate: 1 })} disabled={!edited}><RefreshCcw size={15} /> Reset</button>
+          <button className="clipDone" onClick={openDone} disabled={!duration}><Save size={15} /> Done</button>
         </div>
       </div>
+      {showDone && (
+        <div className="modalOverlay clipDoneOverlay" onPointerDown={(event) => { if (event.target === event.currentTarget && !cropping) setShowDone(false); }}>
+          <div className="clipDoneDialog">
+            <header>
+              <strong>Finish editing</strong>
+              <button onClick={() => setShowDone(false)} disabled={cropping} aria-label="Close"><X size={16} /></button>
+            </header>
+            <p>Keep the original file and just remember your trim and speed, or cut the file down on disk to bake them in permanently?</p>
+            {cropError && <p className="clipError">{cropError}</p>}
+            <div className="clipDoneActions">
+              <button onClick={onClose} disabled={cropping}>Save timestamps</button>
+              <button className="danger" onClick={() => void cutPermanently()} disabled={cropping}>
+                <Scissors size={15} /> {cropping ? "Cutting…" : "Cut clip permanently"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

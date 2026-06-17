@@ -55,6 +55,9 @@ export function installDevBridge() {
     async deleteMedia() {
       return { ok: true };
     },
+    async cropMedia() {
+      return { ok: false, reason: "Run in Electron to cut clips" };
+    },
     async saveRecording() {
       return { ok: false, sourcePath: "", reason: "Run in Electron to save recordings" };
     },
