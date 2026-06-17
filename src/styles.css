@@ -908,6 +908,8 @@ input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent);
   width: 18px;
   margin-left: -9px;
   cursor: ew-resize;
+  /* Above the playhead (z-index 3) so a boundary-aligned playhead can't steal its drags. */
+  z-index: 4;
 }
 .clipHandle::after {
   content: "";
