@@ -16,6 +16,7 @@
     "dist:mac": "node scripts/dist-mac.mjs",
     "dist:mac:unsigned": "node scripts/dist-mac.mjs --unsigned",
     "build:blackhole": "node scripts/build-blackhole.mjs",
+    "fix:macos-dev-signatures": "node scripts/codesign-macos-dev-deps.mjs",
     "test": "vitest run"
   },
   "build": {
