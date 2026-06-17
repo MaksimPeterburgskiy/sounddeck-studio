@@ -91,10 +91,12 @@ export class AudioEngine {
   }
 
   async preload(sound: SoundSlot) {
-    if (this.cache.has(sound.id)) return this.cache.get(sound.id)!;
+    // Keyed by media path (not sound id) so a late decode of an old path can't overwrite
+    // the buffer for a path the slot has since been re-pointed at (e.g. after a permanent cut).
+    if (this.cache.has(sound.mediaPath)) return this.cache.get(sound.mediaPath)!;
     const bytes = await window.sounddeck.readMedia(sound.mediaPath);
     const buffer = await this.decodeContext.decodeAudioData(bytes.slice(0));
-    this.cache.set(sound.id, buffer);
+    this.cache.set(sound.mediaPath, buffer);
     return buffer;
   }
 
@@ -286,9 +288,9 @@ export class AudioEngine {
     for (const gain of voice.gains) gain.disconnect();
   }
 
-  /** Drop the cached decoded buffer for a sound (e.g. after its file is replaced on disk). */
-  invalidate(soundId: string) {
-    this.cache.delete(soundId);
+  /** Drop the cached decoded buffer for a media path (e.g. after that file is removed). */
+  invalidate(mediaPath: string) {
+    this.cache.delete(mediaPath);
   }
 
   async dispose() {

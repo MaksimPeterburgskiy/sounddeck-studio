@@ -91,6 +91,25 @@ function bundledFfmpegPath() {
   return resolved;
 }
 
+// Reads the source stream's native sample rate from ffmpeg's banner (printed to stderr).
+// decodeAudioData in the renderer resamples to the AudioContext rate, so the renderer's
+// buffer rate is unreliable for baking speed; the file's own rate is what ffmpeg decodes at.
+function probeAudioSampleRate(ffmpeg, input) {
+  return new Promise((resolve) => {
+    let stderr = "";
+    const child = spawn(ffmpeg, ["-hide_banner", "-i", input], { windowsHide: true });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+      if (stderr.length > 16000) stderr = stderr.slice(-16000);
+    });
+    child.on("error", () => resolve(0));
+    child.on("close", () => {
+      const match = stderr.match(/(\d{3,6})\s*Hz/);
+      resolve(match ? Number(match[1]) : 0);
+    });
+  });
+}
+
 async function ensureLibrary() {
   await fs.mkdir(mediaRoot(), { recursive: true });
   try {
@@ -686,13 +705,18 @@ ipcMain.handle("media:crop", async (_event, payload) => {
   if (!path.resolve(dest).startsWith(root + path.sep)) {
     return { ok: false, reason: "outside-media-root" };
   }
+  const rate = Number(payload?.rate) || 1;
+  // Probe the file's real sample rate; only matters when actually re-timing.
+  const sampleRate = Math.abs(rate - 1) > 1e-6
+    ? (await probeAudioSampleRate(ffmpeg, sourcePath)) || Number(payload?.sampleRate) || 0
+    : 0;
   const args = buildCropArgs({
     input: sourcePath,
     output: dest,
     startSec: Number(payload?.startSec) || 0,
     endSec: Number(payload?.endSec) || 0,
-    rate: Number(payload?.rate) || 1,
-    sampleRate: Number(payload?.sampleRate) || 0
+    rate,
+    sampleRate
   });
 
   try {

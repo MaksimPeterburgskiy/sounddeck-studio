@@ -1426,12 +1426,18 @@ function ClipEditor({ sound, engine, onChange, onClose, mediaUsedElsewhere }: {
     return () => cancelAnimationFrame(frame);
   }, [previewState, engine, end]);
 
+  // Preview startup can reject (missing/corrupt media); fall back to the stopped state
+  // instead of leaving the UI stuck on "playing" with an unhandled rejection.
+  function onPreviewFailed() {
+    setPreviewState("stopped");
+  }
+
   function playPreview() {
     if (!engine || !duration) return;
     const from = playheadSec >= end - 0.01 || playheadSec < start ? start : playheadSec;
-    void engine.previewPlay(sound, from, rate);
     setPlayheadSec(from);
     setPreviewState("playing");
+    engine.previewPlay(sound, from, rate).catch(onPreviewFailed);
   }
 
   function pausePreview() {
@@ -1444,15 +1450,15 @@ function ClipEditor({ sound, engine, onChange, onClose, mediaUsedElsewhere }: {
 
   function restartPreview() {
     if (!engine || !duration) return;
-    void engine.previewRestart(sound, rate);
     setPlayheadSec(start);
     setPreviewState("playing");
+    engine.previewRestart(sound, rate).catch(onPreviewFailed);
   }
 
   function changeRate(v: number) {
     onChange({ playbackRate: v });
     if (previewState === "playing" && engine) {
-      void engine.previewPlay(sound, playheadSec, v);
+      engine.previewPlay(sound, playheadSec, v).catch(onPreviewFailed);
     }
   }
 
@@ -1504,8 +1510,8 @@ function ClipEditor({ sound, engine, onChange, onClose, mediaUsedElsewhere }: {
       const time = seekFromClientX(upEvent.clientX);
       setPlayheadSec(time);
       if (resume) {
-        void engine.previewPlay(sound, time, rate);
         setPreviewState("playing");
+        engine.previewPlay(sound, time, rate).catch(onPreviewFailed);
       } else {
         engine.previewSeek(sound, time, false, rate);
       }
@@ -1528,12 +1534,11 @@ function ClipEditor({ sound, engine, onChange, onClose, mediaUsedElsewhere }: {
         return;
       }
       // Verify the new file actually decodes before we replace the original and delete it.
-      engine.invalidate(sound.id);
       let decoded: AudioBuffer;
       try {
         decoded = await engine.preload({ ...sound, mediaPath: result.mediaPath, trimStartSec: 0, trimEndSec: undefined });
       } catch {
-        engine.invalidate(sound.id);
+        engine.invalidate(result.mediaPath);
         await window.sounddeck.deleteMedia(result.mediaPath).catch(() => undefined);
         setCropError("The cut file could not be read; your original clip was kept.");
         setCropping(false);
@@ -1553,6 +1558,7 @@ function ClipEditor({ sound, engine, onChange, onClose, mediaUsedElsewhere }: {
       });
       // Only remove the old file if no other slot still points at it (e.g. imported duplicates).
       if (oldPath && oldPath !== result.mediaPath && !mediaUsedElsewhere(oldPath)) {
+        engine.invalidate(oldPath);
         await window.sounddeck.deleteMedia(oldPath).catch(() => undefined);
       }
       onClose();
