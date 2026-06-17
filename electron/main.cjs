@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, dialog, shell } = require("electron");
+const { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, dialog, shell, systemPreferences } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs/promises");
 const http = require("node:http");
@@ -6,7 +6,7 @@ const https = require("node:https");
 const crypto = require("node:crypto");
 const os = require("node:os");
 const { spawn } = require("node:child_process");
-const { createCorsairBridge, isGKeyAccelerator } = require("./corsair.cjs");
+const { createCorsairBridge, isCorsairSupportedPlatform, isGKeyAccelerator } = require("./corsair.cjs");
 const { createHotkeyEngine } = require("./hotkeys.cjs");
 const { buildCropArgs } = require("./ffmpegArgs.cjs");
 
@@ -91,6 +91,44 @@ function bundledFfmpegPath() {
   return resolved;
 }
 
+function sounddeckPlatform() {
+  if (process.platform === "win32" || process.platform === "darwin" || process.platform === "linux") return process.platform;
+  return "unknown";
+}
+
+function managedVirtualBackend() {
+  if (process.platform === "darwin") return "macos-bundled-blackhole";
+  if (process.platform === "linux") return "linux-managed-pactl";
+  if (process.platform === "win32") return "windows-vbcable";
+  return "manual";
+}
+
+function macOSHotkeyPermissionHelpUrl() {
+  return "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent";
+}
+
+function appCapabilities() {
+  const hotkeyStatus = hotkeyEngine.getStatus?.() || {};
+  const macAccessibilityTrusted = process.platform === "darwin" && systemPreferences?.isTrustedAccessibilityClient
+    ? systemPreferences.isTrustedAccessibilityClient(false)
+    : true;
+  const lastFailureReason = process.platform === "darwin" && !macAccessibilityTrusted
+    ? "macos-input-monitoring-permission"
+    : hotkeyStatus.lastFailureReason || "";
+  return {
+    platform: sounddeckPlatform(),
+    managedVirtualBackend: managedVirtualBackend(),
+    managedVirtualMicAvailable: process.platform === "win32" || process.platform === "darwin" || process.platform === "linux",
+    hotkeys: {
+      advancedHookAvailable: Boolean(hotkeyStatus.advancedHookAvailable),
+      globalShortcutFallbackAvailable: Boolean(hotkeyStatus.globalShortcutFallbackAvailable),
+      lastFailureReason,
+      ...(process.platform === "darwin" ? { permissionHelpUrl: macOSHotkeyPermissionHelpUrl() } : {})
+    },
+    corsairAvailable: isCorsairSupportedPlatform()
+  };
+}
+
 // Reads the source stream's native sample rate from ffmpeg's banner (printed to stderr).
 // decodeAudioData in the renderer resamples to the AudioContext rate, so the renderer's
 // buffer rate is unreliable for baking speed; the file's own rate is what ffmpeg decodes at.
@@ -131,6 +169,9 @@ async function ensureLibrary() {
           soundboardVirtualVolume: 1,
           soundboardMonitorVolume: 1,
           monitorDeviceId: "",
+          virtualOutputDeviceId: "",
+          virtualOutputMode: "managed",
+          virtualBackend: managedVirtualBackend(),
           microphoneDeviceId: "",
           stopAllHotkey: "Ctrl+Alt+Space",
           cycleBoardsHotkey: ""
@@ -377,9 +418,11 @@ async function loadRenderer(window) {
 }
 
 function trayIconPath() {
-  return isDev
+  const iconFile = process.platform === "win32" ? "icon.ico" : "icon.png";
+  const devPath = process.platform === "win32"
     ? path.join(__dirname, "../build/icon.ico")
-    : path.join(process.resourcesPath, "icon.ico");
+    : path.join(__dirname, "../docs/icon.png");
+  return isDev ? devPath : path.join(process.resourcesPath, iconFile);
 }
 
 function showMainWindow() {
@@ -478,8 +521,8 @@ function registerHotkeys(bindings) {
 const UPDATE_CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
 
 function setupAutoUpdates() {
-  // Portable builds have no installer to hand updates to; only the NSIS
-  // install supports auto-update.
+  // Portable Windows builds have no installer to hand updates to. Installed
+  // Windows and signed/notarized macOS packages can use electron-updater.
   if (!app.isPackaged || process.env.PORTABLE_EXECUTABLE_DIR) return;
   let autoUpdater;
   try {
@@ -764,3 +807,7 @@ ipcMain.handle("app:openExternal", async (_event, url) => {
 });
 
 ipcMain.handle("app:getVersion", () => app.getVersion());
+
+ipcMain.handle("app:getPlatform", () => sounddeckPlatform());
+
+ipcMain.handle("app:getCapabilities", () => appCapabilities());

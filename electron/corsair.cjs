@@ -5,7 +5,21 @@
 const GKEY_MIN = 1;
 const GKEY_MAX = 20;
 
+function isCorsairSupportedPlatform(platform = process.platform) {
+  return platform === "win32" || platform === "darwin";
+}
+
 function createCorsairBridge({ onKey, onStateChange }) {
+  if (!isCorsairSupportedPlatform()) {
+    return {
+      start: () => {},
+      stop: () => {},
+      getState: () => "unavailable",
+      isConnected: () => false,
+      loadError: () => "corsair-unsupported-platform"
+    };
+  }
+
   let sdk = null;
   let loadError = "";
   try {
@@ -83,4 +97,4 @@ function isGKeyAccelerator(accelerator) {
   return GKEY_ACCELERATOR_PATTERN.test(String(accelerator || "").trim());
 }
 
-module.exports = { createCorsairBridge, isGKeyAccelerator };
+module.exports = { createCorsairBridge, isCorsairSupportedPlatform, isGKeyAccelerator };

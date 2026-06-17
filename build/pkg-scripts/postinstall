@@ -1,0 +1,21 @@
+#!/bin/sh
+set -eu
+
+APP_PATH="/Applications/SoundDeck Studio.app"
+DRIVER_SOURCE="$APP_PATH/Contents/Resources/blackhole/BlackHole2ch.driver"
+HAL_DIR="/Library/Audio/Plug-Ins/HAL"
+DRIVER_DEST="$HAL_DIR/BlackHole2ch.driver"
+
+if [ ! -d "$DRIVER_SOURCE" ]; then
+  echo "SoundDeck BlackHole2ch.driver resource is missing: $DRIVER_SOURCE" >&2
+  exit 1
+fi
+
+mkdir -p "$HAL_DIR"
+rm -rf "$DRIVER_DEST"
+cp -R "$DRIVER_SOURCE" "$DRIVER_DEST"
+chown -R root:wheel "$DRIVER_DEST"
+chmod -R go-w "$DRIVER_DEST"
+
+killall coreaudiod >/dev/null 2>&1 || true
+exit 0

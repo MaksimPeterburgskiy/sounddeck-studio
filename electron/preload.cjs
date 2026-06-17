@@ -16,6 +16,8 @@ contextBridge.exposeInMainWorld("sounddeck", {
   setHotkeyCapture: (active) => ipcRenderer.invoke("hotkeys:capture", active),
   openExternal: (url) => ipcRenderer.invoke("app:openExternal", url),
   getVersion: () => ipcRenderer.invoke("app:getVersion"),
+  getPlatform: () => ipcRenderer.invoke("app:getPlatform"),
+  getCapabilities: () => ipcRenderer.invoke("app:getCapabilities"),
   getPathForFile: (file) => webUtils.getPathForFile(file),
   onHotkeyTrigger: (callback) => {
     const listener = (_event, binding) => callback(binding);

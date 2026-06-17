@@ -1,5 +1,15 @@
 const roleDeviceIds = new Set(["default", "communications"]);
 
+export interface VirtualAudioCandidate {
+  platform: "win32" | "darwin" | "linux";
+  backend: string;
+  outputDeviceId: string;
+  outputLabel: string;
+  expectedInputLabel: string;
+  confidence: "managed" | "known" | "possible";
+  recommended: boolean;
+}
+
 export function isRoleDeviceId(deviceId: string | undefined | null) {
   return roleDeviceIds.has((deviceId || "").toLowerCase());
 }
@@ -13,8 +23,53 @@ export function isSelectableMediaDevice(device: MediaDeviceInfo) {
 }
 
 export function findCableInputDeviceId(devices: MediaDeviceInfo[]) {
-  const cableOutputs = devices.filter((device) => device.kind === "audiooutput" && /cable input/i.test(device.label));
-  return cableOutputs.find(isSelectableMediaDevice)?.deviceId ?? "";
+  return findVirtualAudioCandidates(devices, "win32").find((candidate) => candidate.recommended)?.outputDeviceId ?? "";
+}
+
+function candidateFromDevice(device: MediaDeviceInfo, platform: VirtualAudioCandidate["platform"], backend: string, expectedInputLabel: string, recommended: boolean, confidence: VirtualAudioCandidate["confidence"] = "managed"): VirtualAudioCandidate {
+  return {
+    platform,
+    backend,
+    outputDeviceId: device.deviceId,
+    outputLabel: device.label,
+    expectedInputLabel,
+    confidence,
+    recommended
+  };
+}
+
+export function findVirtualAudioCandidates(devices: MediaDeviceInfo[], platform: string): VirtualAudioCandidate[] {
+  const outputs = devices.filter((device) => device.kind === "audiooutput" && isSelectableMediaDevice(device));
+  const normalizedPlatform = platform === "darwin" || platform === "linux" || platform === "win32" ? platform : "win32";
+  const candidates: VirtualAudioCandidate[] = [];
+
+  if (normalizedPlatform === "win32") {
+    for (const output of outputs) {
+      if (/cable input|vb-audio virtual cable/i.test(output.label)) {
+        candidates.push(candidateFromDevice(output, "win32", "windows-vbcable", "CABLE Output", true));
+      }
+    }
+  }
+
+  if (normalizedPlatform === "darwin") {
+    for (const output of outputs) {
+      if (/^blackhole\s+2ch$/i.test(output.label.trim())) {
+        candidates.push(candidateFromDevice(output, "darwin", "macos-bundled-blackhole", "BlackHole 2ch", true));
+      } else if (/blackhole/i.test(output.label)) {
+        candidates.push(candidateFromDevice(output, "darwin", "macos-bundled-blackhole", "BlackHole 2ch", false, "known"));
+      }
+    }
+  }
+
+  if (normalizedPlatform === "linux") {
+    for (const output of outputs) {
+      if (/^sounddeck sink$/i.test(output.label.trim())) {
+        candidates.push(candidateFromDevice(output, "linux", "linux-managed-pactl", "SoundDeck Mic", true));
+      }
+    }
+  }
+
+  return candidates;
 }
 
 export function getDefaultDeviceLabel(devices: MediaDeviceInfo[], kind: MediaDeviceKind) {

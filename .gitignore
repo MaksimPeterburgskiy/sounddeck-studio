@@ -1,8 +1,14 @@
+.DS_Store
 node_modules/
 release/
 dist/
+.env*.local
+tmp/
 .claude/
 .codex/
 build/vbcable/
+build/blackhole/
+build/icon.icns
+build/icon.png
 build/installerSidebar.bmp
 build/installerHeader.bmp

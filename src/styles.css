@@ -1242,6 +1242,24 @@ input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent);
 
 .buttonLine { display: flex; flex-wrap: wrap; gap: 10px; }
 
+.managedRoute, .permissionNotice {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg-deep);
+}
+.managedRoute > svg, .permissionNotice > svg { color: var(--text-faint); }
+.managedRoute.ready { border-color: rgba(29, 183, 166, 0.5); background: var(--accent-soft); }
+.managedRoute.ready > svg { color: var(--accent); }
+.managedRoute.warning, .permissionNotice { border-color: rgba(255, 207, 92, 0.45); }
+.managedRoute.warning > svg, .permissionNotice > svg { color: var(--warn); }
+.managedRoute div { min-width: 0; display: grid; gap: 3px; }
+.managedRoute strong { font-size: 13px; }
+.managedRoute span, .permissionNotice span { min-width: 0; color: var(--text-dim); font-size: 12.5px; line-height: 1.5; }
 
 .routingGuide ol { margin: 0; padding-left: 20px; color: var(--text-dim); line-height: 1.8; font-size: 13.5px; }
 .routingGuide p { color: var(--text-dim); font-size: 13.5px; line-height: 1.6; }
@@ -1260,6 +1278,8 @@ input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent);
   color: var(--text-faint);
 }
 .corsairStatus.connected { color: var(--accent); }
+.permissionNotice { margin-bottom: 12px; }
+.permissionNotice button { min-height: 32px; }
 .hotkeyList { display: grid; gap: 8px; }
 
 .hotkeyRow {

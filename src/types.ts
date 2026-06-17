@@ -1,5 +1,8 @@
 export type OutputTarget = "monitor" | "virtual" | "both";
 export type RetriggerMode = "restart" | "overlap" | "stop";
+export type SoundDeckPlatform = "win32" | "darwin" | "linux" | "unknown";
+export type VirtualOutputMode = "managed" | "manual";
+export type VirtualBackend = "windows-vbcable" | "macos-bundled-blackhole" | "linux-managed-pactl" | "linux-managed-pipewire" | "manual";
 
 export interface SoundSlot {
   id: string;
@@ -50,6 +53,9 @@ export interface AudioSettings {
   soundboardVirtualVolume: number;
   soundboardMonitorVolume: number;
   monitorDeviceId: string;
+  virtualOutputDeviceId: string;
+  virtualOutputMode: VirtualOutputMode;
+  virtualBackend: VirtualBackend;
   microphoneDeviceId: string;
   stopAllHotkey: string;
   cycleBoardsHotkey: string;
@@ -100,6 +106,19 @@ export interface HotkeyResult extends HotkeyBinding {
 
 export type CorsairState = "unavailable" | "idle" | "connecting" | "connected" | "disconnected";
 
+export interface AppCapabilities {
+  platform: SoundDeckPlatform;
+  managedVirtualBackend: VirtualBackend;
+  managedVirtualMicAvailable: boolean;
+  hotkeys: {
+    advancedHookAvailable: boolean;
+    globalShortcutFallbackAvailable: boolean;
+    lastFailureReason: string;
+    permissionHelpUrl?: string;
+  };
+  corsairAvailable: boolean;
+}
+
 export type UpdateStatus =
   | { state: "downloading"; version?: string; percent?: number }
   | { state: "ready"; version: string };
@@ -122,6 +141,8 @@ declare global {
       setHotkeyCapture: (active: boolean) => Promise<{ ok: boolean }>;
       openExternal: (url: string) => Promise<{ ok: boolean }>;
       getVersion: () => Promise<string>;
+      getPlatform: () => Promise<SoundDeckPlatform>;
+      getCapabilities: () => Promise<AppCapabilities>;
       getPathForFile: (file: File) => string;
       onHotkeyTrigger: (callback: (binding: HotkeyBinding) => void) => () => void;
       getCorsairStatus: () => Promise<CorsairState>;
