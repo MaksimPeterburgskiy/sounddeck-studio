@@ -896,7 +896,7 @@ function UrlImportModal({ onClose, onImport }: { onClose: () => void; onImport: 
       setStatus(importedCount
         ? `Imported ${importedCount} sound${importedCount === 1 ? "" : "s"}${failedCount ? `, ${failedCount} failed` : ""}.`
         : "No sounds were imported.");
-      if (importedCount && !failedCount) setUrls("");
+      if (importedCount && !failedCount) onClose();
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Import failed.");
     } finally {
