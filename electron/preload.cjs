@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld("sounddeck", {
   downloadMedia: (urls) => ipcRenderer.invoke("media:download", urls),
   readMedia: (mediaPath) => ipcRenderer.invoke("media:read", mediaPath),
   deleteMedia: (mediaPath) => ipcRenderer.invoke("media:delete", mediaPath),
+  cropMedia: (payload) => ipcRenderer.invoke("media:crop", payload),
   saveRecording: (payload) => ipcRenderer.invoke("media:saveRecording", payload),
   registerHotkeys: (bindings) => ipcRenderer.invoke("hotkeys:register", bindings),
   setHotkeyCapture: (active) => ipcRenderer.invoke("hotkeys:capture", active),

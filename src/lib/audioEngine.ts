@@ -10,7 +10,19 @@ interface ActiveVoice {
   fadeOutMs: number;
   trimStart: number;
   clipDuration: number;
+  rate: number;
   loop: boolean;
+}
+
+interface PreviewVoice {
+  sources: AudioBufferSourceNode[];
+  gains: GainNode[];
+  soundId: string;
+  trimStart: number;
+  trimEnd: number;
+  rate: number;
+  baseOffset: number;
+  startedAt: number;
 }
 
 type EngineStatus = "idle" | "playing" | "paused";
@@ -23,6 +35,9 @@ export class AudioEngine {
   private virtualBus: GainNode;
   private cache = new Map<string, AudioBuffer>();
   private active = new Map<string, ActiveVoice[]>();
+  private previewVoice: PreviewVoice | null = null;
+  private previewOffset = 0;
+  private previewGeneration = 0;
   private micStream?: MediaStream;
   private micNodes: Array<{ source: MediaStreamAudioSourceNode; gain: GainNode; context: AudioContext }> = [];
   private micConfigureGeneration = 0;
@@ -76,10 +91,12 @@ export class AudioEngine {
   }
 
   async preload(sound: SoundSlot) {
-    if (this.cache.has(sound.id)) return this.cache.get(sound.id)!;
+    // Keyed by media path (not sound id) so a late decode of an old path can't overwrite
+    // the buffer for a path the slot has since been re-pointed at (e.g. after a permanent cut).
+    if (this.cache.has(sound.mediaPath)) return this.cache.get(sound.mediaPath)!;
     const bytes = await window.sounddeck.readMedia(sound.mediaPath);
     const buffer = await this.decodeContext.decodeAudioData(bytes.slice(0));
-    this.cache.set(sound.id, buffer);
+    this.cache.set(sound.mediaPath, buffer);
     return buffer;
   }
 
@@ -93,7 +110,8 @@ export class AudioEngine {
     const trimStart = Math.min(Math.max(0, sound.trimStartSec ?? 0), buffer.duration);
     const trimEnd = Math.min(Math.max(trimStart + 0.01, sound.trimEndSec ?? buffer.duration), buffer.duration);
     const clipDuration = Math.max(0.01, trimEnd - trimStart);
-    const voice: ActiveVoice = { id: crypto.randomUUID(), soundId: sound.id, sources: [], gains: [], startedAt: performance.now(), fadeOutMs: sound.fadeOutMs, trimStart, clipDuration, loop: sound.loop };
+    const rate = Math.max(0.0625, sound.playbackRate ?? 1);
+    const voice: ActiveVoice = { id: crypto.randomUUID(), soundId: sound.id, sources: [], gains: [], startedAt: performance.now(), fadeOutMs: sound.fadeOutMs, trimStart, clipDuration, rate, loop: sound.loop };
 
     for (const route of contexts) {
       const context = route.context;
@@ -101,6 +119,7 @@ export class AudioEngine {
       const gain = context.createGain();
       const totalGain = sound.volume;
       source.buffer = buffer;
+      source.playbackRate.value = rate;
       source.loop = sound.loop;
       if (sound.loop) {
         source.loopStart = trimStart;
@@ -175,14 +194,109 @@ export class AudioEngine {
     const voices = this.active.get(soundId);
     if (!voices?.length) return null;
     const voice = voices[voices.length - 1];
-    const elapsed = (performance.now() - voice.startedAt) / 1000;
+    const elapsed = ((performance.now() - voice.startedAt) / 1000) * voice.rate;
     if (voice.loop) return voice.trimStart + (elapsed % voice.clipDuration);
     return voice.trimStart + Math.min(elapsed, voice.clipDuration);
+  }
+
+  /**
+   * Editor-only preview playback (headphones / monitor context only). Independent of the
+   * regular soundboard voices so it can be paused in place, restarted, and scrubbed.
+   */
+  async previewPlay(sound: SoundSlot, fromSec: number, rate: number) {
+    // Stop any current preview and claim this generation, so a pause/stop/close (or a
+    // newer previewPlay) that happens while we await below cancels this stale start.
+    this.stopPreviewSources();
+    const generation = this.previewGeneration;
+    const buffer = await this.preload(sound);
+    if (generation !== this.previewGeneration || this.disposed) return;
+    const trimStart = Math.min(Math.max(0, sound.trimStartSec ?? 0), buffer.duration);
+    const trimEnd = Math.min(Math.max(trimStart + 0.01, sound.trimEndSec ?? buffer.duration), buffer.duration);
+    const safeRate = Math.max(0.0625, rate || 1);
+    const offset = Math.min(Math.max(trimStart, fromSec), trimEnd);
+    const remaining = Math.max(0.01, trimEnd - offset);
+    await this.monitorContext.resume();
+    if (generation !== this.previewGeneration || this.disposed) return;
+    const source = this.monitorContext.createBufferSource();
+    const gain = this.monitorContext.createGain();
+    source.buffer = buffer;
+    source.playbackRate.value = safeRate;
+    source.connect(gain).connect(this.monitorBus);
+    gain.gain.setValueAtTime(sound.volume, this.monitorContext.currentTime);
+    const voice: PreviewVoice = { sources: [source], gains: [gain], soundId: sound.id, trimStart, trimEnd, rate: safeRate, baseOffset: offset, startedAt: performance.now() };
+    source.onended = () => {
+      if (this.previewVoice === voice) {
+        this.previewVoice = null;
+        this.previewOffset = trimEnd;
+      }
+    };
+    source.start(0, offset, remaining);
+    this.previewVoice = voice;
+    this.previewOffset = offset;
+  }
+
+  previewPause() {
+    const position = this.getPreviewPosition();
+    if (position !== null) this.previewOffset = position;
+    this.stopPreviewSources();
+  }
+
+  async previewRestart(sound: SoundSlot, rate: number) {
+    const trimStart = Math.min(Math.max(0, sound.trimStartSec ?? 0), sound.duration ?? Infinity);
+    await this.previewPlay(sound, trimStart, rate);
+  }
+
+  async previewSeek(sound: SoundSlot, sec: number, isPlaying: boolean, rate: number) {
+    if (isPlaying) {
+      await this.previewPlay(sound, sec, rate);
+    } else {
+      this.stopPreviewSources();
+      this.previewOffset = sec;
+    }
+  }
+
+  previewStop() {
+    this.stopPreviewSources();
+    this.previewOffset = 0;
+  }
+
+  /** Current preview position in seconds, or the stored offset when paused/stopped. */
+  getPreviewPosition(): number | null {
+    const voice = this.previewVoice;
+    if (!voice) return this.previewOffset;
+    const elapsed = ((performance.now() - voice.startedAt) / 1000) * voice.rate;
+    return Math.min(voice.baseOffset + elapsed, voice.trimEnd);
+  }
+
+  isPreviewing() {
+    return this.previewVoice !== null;
+  }
+
+  private stopPreviewSources() {
+    this.previewGeneration += 1;
+    const voice = this.previewVoice;
+    this.previewVoice = null;
+    if (!voice) return;
+    for (const source of voice.sources) {
+      source.onended = null;
+      try {
+        source.stop();
+      } catch {
+        // Already stopped.
+      }
+    }
+    for (const gain of voice.gains) gain.disconnect();
+  }
+
+  /** Drop the cached decoded buffer for a media path (e.g. after that file is removed). */
+  invalidate(mediaPath: string) {
+    this.cache.delete(mediaPath);
   }
 
   async dispose() {
     this.disposed = true;
     this.configureGeneration += 1;
+    this.stopPreviewSources();
     this.stopAll();
     this.micConfigureGeneration += 1;
     this.stopMic();

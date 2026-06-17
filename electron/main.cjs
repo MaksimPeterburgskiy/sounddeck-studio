@@ -8,6 +8,7 @@ const os = require("node:os");
 const { spawn } = require("node:child_process");
 const { createCorsairBridge, isGKeyAccelerator } = require("./corsair.cjs");
 const { createHotkeyEngine } = require("./hotkeys.cjs");
+const { buildCropArgs } = require("./ffmpegArgs.cjs");
 
 const isDev = !app.isPackaged;
 if (isDev && process.env.SOUNDDECK_USER_DATA) app.setPath("userData", process.env.SOUNDDECK_USER_DATA);
@@ -73,6 +74,40 @@ function bundledYtDlpCandidates() {
   }
 
   return [...new Set(candidates.filter(Boolean))];
+}
+
+function bundledFfmpegPath() {
+  let resolved = "";
+  try {
+    resolved = require("ffmpeg-static") || "";
+  } catch {
+    resolved = "";
+  }
+  // ffmpeg-static returns a path inside app.asar when packaged; the binary itself is
+  // unpacked via asarUnpack, so point at the unpacked copy.
+  if (resolved && app.isPackaged) {
+    resolved = resolved.replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`);
+  }
+  return resolved;
+}
+
+// Reads the source stream's native sample rate from ffmpeg's banner (printed to stderr).
+// decodeAudioData in the renderer resamples to the AudioContext rate, so the renderer's
+// buffer rate is unreliable for baking speed; the file's own rate is what ffmpeg decodes at.
+function probeAudioSampleRate(ffmpeg, input) {
+  return new Promise((resolve) => {
+    let stderr = "";
+    const child = spawn(ffmpeg, ["-hide_banner", "-i", input], { windowsHide: true });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+      if (stderr.length > 16000) stderr = stderr.slice(-16000);
+    });
+    child.on("error", () => resolve(0));
+    child.on("close", () => {
+      const match = stderr.match(/(\d{3,6})\s*Hz/);
+      resolve(match ? Number(match[1]) : 0);
+    });
+  });
 }
 
 async function ensureLibrary() {
@@ -645,6 +680,72 @@ ipcMain.handle("media:saveRecording", async (_event, payload) => {
     mime: inferMime(ext),
     size: stat.size
   };
+});
+
+ipcMain.handle("media:crop", async (_event, payload) => {
+  await ensureLibrary();
+  const sourcePath = path.resolve(String(payload?.mediaPath || ""));
+  const root = path.resolve(mediaRoot());
+  if (!sourcePath.startsWith(root + path.sep)) {
+    return { ok: false, reason: "outside-media-root" };
+  }
+  const ffmpeg = bundledFfmpegPath();
+  if (!ffmpeg) {
+    return { ok: false, reason: "ffmpeg-unavailable" };
+  }
+  const ext = (payload?.ext || path.extname(sourcePath) || ".wav").toLowerCase();
+  if (!allowedAudioExtensions().has(ext)) {
+    return { ok: false, reason: "unsupported-extension" };
+  }
+  const id = crypto.randomUUID();
+  const storedName = `${id}${ext}`;
+  const dest = path.join(mediaRoot(), storedName);
+  // Defence in depth: the extension is allow-listed above, but make sure the resolved
+  // destination still lands inside the media root before ffmpeg writes with -y.
+  if (!path.resolve(dest).startsWith(root + path.sep)) {
+    return { ok: false, reason: "outside-media-root" };
+  }
+  const rate = Number(payload?.rate) || 1;
+  // Probe the file's real sample rate; only matters when actually re-timing.
+  const sampleRate = Math.abs(rate - 1) > 1e-6
+    ? (await probeAudioSampleRate(ffmpeg, sourcePath)) || Number(payload?.sampleRate) || 0
+    : 0;
+  const args = buildCropArgs({
+    input: sourcePath,
+    output: dest,
+    startSec: Number(payload?.startSec) || 0,
+    endSec: Number(payload?.endSec) || 0,
+    rate,
+    sampleRate
+  });
+
+  try {
+    await new Promise((resolve, reject) => {
+      const child = spawn(ffmpeg, args, { windowsHide: true });
+      let stderr = "";
+      child.stderr.on("data", (chunk) => {
+        stderr += chunk.toString();
+        if (stderr.length > 8000) stderr = stderr.slice(-8000);
+      });
+      child.on("error", reject);
+      child.on("close", (code) => {
+        if (code === 0) resolve();
+        else reject(new Error(`ffmpeg exited with code ${code}: ${stderr.trim().split("\n").pop() || ""}`));
+      });
+    });
+    const stat = await fs.stat(dest);
+    return {
+      ok: true,
+      mediaPath: dest,
+      storedName,
+      ext,
+      mime: inferMime(ext),
+      size: stat.size
+    };
+  } catch (error) {
+    await fs.rm(dest, { force: true }).catch(() => {});
+    return { ok: false, reason: String(error?.message || error) };
+  }
 });
 
 ipcMain.handle("hotkeys:register", async (_event, bindings) => registerHotkeys(bindings));

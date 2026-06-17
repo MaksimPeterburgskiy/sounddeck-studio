@@ -1,6 +1,7 @@
 allowBuilds:
   cue-sdk: true
   electron-winstaller: true
+  ffmpeg-static: true
   uiohook-napi: true
   youtube-dl-exec: true
 
