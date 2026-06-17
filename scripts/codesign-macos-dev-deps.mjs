@@ -60,6 +60,21 @@ function collectNativeFiles(root) {
   return files.sort();
 }
 
+function collectDarwinPrebuildRoots(packageRoot) {
+  const prebuildsRoot = packageRoot ? join(packageRoot, "prebuilds") : null;
+  if (!prebuildsRoot || !existsSync(prebuildsRoot)) return [];
+
+  try {
+    return readdirSync(prebuildsRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && entry.name.startsWith("darwin-"))
+      .map((entry) => join(prebuildsRoot, entry.name))
+      .sort();
+  } catch (error) {
+    console.warn(`> warning: could not read ${prebuildsRoot}: ${error.message}`);
+    return [];
+  }
+}
+
 function runCodesign(args) {
   console.log(`> codesign ${args.join(" ")}`);
   const result = spawnSync("codesign", args, {
@@ -87,12 +102,20 @@ const cueSdkSignRoots = cueSdkRoot
   ? [
       join(cueSdkRoot, "iCUESDK", "mac"),
       join(cueSdkRoot, "build", "Release"),
-      join(cueSdkRoot, "prebuilds", "darwin-x64_arm64")
+      ...collectDarwinPrebuildRoots(cueSdkRoot)
     ]
   : [];
 const cueSdkFiles = [...new Set(cueSdkSignRoots.flatMap(collectNativeFiles))];
 
 for (const file of cueSdkFiles) {
+  runCodesign(["--force", "--sign", "-", file]);
+}
+
+const uiohookRoot = resolvePackageRoot("uiohook-napi");
+const uiohookSignRoots = collectDarwinPrebuildRoots(uiohookRoot);
+const uiohookFiles = [...new Set(uiohookSignRoots.flatMap(collectNativeFiles))];
+
+for (const file of uiohookFiles) {
   runCodesign(["--force", "--sign", "-", file]);
 }
 
@@ -103,6 +126,6 @@ if (electronApp && existsSync(electronApp)) {
   runCodesign(["--force", "--deep", "--sign", "-", electronApp]);
 }
 
-if (!cueSdkFiles.length && (!electronApp || !existsSync(electronApp))) {
+if (!cueSdkFiles.length && !uiohookFiles.length && (!electronApp || !existsSync(electronApp))) {
   console.log("> no macOS dev dependencies found to codesign");
 }
