@@ -15,6 +15,7 @@
     "dist:win": "pnpm run clean:release && node scripts/fetch-vbcable.mjs && node scripts/make-installer-art.mjs && pnpm run build && electron-builder --win",
     "dist:mac": "node scripts/dist-mac.mjs",
     "dist:mac:unsigned": "node scripts/dist-mac.mjs --unsigned",
+    "fetch:yt-dlp:mac": "node scripts/fetch-ytdlp-mac.mjs",
     "build:blackhole": "node scripts/build-blackhole.mjs",
     "fix:macos-dev-signatures": "node scripts/codesign-macos-dev-deps.mjs",
     "test": "vitest run"
@@ -72,7 +73,14 @@
         {
           "from": "build/blackhole/NOTICE.txt",
           "to": "blackhole/NOTICE.txt"
+        },
+        {
+          "from": "build/yt-dlp",
+          "to": "yt-dlp"
         }
+      ],
+      "binaries": [
+        "Contents/Resources/yt-dlp/yt-dlp_macos"
       ],
       "extendInfo": {
         "NSMicrophoneUsageDescription": "SoundDeck Studio uses your microphone only when mic passthrough or recording is enabled.",

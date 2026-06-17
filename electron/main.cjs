@@ -57,6 +57,12 @@ function mediaRoot() {
 
 function bundledYtDlpCandidates() {
   const fileName = process.platform === "win32" ? "yt-dlp.exe" : "yt-dlp";
+  const macStandaloneCandidates = process.platform === "darwin"
+    ? [
+        path.join(process.resourcesPath || "", "yt-dlp", "yt-dlp_macos"),
+        path.join(__dirname, "..", "build", "yt-dlp", "yt-dlp_macos")
+      ]
+    : [];
   const packagedCandidates = [
     path.join(process.resourcesPath || "", "app.asar.unpacked", "node_modules", "youtube-dl-exec", "bin", fileName),
     path.join(process.resourcesPath || "", "app", "node_modules", "youtube-dl-exec", "bin", fileName),
@@ -65,7 +71,9 @@ function bundledYtDlpCandidates() {
   const devCandidates = [
     path.join(__dirname, "..", "node_modules", "youtube-dl-exec", "bin", fileName)
   ];
-  const candidates = app.isPackaged ? [...packagedCandidates, ...devCandidates] : [...devCandidates, ...packagedCandidates];
+  const candidates = app.isPackaged
+    ? [...macStandaloneCandidates, ...packagedCandidates, ...devCandidates]
+    : [...macStandaloneCandidates, ...devCandidates, ...packagedCandidates];
 
   try {
     candidates.push(require("youtube-dl-exec").constants.YOUTUBE_DL_PATH);
@@ -74,6 +82,18 @@ function bundledYtDlpCandidates() {
   }
 
   return [...new Set(candidates.filter(Boolean))];
+}
+
+function ytDlpJsRuntimeArgs() {
+  if (!process.versions.electron || !process.execPath) return [];
+  if (process.platform !== "darwin" && process.platform !== "linux") return [];
+  return ["--no-js-runtimes", "--js-runtimes", `node:${process.execPath}`];
+}
+
+function ytDlpSpawnEnv() {
+  const env = { ...process.env };
+  if (ytDlpJsRuntimeArgs().length) env.ELECTRON_RUN_AS_NODE = "1";
+  return env;
 }
 
 function bundledFfmpegPath() {
@@ -276,20 +296,21 @@ function isHttpUrl(value) {
 }
 
 function runYtDlp(args, cwd) {
-  const bundledCandidates = bundledYtDlpCandidates().map((command) => ({ command, args }));
+  const ytDlpArgs = [...ytDlpJsRuntimeArgs(), ...args];
+  const bundledCandidates = bundledYtDlpCandidates().map((command) => ({ command, args: ytDlpArgs }));
   const candidates = process.platform === "win32"
     ? [
         ...bundledCandidates,
-        { command: "yt-dlp.exe", args },
-        { command: "yt-dlp", args },
-        { command: "py", args: ["-m", "yt_dlp", ...args] },
-        { command: "python", args: ["-m", "yt_dlp", ...args] }
+        { command: "yt-dlp.exe", args: ytDlpArgs },
+        { command: "yt-dlp", args: ytDlpArgs },
+        { command: "py", args: ["-m", "yt_dlp", ...ytDlpArgs] },
+        { command: "python", args: ["-m", "yt_dlp", ...ytDlpArgs] }
       ]
     : [
         ...bundledCandidates,
-        { command: "yt-dlp", args },
-        { command: "python3", args: ["-m", "yt_dlp", ...args] },
-        { command: "python", args: ["-m", "yt_dlp", ...args] }
+        { command: "yt-dlp", args: ytDlpArgs },
+        { command: "python3", args: ["-m", "yt_dlp", ...ytDlpArgs] },
+        { command: "python", args: ["-m", "yt_dlp", ...ytDlpArgs] }
       ];
 
   return new Promise((resolve, reject) => {
@@ -307,6 +328,7 @@ function runYtDlp(args, cwd) {
       try {
         child = spawn(candidate.command, candidate.args, {
           cwd,
+          env: ytDlpSpawnEnv(),
           windowsHide: true,
           shell: false
         });
@@ -343,7 +365,7 @@ function runYtDlp(args, cwd) {
           const output = (stderr || stdout).trim();
           const reason = output || `exited with code ${code}`;
           failures.push(`${candidate.command}: ${reason}`);
-          if (code === -4058 || /No module named yt_dlp/i.test(output)) tryNext();
+          if (code === -4058 || /No module named yt_dlp|unsupported version of Python/i.test(output)) tryNext();
           else reject(new Error(`${candidate.command} ${reason}`));
         }
       });
