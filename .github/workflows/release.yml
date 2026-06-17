@@ -147,6 +147,7 @@ jobs:
       - name: Verify macOS package
         run: |
           pkgutil --check-signature release/*.pkg
+          node scripts/verify-mac-pkg.mjs release/*.pkg
           spctl --assess --verbose --type install release/*.pkg
           xcrun stapler validate release/*.pkg
 

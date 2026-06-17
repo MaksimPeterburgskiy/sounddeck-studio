@@ -10,7 +10,7 @@
     "electron": "electron .",
     "start": "pnpm run build && concurrently -k \"pnpm run dev\" \"wait-on tcp:5173 && electron .\"",
     "build": "tsc && vite build",
-    "clean:release": "node -e \"fs.rmSync('release', { recursive: true, force: true })\"",
+    "clean:release": "node scripts/clean-release.mjs",
     "dist": "pnpm run dist:win",
     "dist:win": "pnpm run clean:release && node scripts/fetch-vbcable.mjs && node scripts/make-installer-art.mjs && pnpm run build && electron-builder --win",
     "dist:mac": "node scripts/dist-mac.mjs",
@@ -71,10 +71,6 @@
           "to": "icon.png"
         },
         {
-          "from": "build/blackhole/BlackHole2ch.driver",
-          "to": "blackhole/BlackHole2ch.driver"
-        },
-        {
           "from": "build/blackhole/NOTICE.txt",
           "to": "blackhole/NOTICE.txt"
         },
@@ -92,8 +88,14 @@
       }
     },
     "pkg": {
-      "scripts": "build/pkg-scripts",
+      "allowAnywhere": false,
+      "allowCurrentUserHome": false,
+      "allowRootDirectory": true,
+      "extraPkgsDir": "extra-pkgs",
+      "hasStrictIdentifier": true,
       "installLocation": "/Applications",
+      "isRelocatable": false,
+      "scripts": null,
       "identity": "Maksim Peterburgskiy (7WX3FK3V9U)"
     },
     "nsis": {

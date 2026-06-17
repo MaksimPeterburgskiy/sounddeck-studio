@@ -48,8 +48,10 @@ const steps = [
   ["node", ["scripts/prepare-mac-assets.mjs"]],
   ["node", ["scripts/fetch-ytdlp-mac.mjs"]],
   ["node", ["scripts/build-blackhole.mjs"]],
+  ...(unsigned ? [] : [["node", ["scripts/build-mac-hal-driver-pkg.mjs"]]]),
   ["pnpm", ["run", "build"]],
-  ["pnpm", electronBuilderArgs]
+  ["pnpm", electronBuilderArgs],
+  ...(unsigned ? [] : [["node", ["scripts/fix-mac-pkg-destination.mjs"]]])
 ];
 
 if (unsigned) {
