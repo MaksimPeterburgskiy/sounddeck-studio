@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,6 +11,20 @@ function resolvePackageRoot(packageName) {
   try {
     return dirname(require.resolve(`${packageName}/package.json`));
   } catch {
+    try {
+      let current = dirname(require.resolve(packageName));
+
+      while (current && current !== repoRoot) {
+        if (existsSync(join(current, "package.json"))) return current;
+
+        const parent = dirname(current);
+        if (parent === current) break;
+        current = parent;
+      }
+    } catch {
+      return null;
+    }
+
     return null;
   }
 }
@@ -25,18 +39,21 @@ function collectNativeFiles(root) {
     const current = stack.pop();
     if (!current) continue;
 
-    for (const entry of readdirSync(current)) {
-      const path = join(current, entry);
-      const stats = statSync(path);
+    try {
+      for (const entry of readdirSync(current, { withFileTypes: true })) {
+        const path = join(current, entry.name);
 
-      if (stats.isDirectory()) {
-        stack.push(path);
-        continue;
-      }
+        if (entry.isDirectory()) {
+          stack.push(path);
+          continue;
+        }
 
-      if (stats.isFile() && (path.endsWith(".dylib") || path.endsWith(".node"))) {
-        files.push(path);
+        if (entry.isFile() && (path.endsWith(".dylib") || path.endsWith(".node"))) {
+          files.push(path);
+        }
       }
+    } catch (error) {
+      console.warn(`> warning: could not read ${current}: ${error.message}`);
     }
   }
 
@@ -86,6 +103,6 @@ if (electronApp && existsSync(electronApp)) {
   runCodesign(["--force", "--deep", "--sign", "-", electronApp]);
 }
 
-if (!cueSdkFiles.length && !electronApp) {
+if (!cueSdkFiles.length && (!electronApp || !existsSync(electronApp))) {
   console.log("> no macOS dev dependencies found to codesign");
 }
