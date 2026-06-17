@@ -681,12 +681,18 @@ ipcMain.handle("media:crop", async (_event, payload) => {
   const id = crypto.randomUUID();
   const storedName = `${id}${ext}`;
   const dest = path.join(mediaRoot(), storedName);
+  // Defence in depth: the extension is allow-listed above, but make sure the resolved
+  // destination still lands inside the media root before ffmpeg writes with -y.
+  if (!path.resolve(dest).startsWith(root + path.sep)) {
+    return { ok: false, reason: "outside-media-root" };
+  }
   const args = buildCropArgs({
     input: sourcePath,
     output: dest,
     startSec: Number(payload?.startSec) || 0,
     endSec: Number(payload?.endSec) || 0,
-    rate: Number(payload?.rate) || 1
+    rate: Number(payload?.rate) || 1,
+    sampleRate: Number(payload?.sampleRate) || 0
   });
 
   try {

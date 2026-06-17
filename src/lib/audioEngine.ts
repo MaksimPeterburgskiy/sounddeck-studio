@@ -37,6 +37,7 @@ export class AudioEngine {
   private active = new Map<string, ActiveVoice[]>();
   private previewVoice: PreviewVoice | null = null;
   private previewOffset = 0;
+  private previewGeneration = 0;
   private micStream?: MediaStream;
   private micNodes: Array<{ source: MediaStreamAudioSourceNode; gain: GainNode; context: AudioContext }> = [];
   private micConfigureGeneration = 0;
@@ -201,14 +202,19 @@ export class AudioEngine {
    * regular soundboard voices so it can be paused in place, restarted, and scrubbed.
    */
   async previewPlay(sound: SoundSlot, fromSec: number, rate: number) {
-    const buffer = await this.preload(sound);
+    // Stop any current preview and claim this generation, so a pause/stop/close (or a
+    // newer previewPlay) that happens while we await below cancels this stale start.
     this.stopPreviewSources();
+    const generation = this.previewGeneration;
+    const buffer = await this.preload(sound);
+    if (generation !== this.previewGeneration || this.disposed) return;
     const trimStart = Math.min(Math.max(0, sound.trimStartSec ?? 0), buffer.duration);
     const trimEnd = Math.min(Math.max(trimStart + 0.01, sound.trimEndSec ?? buffer.duration), buffer.duration);
     const safeRate = Math.max(0.0625, rate || 1);
     const offset = Math.min(Math.max(trimStart, fromSec), trimEnd);
     const remaining = Math.max(0.01, trimEnd - offset);
     await this.monitorContext.resume();
+    if (generation !== this.previewGeneration || this.disposed) return;
     const source = this.monitorContext.createBufferSource();
     const gain = this.monitorContext.createGain();
     source.buffer = buffer;
@@ -265,6 +271,7 @@ export class AudioEngine {
   }
 
   private stopPreviewSources() {
+    this.previewGeneration += 1;
     const voice = this.previewVoice;
     this.previewVoice = null;
     if (!voice) return;

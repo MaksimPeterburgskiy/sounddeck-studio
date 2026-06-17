@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import ffmpegArgs from "./ffmpegArgs.cjs";
 
-const { buildAtempoChain, buildCropArgs } = ffmpegArgs;
+const { buildAtempoChain, buildSpeedFilter, buildCropArgs } = ffmpegArgs;
 
 describe("buildAtempoChain", () => {
   it("returns no filters for unchanged speed", () => {
@@ -38,15 +38,31 @@ describe("buildAtempoChain", () => {
   });
 });
 
+describe("buildSpeedFilter", () => {
+  it("returns no filter for unchanged speed", () => {
+    expect(buildSpeedFilter({ rate: 1, sampleRate: 44100 })).toBe("");
+  });
+
+  it("uses asetrate (pitch-shifting, matching playbackRate) when the sample rate is known", () => {
+    expect(buildSpeedFilter({ rate: 1.5, sampleRate: 44100 })).toBe("asetrate=66150,aresample=44100");
+    expect(buildSpeedFilter({ rate: 3, sampleRate: 48000 })).toBe("asetrate=144000,aresample=48000");
+  });
+
+  it("falls back to the atempo chain when the sample rate is unknown", () => {
+    expect(buildSpeedFilter({ rate: 3, sampleRate: 0 })).toBe("atempo=2,atempo=1.5");
+    expect(buildSpeedFilter({ rate: 1.5 })).toBe("atempo=1.5");
+  });
+});
+
 describe("buildCropArgs", () => {
   it("builds an input-seek + duration cut without a filter at rate 1", () => {
-    const args = buildCropArgs({ input: "in.mp3", output: "out.mp3", startSec: 2, endSec: 5, rate: 1 });
+    const args = buildCropArgs({ input: "in.mp3", output: "out.mp3", startSec: 2, endSec: 5, rate: 1, sampleRate: 44100 });
     expect(args).toEqual(["-y", "-ss", "2.000000", "-t", "3.000000", "-i", "in.mp3", "-vn", "out.mp3"]);
   });
 
-  it("adds an atempo filter when the rate changes", () => {
-    const args = buildCropArgs({ input: "in.mp3", output: "out.mp3", startSec: 0, endSec: 4, rate: 3 });
+  it("adds the asetrate filter when the rate changes and the sample rate is known", () => {
+    const args = buildCropArgs({ input: "in.mp3", output: "out.mp3", startSec: 0, endSec: 4, rate: 3, sampleRate: 48000 });
     expect(args).toContain("-filter:a");
-    expect(args[args.indexOf("-filter:a") + 1]).toBe("atempo=2,atempo=1.5");
+    expect(args[args.indexOf("-filter:a") + 1]).toBe("asetrate=144000,aresample=48000");
   });
 });

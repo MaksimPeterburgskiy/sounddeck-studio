@@ -779,6 +779,7 @@ function App() {
                 engine={engineRef.current}
                 onChange={(patch) => updateSound(editingClipSound.id, patch)}
                 onClose={() => setEditingClipId("")}
+                mediaUsedElsewhere={(mediaPath) => library.boards.some((board) => board.sounds.some((candidate) => candidate.id !== editingClipSound.id && candidate.mediaPath === mediaPath))}
               />
             )}
           </div>
@@ -1348,11 +1349,12 @@ function SpeedInput({ value, min, max, onChange }: { value: number; min: number;
   );
 }
 
-function ClipEditor({ sound, engine, onChange, onClose }: {
+function ClipEditor({ sound, engine, onChange, onClose, mediaUsedElsewhere }: {
   sound: SoundSlot;
   engine: AudioEngine | null;
   onChange: (patch: Partial<SoundSlot>) => void;
   onClose: () => void;
+  mediaUsedElsewhere: (mediaPath: string) => boolean;
 }) {
   const [buffer, setBuffer] = useState<AudioBuffer | null>(null);
   const [loadError, setLoadError] = useState(false);
@@ -1519,21 +1521,23 @@ function ClipEditor({ sound, engine, onChange, onClose }: {
     setCropError("");
     const oldPath = sound.mediaPath;
     try {
-      const result = await window.sounddeck.cropMedia({ mediaPath: sound.mediaPath, ext: sound.ext, startSec: start, endSec: end, rate });
+      const result = await window.sounddeck.cropMedia({ mediaPath: sound.mediaPath, ext: sound.ext, startSec: start, endSec: end, rate, sampleRate: buffer?.sampleRate });
       if (!result.ok || !result.mediaPath) {
         setCropError(result.reason || "Could not cut clip.");
         setCropping(false);
         return;
       }
+      // Verify the new file actually decodes before we replace the original and delete it.
       engine.invalidate(sound.id);
-      let nextDuration: number | undefined;
-      let nextWaveform: number[] | undefined;
+      let decoded: AudioBuffer;
       try {
-        const decoded = await engine.preload({ ...sound, mediaPath: result.mediaPath, trimStartSec: 0, trimEndSec: undefined });
-        nextDuration = decoded.duration;
-        nextWaveform = makeWaveform(decoded);
+        decoded = await engine.preload({ ...sound, mediaPath: result.mediaPath, trimStartSec: 0, trimEndSec: undefined });
       } catch {
-        // Keep going even if we cannot recompute the waveform/duration.
+        engine.invalidate(sound.id);
+        await window.sounddeck.deleteMedia(result.mediaPath).catch(() => undefined);
+        setCropError("The cut file could not be read; your original clip was kept.");
+        setCropping(false);
+        return;
       }
       onChange({
         mediaPath: result.mediaPath,
@@ -1544,10 +1548,13 @@ function ClipEditor({ sound, engine, onChange, onClose }: {
         trimStartSec: 0,
         trimEndSec: undefined,
         playbackRate: 1,
-        duration: nextDuration,
-        waveform: nextWaveform
+        duration: decoded.duration,
+        waveform: makeWaveform(decoded)
       });
-      if (oldPath && oldPath !== result.mediaPath) await window.sounddeck.deleteMedia(oldPath).catch(() => undefined);
+      // Only remove the old file if no other slot still points at it (e.g. imported duplicates).
+      if (oldPath && oldPath !== result.mediaPath && !mediaUsedElsewhere(oldPath)) {
+        await window.sounddeck.deleteMedia(oldPath).catch(() => undefined);
+      }
       onClose();
     } catch (error) {
       setCropError(error instanceof Error ? error.message : "Could not cut clip.");

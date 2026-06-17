@@ -116,7 +116,7 @@ declare global {
       downloadMedia: (urls: string[]) => Promise<MediaImportResult[]>;
       readMedia: (mediaPath: string) => Promise<ArrayBuffer>;
       deleteMedia: (mediaPath: string) => Promise<{ ok: boolean; reason?: string }>;
-      cropMedia: (payload: { mediaPath: string; ext: string; startSec: number; endSec: number; rate: number }) => Promise<MediaCropResult>;
+      cropMedia: (payload: { mediaPath: string; ext: string; startSec: number; endSec: number; rate: number; sampleRate?: number }) => Promise<MediaCropResult>;
       saveRecording: (payload: { title: string; ext: string; bytes: ArrayBuffer }) => Promise<MediaImportResult>;
       registerHotkeys: (bindings: HotkeyBinding[]) => Promise<HotkeyResult[]>;
       setHotkeyCapture: (active: boolean) => Promise<{ ok: boolean }>;
