@@ -150,10 +150,34 @@ jobs:
           spctl --assess --verbose --type install release/*.pkg
           xcrun stapler validate release/*.pkg
 
-      - name: Upload macOS package to GitHub Release
+      - name: Upload macOS package and update artifacts to GitHub Release
         env:
           GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
-        run: gh release upload "${{ needs.version.outputs.tag }}" release/*.pkg --clobber
+        run: |
+          shopt -s nullglob
+          pkg_artifacts=(release/*.pkg)
+          zip_artifacts=(release/*.zip)
+          blockmap_artifacts=(release/*.zip.blockmap)
+
+          if (( ${#pkg_artifacts[@]} == 0 )); then
+            echo "No macOS pkg artifact found in release/."
+            exit 1
+          fi
+          if (( ${#zip_artifacts[@]} == 0 )); then
+            echo "No macOS zip updater artifact found in release/."
+            exit 1
+          fi
+          if [[ ! -f release/latest-mac.yml ]]; then
+            echo "No latest-mac.yml updater feed found in release/."
+            exit 1
+          fi
+
+          gh release upload "${{ needs.version.outputs.tag }}" \
+            "${pkg_artifacts[@]}" \
+            "${zip_artifacts[@]}" \
+            "${blockmap_artifacts[@]}" \
+            release/latest-mac.yml \
+            --clobber
 
   release-notes:
     needs: [version, windows-package, macos-package]
@@ -183,6 +207,8 @@ jobs:
             "| [SoundDeck-Studio-Setup-$version.exe](https://github.com/$repo/releases/download/$tag/SoundDeck-Studio-Setup-$version.exe) | **Recommended for Windows.** Installer with auto-update; sets up the VB-CABLE virtual mic if needed. |",
             "| [SoundDeck-Studio-$version.exe](https://github.com/$repo/releases/download/$tag/SoundDeck-Studio-$version.exe) | Windows portable. No installation, but no auto-update either. |",
             "| [SoundDeck Studio-$version.pkg](https://github.com/$repo/releases/download/$tag/SoundDeck%20Studio-$version.pkg) | macOS installer. Signed/notarized package with bundled BlackHole 2ch virtual audio driver. |",
+            "",
+            "> macOS auto-update metadata and zip artifacts are attached to the release for the app updater.",
             "",
             "> Windows builds are unsigned, so SmartScreen may warn on first run: *More info -> Run anyway*.",
             ""

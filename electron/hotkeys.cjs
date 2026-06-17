@@ -32,7 +32,7 @@ function electronAcceleratorFromTokens(tokens) {
   const modifiers = [];
   const keys = [];
   for (const token of [...new Set(tokens)]) {
-    if (token === "Ctrl") modifiers.push("CommandOrControl");
+    if (token === "Ctrl") modifiers.push("Control");
     else if (token === "Alt") modifiers.push("Alt");
     else if (token === "Shift") modifiers.push("Shift");
     else if (token === "Meta") modifiers.push(process.platform === "darwin" ? "Command" : "Super");
@@ -66,6 +66,7 @@ function electronAcceleratorFromTokens(tokens) {
 
 function createGlobalShortcutFallback(onTrigger) {
   let registered = [];
+  let suspended = false;
 
   function unregisterAll() {
     if (!globalShortcut) return;
@@ -85,7 +86,9 @@ function createGlobalShortcutFallback(onTrigger) {
       if (!accelerator) return { ...result, ok: false, reason: "advanced-hook-required-on-this-platform" };
       if (accelerators.has(accelerator)) return { ...result, ok: false, reason: "duplicate" };
       accelerators.add(accelerator);
-      const ok = globalShortcut.register(accelerator, () => onTrigger(result));
+      const ok = globalShortcut.register(accelerator, () => {
+        if (!suspended) onTrigger(result);
+      });
       if (!ok) return { ...result, ok: false, reason: "global-shortcut-registration-failed" };
       registered.push(accelerator);
       return { ...result, ok: true, reason: "" };
@@ -95,6 +98,9 @@ function createGlobalShortcutFallback(onTrigger) {
   return {
     register,
     unregisterAll,
+    setSuspended: (value) => {
+      suspended = Boolean(value);
+    },
     isAvailable: () => Boolean(globalShortcut)
   };
 }
@@ -189,7 +195,7 @@ function createHotkeyEngine({ onTrigger }) {
         const byAccelerator = new Map(fallbackResults.map((result) => [result.accelerator, result]));
         return results.map((result) => result.ok ? byAccelerator.get(result.accelerator) || result : result);
       },
-      setSuspended: () => {},
+      setSuspended: (value) => fallback.setSuspended(value),
       stop: () => fallback.unregisterAll(),
       getStatus: () => ({
         advancedHookAvailable: false,
@@ -291,6 +297,7 @@ function createHotkeyEngine({ onTrigger }) {
     // hotkeys don't fire mid-capture.
     setSuspended(value) {
       suspended = Boolean(value);
+      fallback.setSuspended(suspended);
       if (suspended) pending = null;
     },
     stop() {
