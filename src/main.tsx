@@ -1382,7 +1382,7 @@ function ClipEditor({ sound, engine, onChange, onClose }: {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
+      if (event.key === "Escape" && !cropping) {
         if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
         if (showDone) setShowDone(false);
         else onClose();
@@ -1390,7 +1390,7 @@ function ClipEditor({ sound, engine, onChange, onClose }: {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onClose, showDone]);
+  }, [onClose, showDone, cropping]);
 
   const duration = buffer?.duration ?? sound.duration ?? 0;
   const peaks = useMemo(() => buffer ? makeWaveform(buffer, 120) : sound.waveform || [], [buffer, sound.waveform]);

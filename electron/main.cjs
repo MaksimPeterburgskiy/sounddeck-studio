@@ -675,6 +675,9 @@ ipcMain.handle("media:crop", async (_event, payload) => {
     return { ok: false, reason: "ffmpeg-unavailable" };
   }
   const ext = (payload?.ext || path.extname(sourcePath) || ".wav").toLowerCase();
+  if (!allowedAudioExtensions().has(ext)) {
+    return { ok: false, reason: "unsupported-extension" };
+  }
   const id = crypto.randomUUID();
   const storedName = `${id}${ext}`;
   const dest = path.join(mediaRoot(), storedName);
