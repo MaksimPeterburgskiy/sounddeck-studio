@@ -303,14 +303,14 @@ function runYtDlp(args, cwd) {
         ...bundledCandidates,
         { command: "yt-dlp.exe", args: ytDlpArgs },
         { command: "yt-dlp", args: ytDlpArgs },
-        { command: "py", args: ["-m", "yt_dlp", ...args] },
-        { command: "python", args: ["-m", "yt_dlp", ...args] }
+        { command: "py", args: ["-m", "yt_dlp", ...ytDlpArgs] },
+        { command: "python", args: ["-m", "yt_dlp", ...ytDlpArgs] }
       ]
     : [
         ...bundledCandidates,
         { command: "yt-dlp", args: ytDlpArgs },
-        { command: "python3", args: ["-m", "yt_dlp", ...args] },
-        { command: "python", args: ["-m", "yt_dlp", ...args] }
+        { command: "python3", args: ["-m", "yt_dlp", ...ytDlpArgs] },
+        { command: "python", args: ["-m", "yt_dlp", ...ytDlpArgs] }
       ];
 
   return new Promise((resolve, reject) => {
