@@ -105,4 +105,5 @@ function ensureMacosLocalEnv() {
 
 ensureMacosLocalEnv();
 run(["pnpm", "install", "--frozen-lockfile"]);
+run(["pnpm", "run", "fix:macos-dev-signatures"]);
 run(["pnpm", "run", "build"]);

@@ -17,6 +17,7 @@
     "dist:mac:unsigned": "node scripts/dist-mac.mjs --unsigned",
     "fetch:yt-dlp:mac": "node scripts/fetch-ytdlp-mac.mjs",
     "build:blackhole": "node scripts/build-blackhole.mjs",
+    "fix:macos-dev-signatures": "node scripts/codesign-macos-dev-deps.mjs",
     "test": "vitest run"
   },
   "build": {

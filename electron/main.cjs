@@ -447,6 +447,14 @@ function trayIconPath() {
   return isDev ? devPath : path.join(process.resourcesPath, iconFile);
 }
 
+function createTrayIcon() {
+  const icon = nativeImage.createFromPath(trayIconPath());
+  if (icon.isEmpty() || process.platform === "win32") return icon;
+
+  const traySize = process.platform === "darwin" ? 18 : 24;
+  return icon.resize({ width: traySize, height: traySize, quality: "best" });
+}
+
 function showMainWindow() {
   if (!mainWindow) return;
   if (mainWindow.isMinimized()) mainWindow.restore();
@@ -455,7 +463,7 @@ function showMainWindow() {
 }
 
 function createTray() {
-  const icon = nativeImage.createFromPath(trayIconPath());
+  const icon = createTrayIcon();
   tray = new Tray(icon);
   tray.setToolTip("SoundDeck Studio");
   tray.setContextMenu(Menu.buildFromTemplate([
