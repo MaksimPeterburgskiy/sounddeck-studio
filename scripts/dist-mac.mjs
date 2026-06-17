@@ -46,6 +46,7 @@ const electronBuilderArgs = unsigned
 const steps = [
   ["pnpm", ["run", "clean:release"]],
   ["node", ["scripts/prepare-mac-assets.mjs"]],
+  ["node", ["scripts/fetch-ytdlp-mac.mjs"]],
   ["node", ["scripts/build-blackhole.mjs"]],
   ["pnpm", ["run", "build"]],
   ["pnpm", electronBuilderArgs]
