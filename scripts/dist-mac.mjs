@@ -40,8 +40,8 @@ const env = {
 };
 
 const electronBuilderArgs = unsigned
-  ? ["exec", "electron-builder", "--mac", "dir", "--publish", "never", "-c.mac.identity=null", "-c.mac.notarize=false"]
-  : ["exec", "electron-builder", "--mac", "--publish", "never"];
+  ? ["exec", "electron-builder", "--mac", "dir", "--universal", "--publish", "never", "-c.mac.identity=null", "-c.mac.notarize=false"]
+  : ["exec", "electron-builder", "--mac", "--universal", "--publish", "never"];
 
 const steps = [
   ["pnpm", ["run", "clean:release"]],
@@ -105,16 +105,17 @@ function selectNotarizationEnv(values, skip) {
       APPLE_TEAM_ID: values.APPLE_TEAM_ID
     };
   }
-  if (values.APPLE_KEYCHAIN_PROFILE && values.APPLE_KEYCHAIN) {
-    return {
-      APPLE_KEYCHAIN_PROFILE: values.APPLE_KEYCHAIN_PROFILE,
-      APPLE_KEYCHAIN: values.APPLE_KEYCHAIN
+  if (values.APPLE_KEYCHAIN_PROFILE) {
+    const result = {
+      APPLE_KEYCHAIN_PROFILE: values.APPLE_KEYCHAIN_PROFILE
     };
+    if (values.APPLE_KEYCHAIN) result.APPLE_KEYCHAIN = values.APPLE_KEYCHAIN;
+    return result;
   }
   throw new Error([
     "Missing macOS notarization credentials.",
     "Set APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, and APPLE_TEAM_ID,",
-    "or set APPLE_KEYCHAIN_PROFILE and APPLE_KEYCHAIN in .env.macos.local."
+    "or set APPLE_KEYCHAIN_PROFILE in .env.macos.local."
   ].join(" "));
 }
 

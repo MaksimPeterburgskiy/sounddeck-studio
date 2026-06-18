@@ -99,6 +99,9 @@ jobs:
       - name: Generate installer artwork
         run: node scripts/make-installer-art.mjs
 
+      - name: Build renderer
+        run: pnpm run build
+
       - name: Build and publish Windows installers
         run: pnpm exec electron-builder --win --publish always
         env:

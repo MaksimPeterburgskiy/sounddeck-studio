@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { cp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -29,7 +29,7 @@ if (!existsSync(driverSource)) {
 await rm(packageDir, { recursive: true, force: true });
 await mkdir(packageRoot, { recursive: true });
 await mkdir(scriptsDir, { recursive: true });
-await cp(driverSource, path.join(packageRoot, "BlackHole2ch.driver"), { recursive: true, force: true });
+await run("ditto", [driverSource, path.join(packageRoot, "BlackHole2ch.driver")]);
 
 await writeFile(
   path.join(scriptsDir, "postinstall"),

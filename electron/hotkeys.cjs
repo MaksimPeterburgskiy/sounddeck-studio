@@ -289,7 +289,19 @@ function createHotkeyEngine({ onTrigger }) {
         const fallbackResults = fallback.register(results.filter((result) => result.ok));
         const byAccelerator = new Map(fallbackResults.map((result) => [result.accelerator, result]));
         bindings = new Map();
-        return results.map((result) => (result.ok ? byAccelerator.get(result.accelerator) || { ...result, ok: false, reason: lastFailureReason || "hotkey-engine-start-failed" } : result));
+        return results.map((result) => {
+          if (!result.ok) return result;
+          const fallbackResult = byAccelerator.get(result.accelerator);
+          if (!fallbackResult) return { ...result, ok: false, reason: lastFailureReason || "hotkey-engine-start-failed" };
+          if (
+            !fallbackResult.ok &&
+            fallbackResult.reason === "advanced-hook-required-on-this-platform" &&
+            lastFailureReason
+          ) {
+            return { ...fallbackResult, reason: lastFailureReason };
+          }
+          return fallbackResult;
+        });
       }
       return results;
     },

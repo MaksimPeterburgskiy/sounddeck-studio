@@ -61,7 +61,7 @@ async function buildFromSource() {
     "-target", "BlackHole",
     `CONFIGURATION_BUILD_DIR=${buildDir}`,
     "PRODUCT_BUNDLE_IDENTIFIER=audio.existential.BlackHole2ch",
-    "GCC_PREPROCESSOR_DEFINITIONS=$GCC_PREPROCESSOR_DEFINITIONS kNumber_Of_Channels=2 kPlugIn_BundleID=\\\"audio.existential.BlackHole2ch\\\" kDriver_Name=\\\"BlackHole\\\"",
+    "GCC_PREPROCESSOR_DEFINITIONS=$(inherited) kNumber_Of_Channels=2 kPlugIn_BundleID=\\\"audio.existential.BlackHole2ch\\\" kDriver_Name=\\\"BlackHole\\\"",
     "CODE_SIGNING_ALLOWED=NO"
   ], { cwd: sourcePath });
 

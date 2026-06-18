@@ -26,6 +26,7 @@
     "directories": {
       "output": "release"
     },
+    "afterPack": "scripts/after-pack.cjs",
     "files": [
       "dist/**",
       "electron/**",
@@ -54,6 +55,7 @@
     },
     "mac": {
       "icon": "build/icon.icns",
+      "artifactName": "${productName}-${version}.${ext}",
       "category": "public.app-category.music",
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
@@ -61,6 +63,7 @@
       "notarize": true,
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
+      "x64ArchFiles": "**/node_modules/{cue-sdk,uiohook-napi}/prebuilds/**/*.node",
       "target": [
         "pkg",
         "zip"

@@ -104,7 +104,9 @@ function App() {
   }, [library, draggingSoundId]);
 
   const virtualAudioCandidates = useMemo(() => findVirtualAudioCandidates(devices, platform), [devices, platform]);
-  const recommendedVirtualAudio = useMemo(() => virtualAudioCandidates.find((candidate) => candidate.recommended) || virtualAudioCandidates[0] || null, [virtualAudioCandidates]);
+  const recommendedVirtualAudio = useMemo(() => virtualAudioCandidates.find((candidate) => candidate.recommended) || null, [virtualAudioCandidates]);
+  const hasLibrary = Boolean(library);
+  const { virtualOutputMode, virtualOutputDeviceId, virtualBackend } = library?.settings || {};
 
   useEffect(() => {
     if (!library) return;
@@ -116,24 +118,23 @@ function App() {
   }, [library?.settings]);
 
   useEffect(() => {
-    if (!library || !recommendedVirtualAudio) return;
-    const settings = library.settings;
-    if (settings.virtualOutputMode !== "managed") return;
-    if (settings.virtualOutputDeviceId === recommendedVirtualAudio.outputDeviceId && settings.virtualBackend === recommendedVirtualAudio.backend) return;
+    if (!hasLibrary || !recommendedVirtualAudio) return;
+    if (virtualOutputMode !== "managed") return;
+    if (virtualOutputDeviceId === recommendedVirtualAudio.outputDeviceId && virtualBackend === recommendedVirtualAudio.backend) return;
     changeSettings({
       virtualOutputDeviceId: recommendedVirtualAudio.outputDeviceId,
       virtualBackend: recommendedVirtualAudio.backend as VirtualBackend
     });
     setMessage(`Selected ${recommendedVirtualAudio.outputLabel} for the virtual mic route`);
-  }, [library, recommendedVirtualAudio?.outputDeviceId, recommendedVirtualAudio?.backend]);
+  }, [hasLibrary, virtualOutputMode, virtualOutputDeviceId, virtualBackend, recommendedVirtualAudio]);
 
   useEffect(() => {
-    if (!library || platform === "unknown" || recommendedVirtualAudio) return;
-    if (library.settings.virtualOutputMode !== "managed") return;
+    if (!hasLibrary || platform === "unknown" || recommendedVirtualAudio) return;
+    if (virtualOutputMode !== "managed") return;
     const backend = managedBackendForPlatform(platform);
-    if (library.settings.virtualBackend === backend) return;
+    if (virtualBackend === backend) return;
     changeSettings({ virtualBackend: backend });
-  }, [library, platform, recommendedVirtualAudio]);
+  }, [hasLibrary, virtualOutputMode, virtualBackend, platform, recommendedVirtualAudio]);
 
   const activeBoard = useMemo(() => {
     if (!library) return null;
