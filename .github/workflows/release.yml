@@ -209,10 +209,12 @@ jobs:
             "| File | Notes |",
             "| --- | --- |",
             "| [SoundDeck-Studio-Setup-$version.exe](https://github.com/$repo/releases/download/$tag/SoundDeck-Studio-Setup-$version.exe) | **Recommended for Windows.** Installer with auto-update; sets up the VB-CABLE virtual mic if needed. |",
+            "| [SoundDeck Studio-$version.pkg](https://github.com/$repo/releases/download/$tag/SoundDeck%20Studio-$version.pkg) | **Recommended for macOS.** Signed and notarized package with auto-update; installs SoundDeck Studio and the bundled BlackHole 2ch virtual audio driver. |",
             "| [SoundDeck-Studio-$version.exe](https://github.com/$repo/releases/download/$tag/SoundDeck-Studio-$version.exe) | Windows portable. No installation, but no auto-update either. |",
-            "| [SoundDeck Studio-$version.pkg](https://github.com/$repo/releases/download/$tag/SoundDeck%20Studio-$version.pkg) | macOS installer. Signed/notarized package with bundled BlackHole 2ch virtual audio driver. |",
             "",
             "> macOS auto-update metadata and zip artifacts are attached to the release for the app updater.",
+            "",
+            "> On macOS, microphone passthrough, recording, and global hotkeys may require approving SoundDeck Studio in System Settings -> Privacy & Security.",
             "",
             "> Windows builds are unsigned, so SmartScreen may warn on first run: *More info -> Run anyway*.",
             ""

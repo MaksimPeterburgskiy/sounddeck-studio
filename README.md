@@ -4,7 +4,7 @@
 
 # SoundDeck Studio
 
-**Free, open-source soundboard for Windows with global hotkeys, virtual mic routing, and Corsair G-keys.**
+**Free, open-source soundboard for Windows and macOS with global hotkeys, virtual mic routing, and hardware keys.**
 
 [![Latest release](https://img.shields.io/github/v/release/MaksimPeterburgskiy/sounddeck-studio?label=download&color=1db7a6)](https://github.com/MaksimPeterburgskiy/sounddeck-studio/releases/latest)
 [![CI](https://github.com/MaksimPeterburgskiy/sounddeck-studio/actions/workflows/ci.yml/badge.svg)](https://github.com/MaksimPeterburgskiy/sounddeck-studio/actions/workflows/ci.yml)
@@ -21,13 +21,16 @@ Play sounds into Discord, OBS, or any game as if they came from your microphone,
 
 ## Download
 
-**[Download the latest release](https://github.com/MaksimPeterburgskiy/sounddeck-studio/releases/latest)** and grab the `SoundDeck-Studio-Setup-x.y.z.exe` installer.
+**[Download the latest release](https://github.com/MaksimPeterburgskiy/sounddeck-studio/releases/latest)** and choose the installer for your platform.
 
-The installer sets up the [VB-CABLE](https://vb-audio.com/Cable/) virtual audio driver automatically (skipped if you already have it), so the virtual microphone works out of the box. A portable `.exe` is also available if you prefer no installation, but the portable build does not auto-update.
+- **Windows:** download `SoundDeck-Studio-Setup-x.y.z.exe`. The installer sets up the [VB-CABLE](https://vb-audio.com/Cable/) virtual audio driver automatically (skipped if you already have it), so the virtual microphone works out of the box. A portable `.exe` is also available if you prefer no installation, but the portable build does not auto-update.
+- **macOS:** download `SoundDeck Studio-x.y.z.pkg`. The package is signed and notarized, installs SoundDeck Studio into `/Applications`, and installs the bundled BlackHole 2ch audio driver used for virtual microphone routing.
 
 The app updates itself: when a new release is published, the installed app downloads it in the background and applies it on restart.
 
 > **Windows SmartScreen:** builds are currently unsigned, so the first install may show a SmartScreen warning. Click *More info -> Run anyway*.
+
+> **macOS permissions:** microphone passthrough, recording, and global hotkeys may require approving SoundDeck Studio in **System Settings -> Privacy & Security**.
 
 ## Features
 
@@ -58,15 +61,15 @@ The app updates itself: when a new release is published, the installed app downl
 
 ## Quick start: virtual mic in Discord/OBS
 
-1. Install SoundDeck Studio (the installer adds VB-CABLE if needed; reboot if the driver asks).
-2. Open **Devices** and set **Virtual cable playback device** to `CABLE Input`.
+1. Install SoundDeck Studio. Windows installs VB-CABLE if needed; macOS installs the bundled BlackHole 2ch driver.
+2. Open **Devices** and set **Virtual cable playback device** to `CABLE Input` on Windows or `BlackHole 2ch` on macOS.
 3. Enable **Soundboard to virtual mic** (and **Mic passthrough** if you want your voice mixed in).
-4. In Discord/OBS/your game, set the input device to `CABLE Output`.
+4. In Discord/OBS/your game, set the input device to `CABLE Output` on Windows or `BlackHole 2ch` on macOS.
 5. Keep **Monitor soundboard** pointed at your real headphones so you hear what you play.
 
 ## Development
 
-Requires Windows 10/11, Node.js 22.12+, and pnpm 11.6+ via Corepack.
+Requires Windows 10/11 or macOS, Node.js 22.12+, and pnpm 11.6+ via Corepack.
 
 ```bash
 git clone https://github.com/MaksimPeterburgskiy/sounddeck-studio.git
@@ -81,7 +84,9 @@ pnpm start          # dev server + Electron with hot reload
 | `pnpm start` | Run the app in development (Vite + Electron) |
 | `pnpm test` | Run unit tests (Vitest) |
 | `pnpm run build` | Type-check and bundle the renderer |
-| `pnpm run dist` | Build the Windows installer + portable exe into `release/` |
+| `pnpm run dist:win` | Build the Windows installer + portable exe into `release/` |
+| `pnpm run dist:mac` | Build the signed/notarized macOS package and updater artifacts into `release/` |
+| `pnpm run dist:mac:unsigned` | Build an unsigned macOS smoke-test app artifact |
 
 Tech stack: Electron, React 19, TypeScript, Vite, Web Audio API, and electron-builder.
 
@@ -89,8 +94,8 @@ Tech stack: Electron, React 19, TypeScript, Vite, Web Audio API, and electron-bu
 electron/   Main process - window, tray, global hotkeys, library storage, Corsair, auto-update
 src/        Renderer - React UI
 src/lib/    Pure logic - board model, audio engine, hotkey parsing, waveforms (unit-tested)
-build/      Packaging resources - icon, NSIS installer script
-scripts/    Build helpers (VB-CABLE is downloaded at package time, not committed)
+build/      Packaging resources - icons, NSIS script, generated macOS package inputs
+scripts/    Build helpers - VB-CABLE download, BlackHole build/package steps, release utilities
 ```
 
 ## Contributing
@@ -102,4 +107,3 @@ Releases are cut from the `prod` branch by maintainers via the [Release workflow
 ## License
 
 [MIT](LICENSE) © Maksim Peterburgskiy
-

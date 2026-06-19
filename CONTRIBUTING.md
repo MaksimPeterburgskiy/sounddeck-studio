@@ -4,7 +4,7 @@ Thanks for your interest in contributing! This document explains how the project
 
 ## Development setup
 
-Requirements: **Windows 10/11**, **Node.js 22.12+**, and **pnpm 11.6+** via Corepack.
+Requirements: **Windows 10/11 or macOS**, **Node.js 22.12+**, and **pnpm 11.6+** via Corepack.
 
 ```bash
 git clone https://github.com/MaksimPeterburgskiy/sounddeck-studio.git
@@ -20,9 +20,11 @@ Other useful commands:
 | --- | --- |
 | `pnpm test` | Run the Vitest unit tests |
 | `pnpm run build` | Type-check (tsc) and bundle the renderer |
-| `pnpm run dist` | Build the Windows installer + portable exe into `release/` (downloads VB-CABLE on first run) |
+| `pnpm run dist:win` | Build the Windows installer + portable exe into `release/` (downloads VB-CABLE on first run) |
+| `pnpm run dist:mac` | Build the signed/notarized macOS package and updater artifacts into `release/` |
+| `pnpm run dist:mac:unsigned` | Build an unsigned macOS smoke-test app artifact |
 
-> **Note:** Some features (virtual mic routing, the NSIS installer's VB-CABLE setup, Corsair G-keys) need real hardware/drivers and can only be fully tested on Windows.
+> **Note:** Some features need real OS services or drivers and can only be fully tested on their target platform: VB-CABLE and NSIS packaging on Windows, BlackHole and notarized PKG packaging on macOS, and hardware key integrations where the hardware is available.
 
 ## Branch model
 
@@ -45,10 +47,10 @@ All PRs require maintainer review before merging. PRs are squash-merged, so your
 electron/   Main process (window, tray, hotkeys, library storage, Corsair, auto-update)
 src/        Renderer (React + TypeScript)
 src/lib/    Pure logic: board model, audio engine, hotkeys, waveforms (unit-tested)
-build/      Packaging resources (icon, NSIS script; VB-CABLE is fetched at build time)
-scripts/    Build helper scripts
+build/      Packaging resources (icons, NSIS script, generated macOS package inputs)
+scripts/    Build helper scripts for Windows and macOS packaging
 ```
 
 ## Reporting bugs
 
-Use the [bug report template](https://github.com/MaksimPeterburgskiy/sounddeck-studio/issues/new/choose). Include your Windows version, app version, and steps to reproduce. For security issues, please see [SECURITY.md](SECURITY.md) instead of opening a public issue.
+Use the [bug report template](https://github.com/MaksimPeterburgskiy/sounddeck-studio/issues/new/choose). Include your operating system, app version, and steps to reproduce. For security issues, please see [SECURITY.md](SECURITY.md) instead of opening a public issue.

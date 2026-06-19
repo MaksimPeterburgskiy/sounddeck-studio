@@ -27,17 +27,17 @@ body:
     validations:
       required: true
   - type: input
-    id: windows-version
+    id: operating-system
     attributes:
-      label: Windows version
-      placeholder: e.g. Windows 11 24H2
+      label: Operating system
+      placeholder: e.g. Windows 11 24H2, macOS 15.5 on Apple silicon
     validations:
       required: true
   - type: textarea
     id: audio-setup
     attributes:
       label: Audio setup (if relevant)
-      description: Output device, microphone, whether VB-CABLE is installed, Discord/OBS/etc. in use.
+      description: Output device, microphone, whether VB-CABLE or BlackHole 2ch is installed, Discord/OBS/etc. in use.
   - type: textarea
     id: logs
     attributes:
