@@ -9,7 +9,7 @@
 [![Latest release](https://img.shields.io/github/v/release/MaksimPeterburgskiy/sounddeck-studio?label=download&color=1db7a6)](https://github.com/MaksimPeterburgskiy/sounddeck-studio/releases/latest)
 [![CI](https://github.com/MaksimPeterburgskiy/sounddeck-studio/actions/workflows/ci.yml/badge.svg)](https://github.com/MaksimPeterburgskiy/sounddeck-studio/actions/workflows/ci.yml)
 [![Latest downloads](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FMaksimPeterburgskiy%2Fsounddeck-studio%2Fmain%2Fdocs%2Fdownloads-badge.json)](https://github.com/MaksimPeterburgskiy/sounddeck-studio/releases/latest)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License: GPLv3](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
 
 Play sounds into Discord, OBS, or any game as if they came from your microphone, with your boards, your hotkeys, and no subscription.
 
@@ -106,4 +106,4 @@ Releases are cut from the `prod` branch by maintainers via the [Release workflow
 
 ## License
 
-[MIT](LICENSE) © Maksim Peterburgskiy
+[GNU GPL v3](LICENSE) © Maksim Peterburgskiy
