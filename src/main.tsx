@@ -740,15 +740,15 @@ function App() {
       <section className="workspace">
         <header className="topbar">
           {view === "devices" || view === "hotkeys" ? (
-            <div>
+            <div className="topbarTitleBlock">
               <div className="boardTitle"><h1>{view === "devices" ? "Devices" : "Hotkeys"}</h1></div>
-              <p>Global settings · applies to every board · {message}</p>
+              <p className="topbarMeta">Global settings · applies to every board · {message}</p>
             </div>
           ) : (
             <>
-              <div>
+              <div className="topbarTitleBlock">
                 <BoardTitle key={activeBoard.id} name={activeBoard.name} onRename={(name) => updateBoard(activeBoard.id, { name })} />
-                <p>{activeBoard.sounds.length} sounds · {message}</p>
+                <p className="topbarMeta">{activeBoard.sounds.length} sounds · {message}</p>
               </div>
               {view === "board" && (
                 <div className="boardHotkeyControl" title="Global hotkey that switches to this board">
