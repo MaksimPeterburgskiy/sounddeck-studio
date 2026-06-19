@@ -38,6 +38,8 @@ await writeFile(outFile, `${JSON.stringify(badge, null, 2)}\n`);
 console.log(`Counted ${totalDownloads} downloads across ${appAssets.length} installer assets on ${release.tag_name}.`);
 
 function isAppDownload(name) {
+  if (typeof name !== "string") return false;
+
   const isWindowsInstaller = name.startsWith("SoundDeck-Studio") && name.endsWith(".exe");
   const isMacInstaller = name.startsWith("SoundDeck Studio") && name.endsWith(".pkg");
 
