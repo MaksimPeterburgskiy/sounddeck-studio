@@ -182,6 +182,31 @@ jobs:
             exit 1
           fi
 
+          sanitize_artifact_names() {
+            local artifact
+            local base
+            local dir
+            local sanitized
+
+            for artifact in "$@"; do
+              base="$(basename "$artifact")"
+              dir="$(dirname "$artifact")"
+              sanitized="${base// /.}"
+              if [[ "$base" != "$sanitized" ]]; then
+                mv "$artifact" "$dir/$sanitized"
+              fi
+            done
+          }
+
+          sanitize_artifact_names "${pkg_artifacts[@]}" "${zip_artifacts[@]}" "${blockmap_artifacts[@]}"
+
+          pkg_artifacts=(release/*.pkg)
+          zip_artifacts=(release/*.zip)
+          blockmap_artifacts=(release/*.zip.blockmap)
+
+          mac_zip_name="$(basename "${zip_artifacts[0]}")"
+          node -e 'const fs = require("fs"); const file = "release/latest-mac.yml"; const zip = process.argv[1]; const feed = fs.readFileSync(file, "utf8").replace(/url: .+\.zip/g, `url: ${zip}`).replace(/path: .+\.zip/g, `path: ${zip}`); fs.writeFileSync(file, feed);' "$mac_zip_name"
+
           gh release upload "${{ needs.version.outputs.tag }}" \
             "${pkg_artifacts[@]}" \
             "${zip_artifacts[@]}" \
@@ -206,6 +231,20 @@ jobs:
           $version = "${{ needs.version.outputs.version }}"
           $tag = "${{ needs.version.outputs.tag }}"
           $prev = git describe --tags --abbrev=0 "$tag^" 2>$null
+          $release = gh release view $tag --repo $repo --json assets | ConvertFrom-Json
+          $assetNames = @($release.assets | ForEach-Object { $_.name })
+          $windowsInstaller = $assetNames | Where-Object { $_ -eq "SoundDeck-Studio-Setup-$version.exe" } | Select-Object -First 1
+          $windowsPortable = $assetNames | Where-Object { $_ -eq "SoundDeck-Studio-$version.exe" } | Select-Object -First 1
+          $macInstaller = $assetNames | Where-Object { $_ -like "SoundDeck*.pkg" } | Select-Object -First 1
+
+          if (-not $windowsInstaller) { throw "Could not find Windows installer asset for $tag." }
+          if (-not $windowsPortable) { throw "Could not find Windows portable asset for $tag." }
+          if (-not $macInstaller) { throw "Could not find macOS pkg asset for $tag." }
+
+          function AssetUrl($assetName) {
+            $encoded = [System.Uri]::EscapeDataString($assetName)
+            "https://github.com/$repo/releases/download/$tag/$encoded"
+          }
 
           $lines = @(
             "## SoundDeck Studio $version",
@@ -214,9 +253,9 @@ jobs:
             "",
             "| File | Notes |",
             "| --- | --- |",
-            "| [SoundDeck-Studio-Setup-$version.exe](https://github.com/$repo/releases/download/$tag/SoundDeck-Studio-Setup-$version.exe) | **Recommended for Windows.** Installer with auto-update; sets up the VB-CABLE virtual mic if needed. |",
-            "| [SoundDeck Studio-$version.pkg](https://github.com/$repo/releases/download/$tag/SoundDeck%20Studio-$version.pkg) | **Recommended for macOS.** Signed and notarized package with auto-update; installs SoundDeck Studio and the bundled BlackHole 2ch virtual audio driver. |",
-            "| [SoundDeck-Studio-$version.exe](https://github.com/$repo/releases/download/$tag/SoundDeck-Studio-$version.exe) | Windows portable. No installation, but no auto-update either. |",
+            "| [$windowsInstaller]($(AssetUrl $windowsInstaller)) | **Recommended for Windows.** Installer with auto-update; sets up the VB-CABLE virtual mic if needed. |",
+            "| [$macInstaller]($(AssetUrl $macInstaller)) | **Recommended for macOS.** Signed and notarized package with auto-update; installs SoundDeck Studio and the bundled BlackHole 2ch virtual audio driver. |",
+            "| [$windowsPortable]($(AssetUrl $windowsPortable)) | Windows portable. No installation, but no auto-update either. |",
             "",
             "> macOS auto-update metadata and zip artifacts are attached to the release for the app updater.",
             "",
