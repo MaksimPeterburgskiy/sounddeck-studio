@@ -25,7 +25,9 @@ const flattenedPath = path.join(tempRoot, "patched.pkg");
 const backupPath = path.join(tempRoot, "original.pkg");
 
 try {
-  await run("pkgutil", ["--expand-full", pkgPath, expandedDir]);
+  // Only expand the product archive wrapper. --expand-full extracts component
+  // payloads too, and re-flattening them can corrupt macOS framework symlinks.
+  await run("pkgutil", ["--expand", pkgPath, expandedDir]);
   const distributionPath = path.join(expandedDir, "Distribution");
   const originalDistribution = await readFile(distributionPath, "utf8");
   const patchedDistribution = forceSingleSystemDestination(originalDistribution);
