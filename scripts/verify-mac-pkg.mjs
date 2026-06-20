@@ -52,6 +52,10 @@ async function run(command, args) {
 
 async function verifyAppPayload(appPath) {
   await assertSymlink(
+    path.join(appPath, "Contents/Frameworks/Electron Framework.framework/Electron Framework"),
+    "Electron Framework.framework/Electron Framework must remain a symlink."
+  );
+  await assertSymlink(
     path.join(appPath, "Contents/Frameworks/Electron Framework.framework/Resources"),
     "Electron Framework.framework/Resources must remain a symlink."
   );
@@ -64,9 +68,16 @@ async function verifyAppPayload(appPath) {
 }
 
 async function assertSymlink(filePath, message) {
-  const stats = await lstat(filePath);
-  if (!stats.isSymbolicLink()) {
-    throw new Error(`${message} Found ${filePath} as a real filesystem entry.`);
+  try {
+    const stats = await lstat(filePath);
+    if (!stats.isSymbolicLink()) {
+      throw new Error(`${message} Found ${filePath} as a real filesystem entry.`);
+    }
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      throw new Error(`${message} File or directory does not exist at ${filePath}`);
+    }
+    throw error;
   }
 }
 
