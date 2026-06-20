@@ -6,8 +6,12 @@ const path = require("node:path");
 const { pipeline } = require("node:stream/promises");
 const { createGunzip } = require("node:zlib");
 
-const ffmpegRelease = process.env.FFMPEG_BINARY_RELEASE || "b6.0";
-const ffmpegBaseUrl = process.env.FFMPEG_BINARIES_URL || "https://github.com/eugeneware/ffmpeg-static/releases/download";
+const ffmpegPackage = require("ffmpeg-static/package.json");
+const ffmpegPackageConfig = ffmpegPackage["ffmpeg-static"] || {};
+const ffmpegReleaseEnvVar = ffmpegPackageConfig["binary-release-tag-env-var"] || "FFMPEG_BINARY_RELEASE";
+const ffmpegBaseUrlEnvVar = ffmpegPackageConfig["binaries-url-env-var"] || "FFMPEG_BINARIES_URL";
+const ffmpegRelease = process.env[ffmpegReleaseEnvVar] || ffmpegPackageConfig["binary-release-tag"] || "b6.1.1";
+const ffmpegBaseUrl = process.env[ffmpegBaseUrlEnvVar] || "https://github.com/eugeneware/ffmpeg-static/releases/download";
 
 exports.default = async function afterPack(context) {
   if (context.electronPlatformName !== "darwin") return;
