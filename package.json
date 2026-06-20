@@ -59,7 +59,6 @@
       "category": "public.app-category.music",
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
-      "identity": "Maksim Peterburgskiy (7WX3FK3V9U)",
       "notarize": true,
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
@@ -98,8 +97,7 @@
       "hasStrictIdentifier": true,
       "installLocation": "/Applications",
       "isRelocatable": false,
-      "scripts": null,
-      "identity": "Maksim Peterburgskiy (7WX3FK3V9U)"
+      "scripts": null
     },
     "nsis": {
       "oneClick": false,

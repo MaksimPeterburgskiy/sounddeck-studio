@@ -1,11 +1,13 @@
 import { execFile } from "node:child_process";
 import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 const root = process.cwd();
+applyLocalEnv(readEnvFile(path.join(root, ".env.macos.local")));
 const blackholeDir = path.join(root, "build", "blackhole");
 const driverDest = path.join(blackholeDir, "BlackHole2ch.driver");
 const noticeDest = path.join(blackholeDir, "NOTICE.txt");
@@ -17,9 +19,7 @@ const suppliedDriver = process.env.BLACKHOLE_DRIVER_PATH ? path.resolve(process.
 const sourcePath = process.env.BLACKHOLE_SOURCE_PATH
   ? path.resolve(process.env.BLACKHOLE_SOURCE_PATH)
   : path.join(root, "tmp", "blackhole-src");
-const signingIdentity = process.env.BLACKHOLE_CODESIGN_IDENTITY ||
-  process.env.CSC_NAME ||
-  "Developer ID Application: Maksim Peterburgskiy (7WX3FK3V9U)";
+const signingIdentity = process.env.BLACKHOLE_CODESIGN_IDENTITY || process.env.CSC_NAME;
 
 async function run(command, args, options = {}) {
   try {
@@ -101,6 +101,9 @@ await rm(driverDest, { recursive: true, force: true });
 await cp(sourceDriver, driverDest, { recursive: true, force: true });
 
 if (process.platform === "darwin") {
+  if (!signingIdentity) {
+    throw new Error("Set BLACKHOLE_CODESIGN_IDENTITY or CSC_NAME before signing the BlackHole driver.");
+  }
   await run("codesign", ["--force", "--deep", "--options", "runtime", "--sign", signingIdentity, driverDest]);
 }
 
@@ -130,3 +133,35 @@ await writeFile(
 );
 
 console.log(`Prepared ${path.relative(root, driverDest)}, ${path.relative(root, noticeDest)}, and ${path.relative(root, metadataDest)}`);
+
+function readEnvFile(filePath) {
+  if (!existsSync(filePath)) return {};
+  const result = {};
+  const content = readFileSync(filePath, "utf8");
+  for (const line of content.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const match = trimmed.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+    if (!match) continue;
+    const [, key, rawValue] = match;
+    result[key] = expandHome(unquote(rawValue.trim()));
+  }
+  return result;
+}
+
+function applyLocalEnv(values) {
+  for (const [key, value] of Object.entries(values)) {
+    if (!process.env[key]) process.env[key] = value;
+  }
+}
+
+function unquote(value) {
+  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+    return value.slice(1, -1);
+  }
+  return value;
+}
+
+function expandHome(value) {
+  return value.replace("$HOME", homedir()).replace(/^~(?=$|\/)/, homedir());
+}
