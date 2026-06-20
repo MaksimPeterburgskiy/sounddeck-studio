@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { lstat, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -27,6 +27,7 @@ try {
   assertIncludes(appPackageInfo, "<relocate/>", "App component must suppress PackageKit bundle relocation.");
   assertNotIncludes(appPackageInfo, "<scripts>", "App component must not depend on installer scripts.");
   assertNotIncludes(appPackageInfo, "BundlePostInstallScriptPath", "App component must not depend on postinstall copy scripts.");
+  await verifyAppPayload(path.join(tempDir, "com.sounddeck.studio.pkg", "Payload", "SoundDeck Studio.app"));
 
   const halPackageInfo = await readPackageInfoByIdentifier(tempDir, "com.sounddeck.studio.blackhole-hal");
   assertIncludes(halPackageInfo, 'install-location="/Library/Audio/Plug-Ins/HAL"', "HAL component must install directly into the system HAL plugin folder.");
@@ -45,6 +46,37 @@ async function run(command, args) {
   } catch (error) {
     if (error.stdout) process.stdout.write(error.stdout);
     if (error.stderr) process.stderr.write(error.stderr);
+    throw error;
+  }
+}
+
+async function verifyAppPayload(appPath) {
+  await assertSymlink(
+    path.join(appPath, "Contents/Frameworks/Electron Framework.framework/Electron Framework"),
+    "Electron Framework.framework/Electron Framework must remain a symlink."
+  );
+  await assertSymlink(
+    path.join(appPath, "Contents/Frameworks/Electron Framework.framework/Resources"),
+    "Electron Framework.framework/Resources must remain a symlink."
+  );
+  await assertSymlink(
+    path.join(appPath, "Contents/Frameworks/Electron Framework.framework/Versions/Current"),
+    "Electron Framework.framework/Versions/Current must remain a symlink."
+  );
+  await run("codesign", ["--verify", "--deep", "--strict", "--verbose=2", appPath]);
+  await run("spctl", ["--assess", "--verbose", "--type", "execute", appPath]);
+}
+
+async function assertSymlink(filePath, message) {
+  try {
+    const stats = await lstat(filePath);
+    if (!stats.isSymbolicLink()) {
+      throw new Error(`${message} Found ${filePath} as a real filesystem entry.`);
+    }
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      throw new Error(`${message} File or directory does not exist at ${filePath}`);
+    }
     throw error;
   }
 }
