@@ -24,7 +24,7 @@ Play sounds into Discord, OBS, or any game as if they came from your microphone,
 **[Download the latest release](https://github.com/MaksimPeterburgskiy/sounddeck-studio/releases/latest)** and choose the installer for your platform.
 
 - **Windows:** download `SoundDeck-Studio-Setup-x.y.z.exe`. The installer sets up the [VB-CABLE](https://vb-audio.com/Cable/) virtual audio driver automatically (skipped if you already have it), so the virtual microphone works out of the box. A portable `.exe` is also available if you prefer no installation, but the portable build does not auto-update.
-- **macOS:** download `SoundDeck Studio-x.y.z.pkg`. The package is signed and notarized, installs SoundDeck Studio into `/Applications`, and installs the bundled BlackHole 2ch audio driver used for virtual microphone routing.
+- **macOS:** download `SoundDeck.Studio-x.y.z.pkg`. The package is signed and notarized, installs SoundDeck Studio into `/Applications`, and installs the bundled BlackHole 2ch audio driver used for virtual microphone routing.
 
 The app updates itself: when a new release is published, the installed app downloads it in the background and applies it on restart.
 

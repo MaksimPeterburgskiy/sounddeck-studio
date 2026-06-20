@@ -41,7 +41,7 @@ function isAppDownload(name) {
   if (typeof name !== "string") return false;
 
   const isWindowsInstaller = name.startsWith("SoundDeck-Studio") && name.endsWith(".exe");
-  const isMacInstaller = name.startsWith("SoundDeck Studio") && name.endsWith(".pkg");
+  const isMacInstaller = ["SoundDeck Studio", "SoundDeck.Studio", "SoundDeck-Studio"].some((prefix) => name.startsWith(prefix)) && name.endsWith(".pkg");
 
   return isWindowsInstaller || isMacInstaller;
 }
