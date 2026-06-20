@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, dialog, shell } = require("electron");
+const { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, dialog, shell, systemPreferences } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs/promises");
 const http = require("node:http");
@@ -6,7 +6,7 @@ const https = require("node:https");
 const crypto = require("node:crypto");
 const os = require("node:os");
 const { spawn } = require("node:child_process");
-const { createCorsairBridge, isGKeyAccelerator } = require("./corsair.cjs");
+const { createCorsairBridge, isCorsairSupportedPlatform, isGKeyAccelerator } = require("./corsair.cjs");
 const { createHotkeyEngine } = require("./hotkeys.cjs");
 const { buildCropArgs } = require("./ffmpegArgs.cjs");
 
@@ -57,6 +57,12 @@ function mediaRoot() {
 
 function bundledYtDlpCandidates() {
   const fileName = process.platform === "win32" ? "yt-dlp.exe" : "yt-dlp";
+  const macStandaloneCandidates = process.platform === "darwin"
+    ? [
+        path.join(process.resourcesPath || "", "yt-dlp", "yt-dlp_macos"),
+        path.join(__dirname, "..", "build", "yt-dlp", "yt-dlp_macos")
+      ]
+    : [];
   const packagedCandidates = [
     path.join(process.resourcesPath || "", "app.asar.unpacked", "node_modules", "youtube-dl-exec", "bin", fileName),
     path.join(process.resourcesPath || "", "app", "node_modules", "youtube-dl-exec", "bin", fileName),
@@ -65,7 +71,9 @@ function bundledYtDlpCandidates() {
   const devCandidates = [
     path.join(__dirname, "..", "node_modules", "youtube-dl-exec", "bin", fileName)
   ];
-  const candidates = app.isPackaged ? [...packagedCandidates, ...devCandidates] : [...devCandidates, ...packagedCandidates];
+  const candidates = app.isPackaged
+    ? [...macStandaloneCandidates, ...packagedCandidates, ...devCandidates]
+    : [...macStandaloneCandidates, ...devCandidates, ...packagedCandidates];
 
   try {
     candidates.push(require("youtube-dl-exec").constants.YOUTUBE_DL_PATH);
@@ -74,6 +82,18 @@ function bundledYtDlpCandidates() {
   }
 
   return [...new Set(candidates.filter(Boolean))];
+}
+
+function ytDlpJsRuntimeArgs() {
+  if (!process.versions.electron || !process.execPath) return [];
+  if (process.platform !== "darwin" && process.platform !== "linux") return [];
+  return ["--no-js-runtimes", "--js-runtimes", `node:${process.execPath}`];
+}
+
+function ytDlpSpawnEnv() {
+  const env = { ...process.env };
+  if (ytDlpJsRuntimeArgs().length) env.ELECTRON_RUN_AS_NODE = "1";
+  return env;
 }
 
 function bundledFfmpegPath() {
@@ -89,6 +109,44 @@ function bundledFfmpegPath() {
     resolved = resolved.replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`);
   }
   return resolved;
+}
+
+function sounddeckPlatform() {
+  if (process.platform === "win32" || process.platform === "darwin" || process.platform === "linux") return process.platform;
+  return "unknown";
+}
+
+function managedVirtualBackend() {
+  if (process.platform === "darwin") return "macos-bundled-blackhole";
+  if (process.platform === "linux") return "linux-managed-pactl";
+  if (process.platform === "win32") return "windows-vbcable";
+  return "manual";
+}
+
+function macOSHotkeyPermissionHelpUrl() {
+  return "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent";
+}
+
+function appCapabilities() {
+  const hotkeyStatus = hotkeyEngine.getStatus?.() || {};
+  const macAccessibilityTrusted = process.platform === "darwin" && systemPreferences?.isTrustedAccessibilityClient
+    ? systemPreferences.isTrustedAccessibilityClient(false)
+    : true;
+  const lastFailureReason = process.platform === "darwin" && !macAccessibilityTrusted
+    ? "macos-input-monitoring-permission"
+    : hotkeyStatus.lastFailureReason || "";
+  return {
+    platform: sounddeckPlatform(),
+    managedVirtualBackend: managedVirtualBackend(),
+    managedVirtualMicAvailable: process.platform === "win32" || process.platform === "darwin" || process.platform === "linux",
+    hotkeys: {
+      advancedHookAvailable: Boolean(hotkeyStatus.advancedHookAvailable),
+      globalShortcutFallbackAvailable: Boolean(hotkeyStatus.globalShortcutFallbackAvailable),
+      lastFailureReason,
+      ...(process.platform === "darwin" ? { permissionHelpUrl: macOSHotkeyPermissionHelpUrl() } : {})
+    },
+    corsairAvailable: isCorsairSupportedPlatform()
+  };
 }
 
 // Reads the source stream's native sample rate from ffmpeg's banner (printed to stderr).
@@ -131,6 +189,9 @@ async function ensureLibrary() {
           soundboardVirtualVolume: 1,
           soundboardMonitorVolume: 1,
           monitorDeviceId: "",
+          virtualOutputDeviceId: "",
+          virtualOutputMode: "managed",
+          virtualBackend: managedVirtualBackend(),
           microphoneDeviceId: "",
           stopAllHotkey: "Ctrl+Alt+Space",
           cycleBoardsHotkey: ""
@@ -235,20 +296,21 @@ function isHttpUrl(value) {
 }
 
 function runYtDlp(args, cwd) {
-  const bundledCandidates = bundledYtDlpCandidates().map((command) => ({ command, args }));
+  const ytDlpArgs = [...ytDlpJsRuntimeArgs(), ...args];
+  const bundledCandidates = bundledYtDlpCandidates().map((command) => ({ command, args: ytDlpArgs }));
   const candidates = process.platform === "win32"
     ? [
         ...bundledCandidates,
-        { command: "yt-dlp.exe", args },
-        { command: "yt-dlp", args },
-        { command: "py", args: ["-m", "yt_dlp", ...args] },
-        { command: "python", args: ["-m", "yt_dlp", ...args] }
+        { command: "yt-dlp.exe", args: ytDlpArgs },
+        { command: "yt-dlp", args: ytDlpArgs },
+        { command: "py", args: ["-m", "yt_dlp", ...ytDlpArgs] },
+        { command: "python", args: ["-m", "yt_dlp", ...ytDlpArgs] }
       ]
     : [
         ...bundledCandidates,
-        { command: "yt-dlp", args },
-        { command: "python3", args: ["-m", "yt_dlp", ...args] },
-        { command: "python", args: ["-m", "yt_dlp", ...args] }
+        { command: "yt-dlp", args: ytDlpArgs },
+        { command: "python3", args: ["-m", "yt_dlp", ...ytDlpArgs] },
+        { command: "python", args: ["-m", "yt_dlp", ...ytDlpArgs] }
       ];
 
   return new Promise((resolve, reject) => {
@@ -266,6 +328,7 @@ function runYtDlp(args, cwd) {
       try {
         child = spawn(candidate.command, candidate.args, {
           cwd,
+          env: ytDlpSpawnEnv(),
           windowsHide: true,
           shell: false
         });
@@ -302,7 +365,7 @@ function runYtDlp(args, cwd) {
           const output = (stderr || stdout).trim();
           const reason = output || `exited with code ${code}`;
           failures.push(`${candidate.command}: ${reason}`);
-          if (code === -4058 || /No module named yt_dlp/i.test(output)) tryNext();
+          if (code === -4058 || /No module named yt_dlp|unsupported version of Python/i.test(output)) tryNext();
           else reject(new Error(`${candidate.command} ${reason}`));
         }
       });
@@ -377,9 +440,19 @@ async function loadRenderer(window) {
 }
 
 function trayIconPath() {
-  return isDev
+  const iconFile = process.platform === "win32" ? "icon.ico" : "icon.png";
+  const devPath = process.platform === "win32"
     ? path.join(__dirname, "../build/icon.ico")
-    : path.join(process.resourcesPath, "icon.ico");
+    : path.join(__dirname, "../docs/icon.png");
+  return isDev ? devPath : path.join(process.resourcesPath, iconFile);
+}
+
+function createTrayIcon() {
+  const icon = nativeImage.createFromPath(trayIconPath());
+  if (icon.isEmpty() || process.platform === "win32") return icon;
+
+  const traySize = process.platform === "darwin" ? 18 : 24;
+  return icon.resize({ width: traySize, height: traySize, quality: "best" });
 }
 
 function showMainWindow() {
@@ -390,7 +463,7 @@ function showMainWindow() {
 }
 
 function createTray() {
-  const icon = nativeImage.createFromPath(trayIconPath());
+  const icon = createTrayIcon();
   tray = new Tray(icon);
   tray.setToolTip("SoundDeck Studio");
   tray.setContextMenu(Menu.buildFromTemplate([
@@ -478,8 +551,8 @@ function registerHotkeys(bindings) {
 const UPDATE_CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
 
 function setupAutoUpdates() {
-  // Portable builds have no installer to hand updates to; only the NSIS
-  // install supports auto-update.
+  // Portable Windows builds have no installer to hand updates to. Installed
+  // Windows and signed/notarized macOS packages can use electron-updater.
   if (!app.isPackaged || process.env.PORTABLE_EXECUTABLE_DIR) return;
   let autoUpdater;
   try {
@@ -764,3 +837,7 @@ ipcMain.handle("app:openExternal", async (_event, url) => {
 });
 
 ipcMain.handle("app:getVersion", () => app.getVersion());
+
+ipcMain.handle("app:getPlatform", () => sounddeckPlatform());
+
+ipcMain.handle("app:getCapabilities", () => appCapabilities());

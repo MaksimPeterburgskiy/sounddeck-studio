@@ -10,10 +10,99 @@
 
 let uIOhook = null;
 let UiohookKey = null;
+let loadError = "";
+let globalShortcut = null;
 try {
   ({ uIOhook, UiohookKey } = require("uiohook-napi"));
 } catch (error) {
+  loadError = error?.message || String(error);
   console.error("uiohook-napi unavailable, global hotkeys disabled:", error);
+}
+try {
+  ({ globalShortcut } = require("electron"));
+} catch {
+  globalShortcut = null;
+}
+
+function macOSPermissionReason() {
+  return process.platform === "darwin" ? "macos-input-monitoring-permission" : "hotkey-engine-start-failed";
+}
+
+function electronAcceleratorFromTokens(tokens) {
+  const modifiers = [];
+  const keys = [];
+  for (const token of [...new Set(tokens)]) {
+    if (token === "Ctrl") modifiers.push("Control");
+    else if (token === "Alt") modifiers.push("Alt");
+    else if (token === "Shift") modifiers.push("Shift");
+    else if (token === "Meta") modifiers.push(process.platform === "darwin" ? "Command" : "Super");
+    else keys.push(token);
+  }
+  if (keys.length !== 1) return "";
+  const key = keys[0];
+  const mappedKey = {
+    Space: "Space",
+    Enter: "Enter",
+    Tab: "Tab",
+    Backspace: "Backspace",
+    Delete: "Delete",
+    Insert: "Insert",
+    Home: "Home",
+    End: "End",
+    PageUp: "PageUp",
+    PageDown: "PageDown",
+    Up: "Up",
+    Down: "Down",
+    Left: "Left",
+    Right: "Right",
+    NumAdd: "numadd",
+    NumSub: "numsub",
+    NumMult: "nummult",
+    NumDiv: "numdiv",
+    NumDec: "numdec"
+  }[key] || (/^Num[0-9]$/.test(key) ? `num${key.slice(3)}` : key);
+  return [...modifiers, mappedKey].join("+");
+}
+
+function createGlobalShortcutFallback(onTrigger) {
+  let registered = [];
+  let suspended = false;
+
+  function unregisterAll() {
+    if (!globalShortcut) return;
+    for (const accelerator of registered) globalShortcut.unregister(accelerator);
+    registered = [];
+  }
+
+  function register(validResults) {
+    unregisterAll();
+    if (!globalShortcut) {
+      return validResults.map((result) => ({ ...result, ok: false, reason: "global-shortcut-unavailable" }));
+    }
+    const accelerators = new Set();
+    return validResults.map((result) => {
+      const tokens = String(result.accelerator || "").split("+").map((token) => token.trim()).filter(Boolean);
+      const accelerator = electronAcceleratorFromTokens(tokens);
+      if (!accelerator) return { ...result, ok: false, reason: "advanced-hook-required-on-this-platform" };
+      if (accelerators.has(accelerator)) return { ...result, ok: false, reason: "duplicate" };
+      accelerators.add(accelerator);
+      const ok = globalShortcut.register(accelerator, () => {
+        if (!suspended) onTrigger(result);
+      });
+      if (!ok) return { ...result, ok: false, reason: "global-shortcut-registration-failed" };
+      registered.push(accelerator);
+      return { ...result, ok: true, reason: "" };
+    });
+  }
+
+  return {
+    register,
+    unregisterAll,
+    setSuspended: (value) => {
+      suspended = Boolean(value);
+    },
+    isAvailable: () => Boolean(globalShortcut)
+  };
 }
 
 function buildKeycodeMap() {
@@ -88,11 +177,32 @@ function buildKeycodeMap() {
 }
 
 function createHotkeyEngine({ onTrigger }) {
+  const fallback = createGlobalShortcutFallback(onTrigger);
+
   if (!uIOhook) {
     return {
-      register: (bindings) => bindings.map((binding) => ({ ...binding, ok: false, reason: "hotkey-engine-unavailable" })),
-      setSuspended: () => {},
-      stop: () => {}
+      register: (bindings) => {
+        const seen = new Set();
+        const results = bindings.map((binding) => {
+          const accelerator = String(binding.accelerator || "").trim();
+          if (!accelerator) return { ...binding, ok: false, reason: "invalid-accelerator" };
+          if (seen.has(accelerator)) return { ...binding, ok: false, reason: "duplicate" };
+          seen.add(accelerator);
+          return { ...binding, ok: true, reason: "" };
+        });
+        const valid = results.filter((result) => result.ok);
+        const fallbackResults = fallback.register(valid);
+        const byAccelerator = new Map(fallbackResults.map((result) => [result.accelerator, result]));
+        return results.map((result) => result.ok ? byAccelerator.get(result.accelerator) || result : result);
+      },
+      setSuspended: (value) => fallback.setSuspended(value),
+      stop: () => fallback.unregisterAll(),
+      getStatus: () => ({
+        advancedHookAvailable: false,
+        globalShortcutFallbackAvailable: fallback.isAvailable(),
+        started: false,
+        lastFailureReason: loadError ? "hotkey-engine-unavailable" : ""
+      })
     };
   }
 
@@ -103,6 +213,7 @@ function createHotkeyEngine({ onTrigger }) {
   let pending = null; // matched binding deferred because a longer combo may still complete
   let started = false;
   let suspended = false;
+  let lastFailureReason = "";
 
   const signatureOf = (tokens) => [...new Set(tokens)].sort().join("+");
 
@@ -139,15 +250,18 @@ function createHotkeyEngine({ onTrigger }) {
     try {
       uIOhook.start();
       started = true;
+      lastFailureReason = "";
       return true;
     } catch (error) {
       console.error("Failed to start keyboard hook:", error);
+      lastFailureReason = macOSPermissionReason();
       return false;
     }
   }
 
   return {
     register(list) {
+      fallback.unregisterAll();
       bindings = new Map();
       pending = null;
       const results = [];
@@ -172,8 +286,22 @@ function createHotkeyEngine({ onTrigger }) {
         );
       }
       if (bindings.size && !ensureStarted()) {
+        const fallbackResults = fallback.register(results.filter((result) => result.ok));
+        const byAccelerator = new Map(fallbackResults.map((result) => [result.accelerator, result]));
         bindings = new Map();
-        return results.map((result) => (result.ok ? { ...result, ok: false, reason: "hotkey-engine-start-failed" } : result));
+        return results.map((result) => {
+          if (!result.ok) return result;
+          const fallbackResult = byAccelerator.get(result.accelerator);
+          if (!fallbackResult) return { ...result, ok: false, reason: lastFailureReason || "hotkey-engine-start-failed" };
+          if (
+            !fallbackResult.ok &&
+            fallbackResult.reason === "advanced-hook-required-on-this-platform" &&
+            lastFailureReason
+          ) {
+            return { ...fallbackResult, reason: lastFailureReason };
+          }
+          return fallbackResult;
+        });
       }
       return results;
     },
@@ -181,9 +309,11 @@ function createHotkeyEngine({ onTrigger }) {
     // hotkeys don't fire mid-capture.
     setSuspended(value) {
       suspended = Boolean(value);
+      fallback.setSuspended(suspended);
       if (suspended) pending = null;
     },
     stop() {
+      fallback.unregisterAll();
       if (!started) return;
       started = false;
       try {
@@ -191,6 +321,14 @@ function createHotkeyEngine({ onTrigger }) {
       } catch (error) {
         console.error("Failed to stop keyboard hook:", error);
       }
+    },
+    getStatus() {
+      return {
+        advancedHookAvailable: true,
+        globalShortcutFallbackAvailable: fallback.isAvailable(),
+        started,
+        lastFailureReason
+      };
     }
   };
 }

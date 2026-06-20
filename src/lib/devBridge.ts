@@ -23,6 +23,9 @@ export function installDevBridge() {
           soundboardVirtualVolume: 1,
           soundboardMonitorVolume: 1,
           monitorDeviceId: "",
+          virtualOutputDeviceId: "",
+          virtualOutputMode: "managed",
+          virtualBackend: "windows-vbcable",
           microphoneDeviceId: "",
           stopAllHotkey: "Ctrl+Alt+Space",
           cycleBoardsHotkey: ""
@@ -73,6 +76,22 @@ export function installDevBridge() {
     },
     async getVersion() {
       return "dev";
+    },
+    async getPlatform() {
+      return "unknown";
+    },
+    async getCapabilities() {
+      return {
+        platform: "unknown",
+        managedVirtualBackend: "manual",
+        managedVirtualMicAvailable: false,
+        hotkeys: {
+          advancedHookAvailable: false,
+          globalShortcutFallbackAvailable: false,
+          lastFailureReason: ""
+        },
+        corsairAvailable: false
+      };
     },
     getPathForFile(file: File) {
       return file.name;

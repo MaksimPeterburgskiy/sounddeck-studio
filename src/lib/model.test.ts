@@ -18,6 +18,9 @@ describe("model helpers", () => {
     expect(library.settings.micMonitorVolume).toBe(1);
     expect(library.settings.soundboardVirtualVolume).toBe(1);
     expect(library.settings.soundboardMonitorVolume).toBe(1);
+    expect(library.settings.virtualOutputDeviceId).toBe("");
+    expect(library.settings.virtualOutputMode).toBe("managed");
+    expect(library.settings.virtualBackend).toBe("windows-vbcable");
   });
 
   it("uses 100% defaults instead of migrating legacy shared volume settings", () => {
@@ -44,13 +47,15 @@ describe("model helpers", () => {
       activeBoardId: "a",
       settings: {
         microphoneDeviceId: "default",
-        monitorDeviceId: "communications"
+        monitorDeviceId: "communications",
+        virtualOutputDeviceId: "default"
       } as SoundLibrary["settings"],
       boards: [{ id: "a", name: "A", color: "#fff", icon: "zap", createdAt: "", updatedAt: "", sounds: [] }]
     });
 
     expect(library.settings.microphoneDeviceId).toBe("");
     expect(library.settings.monitorDeviceId).toBe("");
+    expect(library.settings.virtualOutputDeviceId).toBe("");
   });
 
   it("migrates legacy Electron accelerators to canonical tokens", () => {

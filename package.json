@@ -1,7 +1,7 @@
 {
   "name": "sounddeck-studio",
   "version": "0.1.10",
-  "description": "Windows-first desktop soundboard with boards, hotkeys, local media, and virtual audio routing.",
+  "description": "Desktop soundboard for Windows and macOS with boards, hotkeys, local media, and virtual audio routing.",
   "main": "electron/main.cjs",
   "type": "module",
   "packageManager": "pnpm@11.6.0",
@@ -10,7 +10,14 @@
     "electron": "electron .",
     "start": "pnpm run build && concurrently -k \"pnpm run dev\" \"wait-on tcp:5173 && electron .\"",
     "build": "tsc && vite build",
-    "dist": "node -e \"fs.rmSync('release', { recursive: true, force: true })\" && node scripts/fetch-vbcable.mjs && node scripts/make-installer-art.mjs && pnpm run build && electron-builder --win",
+    "clean:release": "node scripts/clean-release.mjs",
+    "dist": "pnpm run dist:win",
+    "dist:win": "pnpm run clean:release && node scripts/fetch-vbcable.mjs && node scripts/make-installer-art.mjs && pnpm run build && electron-builder --win",
+    "dist:mac": "node scripts/dist-mac.mjs",
+    "dist:mac:unsigned": "node scripts/dist-mac.mjs --unsigned",
+    "fetch:yt-dlp:mac": "node scripts/fetch-ytdlp-mac.mjs",
+    "build:blackhole": "node scripts/build-blackhole.mjs",
+    "fix:macos-dev-signatures": "node scripts/codesign-macos-dev-deps.mjs",
     "test": "vitest run"
   },
   "build": {
@@ -19,6 +26,7 @@
     "directories": {
       "output": "release"
     },
+    "afterPack": "scripts/after-pack.cjs",
     "files": [
       "dist/**",
       "electron/**",
@@ -28,22 +36,68 @@
       "node_modules/youtube-dl-exec/bin/**",
       "node_modules/ffmpeg-static/**"
     ],
-    "extraResources": [
-      {
-        "from": "build/vbcable",
-        "to": "vbcable"
-      },
-      {
-        "from": "build/icon.ico",
-        "to": "icon.ico"
-      }
-    ],
     "win": {
       "icon": "build/icon.ico",
+      "extraResources": [
+        {
+          "from": "build/vbcable",
+          "to": "vbcable"
+        },
+        {
+          "from": "build/icon.ico",
+          "to": "icon.ico"
+        }
+      ],
       "target": [
         "portable",
         "nsis"
       ]
+    },
+    "mac": {
+      "icon": "build/icon.icns",
+      "artifactName": "${productName}-${version}.${ext}",
+      "category": "public.app-category.music",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "notarize": true,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "x64ArchFiles": "**/node_modules/{cue-sdk,uiohook-napi}/prebuilds/**/*.node",
+      "target": [
+        "pkg",
+        "zip"
+      ],
+      "extraResources": [
+        {
+          "from": "build/icon.png",
+          "to": "icon.png"
+        },
+        {
+          "from": "build/blackhole/NOTICE.txt",
+          "to": "blackhole/NOTICE.txt"
+        },
+        {
+          "from": "build/yt-dlp",
+          "to": "yt-dlp"
+        }
+      ],
+      "binaries": [
+        "Contents/Resources/yt-dlp/yt-dlp_macos"
+      ],
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "SoundDeck Studio uses your microphone only when mic passthrough or recording is enabled.",
+        "NSInputMonitoringUsageDescription": "SoundDeck Studio uses input monitoring so global hotkeys can trigger sounds while another app is focused."
+      }
+    },
+    "pkg": {
+      "allowAnywhere": false,
+      "allowCurrentUserHome": false,
+      "allowRootDirectory": true,
+      "extraPkgsDir": "extra-pkgs",
+      "hasStrictIdentifier": true,
+      "installLocation": "/Applications",
+      "isRelocatable": false,
+      "scripts": null
     },
     "nsis": {
       "oneClick": false,
@@ -64,11 +118,12 @@
     "electron",
     "soundboard",
     "windows",
+    "macos",
     "audio",
     "hotkeys"
   ],
   "author": "Maksim Peterburgskiy",
-  "license": "MIT",
+  "license": "GPL-3.0-only",
   "repository": {
     "type": "git",
     "url": "https://github.com/MaksimPeterburgskiy/sounddeck-studio.git"

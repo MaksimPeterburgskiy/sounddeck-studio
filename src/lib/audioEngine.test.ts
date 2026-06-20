@@ -92,6 +92,9 @@ const settings: AudioSettings = {
   soundboardVirtualVolume: 1,
   soundboardMonitorVolume: 1,
   monitorDeviceId: "",
+  virtualOutputDeviceId: "",
+  virtualOutputMode: "managed",
+  virtualBackend: "windows-vbcable",
   microphoneDeviceId: "device-1",
   stopAllHotkey: "",
   cycleBoardsHotkey: ""

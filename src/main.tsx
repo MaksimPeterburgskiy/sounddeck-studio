@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
+  AlertCircle,
   Download,
   FolderOpen,
   GripVertical,
@@ -27,12 +28,13 @@ import {
   X
 } from "lucide-react";
 import { AudioEngine } from "./lib/audioEngine";
-import { findCableInputDeviceId, getDefaultDeviceLabel, isSelectableMediaDevice, makeMicrophoneConstraints, normalizeSelectableDeviceId } from "./lib/devices";
+import { findVirtualAudioCandidates, getDefaultDeviceLabel, isSelectableMediaDevice, makeMicrophoneConstraints, normalizeSelectableDeviceId } from "./lib/devices";
+import type { VirtualAudioCandidate } from "./lib/devices";
 import { acceleratorLooksReserved, formatBytes, formatDuration, makeBoard, normalizeLibrary, now, soundFromImport } from "./lib/model";
 import { claimCaptureSlot, eventToToken, formatAccelerator, MODIFIER_TOKENS, normalizeAccelerator, orderTokens } from "./lib/hotkeys";
 import { makeWaveform } from "./lib/waveform";
 import { installDevBridge } from "./lib/devBridge";
-import type { CorsairState, HotkeyBinding, HotkeyResult, MediaImportResult, SoundBoard, SoundLibrary, SoundSlot, UpdateStatus } from "./types";
+import type { AppCapabilities, CorsairState, HotkeyBinding, HotkeyResult, MediaImportResult, SoundBoard, SoundDeckPlatform, SoundLibrary, SoundSlot, UpdateStatus, VirtualBackend } from "./types";
 import "./styles.css";
 
 installDevBridge();
@@ -64,10 +66,14 @@ function App() {
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
   const [updateDismissed, setUpdateDismissed] = useState(false);
   const [appVersion, setAppVersion] = useState("");
+  const [platform, setPlatform] = useState<SoundDeckPlatform>("unknown");
+  const [capabilities, setCapabilities] = useState<AppCapabilities | null>(null);
   const engineRef = useRef<AudioEngine | null>(null);
 
   useEffect(() => {
     void window.sounddeck.getVersion().then(setAppVersion).catch(() => undefined);
+    void window.sounddeck.getPlatform().then(setPlatform).catch(() => undefined);
+    void window.sounddeck.getCapabilities().then(setCapabilities).catch(() => undefined);
   }, []);
 
   useEffect(() => () => dragCleanupRef.current?.(), []);
@@ -97,8 +103,10 @@ function App() {
     void window.sounddeck.saveLibrary(library);
   }, [library, draggingSoundId]);
 
-  // The virtual mic sink is always the VB-CABLE playback device; detected by label, never user-picked.
-  const cableDeviceId = useMemo(() => findCableInputDeviceId(devices), [devices]);
+  const virtualAudioCandidates = useMemo(() => findVirtualAudioCandidates(devices, platform), [devices, platform]);
+  const recommendedVirtualAudio = useMemo(() => virtualAudioCandidates.find((candidate) => candidate.recommended) || null, [virtualAudioCandidates]);
+  const hasLibrary = Boolean(library);
+  const { virtualOutputMode, virtualOutputDeviceId, virtualBackend } = library?.settings || {};
 
   useEffect(() => {
     if (!library) return;
@@ -106,8 +114,27 @@ function App() {
       setEngineStatus(status);
       setPlayingIds(activeIds);
     });
-    void engineRef.current.configure(library.settings, cableDeviceId);
-  }, [library?.settings, cableDeviceId]);
+    void engineRef.current.configure(library.settings, library.settings.virtualOutputDeviceId);
+  }, [library?.settings]);
+
+  useEffect(() => {
+    if (!hasLibrary || !recommendedVirtualAudio) return;
+    if (virtualOutputMode !== "managed") return;
+    if (virtualOutputDeviceId === recommendedVirtualAudio.outputDeviceId && virtualBackend === recommendedVirtualAudio.backend) return;
+    changeSettings({
+      virtualOutputDeviceId: recommendedVirtualAudio.outputDeviceId,
+      virtualBackend: recommendedVirtualAudio.backend as VirtualBackend
+    });
+    setMessage(`Selected ${recommendedVirtualAudio.outputLabel} for the virtual mic route`);
+  }, [hasLibrary, virtualOutputMode, virtualOutputDeviceId, virtualBackend, recommendedVirtualAudio]);
+
+  useEffect(() => {
+    if (!hasLibrary || platform === "unknown" || recommendedVirtualAudio) return;
+    if (virtualOutputMode !== "managed") return;
+    const backend = managedBackendForPlatform(platform);
+    if (virtualBackend === backend) return;
+    changeSettings({ virtualBackend: backend });
+  }, [hasLibrary, virtualOutputMode, virtualBackend, platform, recommendedVirtualAudio]);
 
   const activeBoard = useMemo(() => {
     if (!library) return null;
@@ -631,6 +658,7 @@ function App() {
     const normalizedPatch = { ...patch };
     if ("microphoneDeviceId" in normalizedPatch) normalizedPatch.microphoneDeviceId = normalizeSelectableDeviceId(normalizedPatch.microphoneDeviceId);
     if ("monitorDeviceId" in normalizedPatch) normalizedPatch.monitorDeviceId = normalizeSelectableDeviceId(normalizedPatch.monitorDeviceId);
+    if ("virtualOutputDeviceId" in normalizedPatch) normalizedPatch.virtualOutputDeviceId = normalizeSelectableDeviceId(normalizedPatch.virtualOutputDeviceId);
     updateLibrary((current) => ({ ...current, settings: { ...current.settings, ...normalizedPatch } }));
   }
 
@@ -712,15 +740,15 @@ function App() {
       <section className="workspace">
         <header className="topbar">
           {view === "devices" || view === "hotkeys" ? (
-            <div>
+            <div className="topbarTitleBlock">
               <div className="boardTitle"><h1>{view === "devices" ? "Devices" : "Hotkeys"}</h1></div>
-              <p>Global settings · applies to every board · {message}</p>
+              <p className="topbarMeta">Global settings · applies to every board · {message}</p>
             </div>
           ) : (
             <>
-              <div>
+              <div className="topbarTitleBlock">
                 <BoardTitle key={activeBoard.id} name={activeBoard.name} onRename={(name) => updateBoard(activeBoard.id, { name })} />
-                <p>{activeBoard.sounds.length} sounds · {message}</p>
+                <p className="topbarMeta">{activeBoard.sounds.length} sounds · {message}</p>
               </div>
               {view === "board" && (
                 <div className="boardHotkeyControl" title="Global hotkey that switches to this board">
@@ -792,6 +820,9 @@ function App() {
             outputDevices={outputDevices}
             defaultInputLabel={defaultInputLabel}
             defaultOutputLabel={defaultOutputLabel}
+            platform={platform}
+            candidate={recommendedVirtualAudio}
+            capabilities={capabilities}
             onRefresh={refreshDevices}
             onChange={changeSettings}
           />
@@ -802,6 +833,7 @@ function App() {
             library={library}
             results={hotkeyResults}
             corsairState={corsairState}
+            capabilities={capabilities}
             onChangeSettings={changeSettings}
             onChangeSound={updateSound}
             onChangeBoard={updateBoard}
@@ -865,7 +897,7 @@ function UrlImportModal({ onClose, onImport }: { onClose: () => void; onImport: 
       setStatus(importedCount
         ? `Imported ${importedCount} sound${importedCount === 1 ? "" : "s"}${failedCount ? `, ${failedCount} failed` : ""}.`
         : "No sounds were imported.");
-      if (importedCount && !failedCount) setUrls("");
+      if (importedCount && !failedCount) onClose();
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Import failed.");
     } finally {
@@ -1649,42 +1681,103 @@ function ClipEditor({ sound, engine, onChange, onClose, mediaUsedElsewhere }: {
   );
 }
 
-function DevicePanel({ library, inputDevices, outputDevices, defaultInputLabel, defaultOutputLabel, onRefresh, onChange }: {
+function DevicePanel({ library, inputDevices, outputDevices, defaultInputLabel, defaultOutputLabel, platform, candidate, capabilities, onRefresh, onChange }: {
   library: SoundLibrary;
   inputDevices: MediaDeviceInfo[];
   outputDevices: MediaDeviceInfo[];
   defaultInputLabel: string;
   defaultOutputLabel: string;
+  platform: SoundDeckPlatform;
+  candidate: VirtualAudioCandidate | null;
+  capabilities: AppCapabilities | null;
   onRefresh: () => void;
   onChange: (patch: Partial<SoundLibrary["settings"]>) => void;
 }) {
   const settings = library.settings;
   const defaultInputOption = defaultInputLabel ? `System default (${defaultInputLabel})` : "System default";
   const defaultOutputOption = defaultOutputLabel ? `System default (${defaultOutputLabel})` : "System default";
+  const route = virtualRouteCopy(platform);
+  const pairedInputVisible = inputDevices.some((device) => route.inputPattern.test(device.label));
+  const routeReady = Boolean(candidate && settings.virtualOutputDeviceId === candidate.outputDeviceId && pairedInputVisible);
+  const outputSelected = Boolean(candidate && settings.virtualOutputDeviceId === candidate.outputDeviceId);
+  const routeStatus = routeReady && candidate
+    ? `${candidate.outputLabel} selected. Target apps should use ${candidate.expectedInputLabel}.`
+    : outputSelected
+      ? `${candidate?.outputLabel || route.title} is selected, but ${route.inputLabel} is not visible as an input yet.`
+      : route.missing;
   return (
     <div className="panel">
       <section>
         <h2>Audio Routing</h2>
         <div className="toggleRow"><label><input type="checkbox" checked={settings.micPassthrough} onChange={(event) => onChange({ micPassthrough: event.target.checked })} /> Mic passthrough</label><label><input type="checkbox" checked={settings.soundboardToVirtualMic} onChange={(event) => onChange({ soundboardToVirtualMic: event.target.checked })} /> Soundboard to virtual mic</label><label><input type="checkbox" checked={settings.monitorToHeadphones} onChange={(event) => onChange({ monitorToHeadphones: event.target.checked })} /> Monitor soundboard</label><label><input type="checkbox" checked={settings.monitorMicToHeadphones} onChange={(event) => onChange({ monitorMicToHeadphones: event.target.checked })} /> Monitor microphone</label></div>
+        <div className={routeReady ? "managedRoute ready" : "managedRoute warning"}>
+          {routeReady ? <Radio size={18} /> : <AlertCircle size={18} />}
+          <div>
+            <strong>{route.title}</strong>
+            <span>{routeStatus}</span>
+          </div>
+        </div>
         <label><Mic size={16} /> Microphone<select value={settings.microphoneDeviceId} onChange={(event) => onChange({ microphoneDeviceId: event.target.value })}><option value="">{defaultInputOption}</option>{inputDevices.map((device) => <option key={device.deviceId} value={device.deviceId}>{device.label || `Input ${device.deviceId.slice(0, 6)}`}</option>)}</select></label>
         <label><Headphones size={16} /> Headphones / monitor<select value={settings.monitorDeviceId} onChange={(event) => onChange({ monitorDeviceId: event.target.value })}><option value="">{defaultOutputOption}</option>{outputDevices.map((device) => <option key={device.deviceId} value={device.deviceId}>{device.label || `Output ${device.deviceId.slice(0, 6)}`}</option>)}</select></label>
         <VolumeField label="Mic volume (virtual mic)" value={settings.micVirtualVolume} onChange={(micVirtualVolume) => onChange({ micVirtualVolume })} />
         <VolumeField label="Mic volume (monitoring)" value={settings.micMonitorVolume} onChange={(micMonitorVolume) => onChange({ micMonitorVolume })} />
         <VolumeField label="Soundboard volume (virtual mic)" value={settings.soundboardVirtualVolume} onChange={(soundboardVirtualVolume) => onChange({ soundboardVirtualVolume })} />
         <VolumeField label="Soundboard volume (monitoring)" value={settings.soundboardMonitorVolume} onChange={(soundboardMonitorVolume) => onChange({ soundboardMonitorVolume })} />
-        <div className="buttonLine"><button onClick={onRefresh}><Settings size={16} /> Refresh devices</button></div>
+        <div className="buttonLine">
+          <button onClick={onRefresh}><Settings size={16} /> Refresh devices</button>
+          {!routeReady && route.repairUrl && <button onClick={() => void window.sounddeck.openExternal(route.repairUrl!)}><RefreshCcw size={16} /> Repair audio driver</button>}
+        </div>
       </section>
       <section className="routingGuide">
         <h2>Virtual Mic Setup</h2>
-        <p>VB-CABLE is installed automatically with this app and the soundboard always plays into its <strong>CABLE Input</strong> speaker — no setup needed here. Everything comes back out of the <strong>CABLE Output</strong> microphone: that virtual output is where the sound comes from for other apps.</p>
+        <p>{route.description}</p>
         <ol>
-          <li>In Discord, OBS, or your game, pick <strong>CABLE Output (VB-Audio Virtual Cable)</strong> as the microphone.</li>
+          <li>In Discord, OBS, or your game, pick <strong>{route.inputLabel}</strong> as the microphone.</li>
           <li>Enable <strong>Soundboard to virtual mic</strong>, plus <strong>Mic passthrough</strong> if your voice should be mixed in with the sounds.</li>
           <li>Keep the headphones / monitor device above on your real headphones so you hear the soundboard without echo or feedback.</li>
         </ol>
+        {platform === "darwin" && capabilities && !capabilities.managedVirtualMicAvailable && <p>Packaged macOS builds use the SoundDeck installer to place the bundled audio driver in the system HAL plug-ins folder.</p>}
       </section>
     </div>
   );
+}
+
+function virtualRouteCopy(platform: SoundDeckPlatform) {
+  if (platform === "darwin") {
+    return {
+      title: "Managed macOS virtual mic",
+      inputLabel: "BlackHole 2ch (Virtual)",
+      inputPattern: /^blackhole\s+2ch(?:\s+\(virtual\))?$/i,
+      description: "The macOS package installs SoundDeck's bundled BlackHole 2ch driver. SoundDeck selects the BlackHole 2ch output automatically, and target apps use the matching BlackHole 2ch microphone.",
+      missing: "BlackHole 2ch is not visible. Refresh devices after install, or repair the SoundDeck audio driver.",
+      repairUrl: "https://github.com/MaksimPeterburgskiy/sounddeck-studio/releases/latest"
+    };
+  }
+  if (platform === "linux") {
+    return {
+      title: "Managed Linux virtual mic",
+      inputLabel: "SoundDeck Mic",
+      inputPattern: /^sounddeck mic$/i,
+      description: "Installed Linux builds create a SoundDeck Sink output and SoundDeck Mic input from the app session.",
+      missing: "SoundDeck Sink is not visible. Use the managed Linux repair action after installing the package.",
+      repairUrl: ""
+    };
+  }
+  return {
+    title: "Managed Windows virtual mic",
+    inputLabel: "CABLE Output (VB-Audio Virtual Cable)",
+    inputPattern: /cable output|vb-audio virtual cable/i,
+    description: "VB-CABLE is installed automatically with this app and the soundboard plays into its CABLE Input speaker. Everything comes back out of the CABLE Output microphone for other apps.",
+    missing: "CABLE Input is not visible. Repair the SoundDeck installation or refresh devices after the driver finishes installing.",
+    repairUrl: "https://github.com/MaksimPeterburgskiy/sounddeck-studio/releases/latest"
+  };
+}
+
+function managedBackendForPlatform(platform: SoundDeckPlatform): VirtualBackend {
+  if (platform === "darwin") return "macos-bundled-blackhole";
+  if (platform === "linux") return "linux-managed-pactl";
+  if (platform === "win32") return "windows-vbcable";
+  return "manual";
 }
 
 const corsairStateLabels: Record<CorsairState, string> = {
@@ -1695,15 +1788,17 @@ const corsairStateLabels: Record<CorsairState, string> = {
   disconnected: "Corsair iCUE not detected. Start iCUE and enable the SDK (Settings > Software and Games) to bind G-keys."
 };
 
-function HotkeyPanel({ library, results, corsairState, onChangeSettings, onChangeSound, onChangeBoard }: {
+function HotkeyPanel({ library, results, corsairState, capabilities, onChangeSettings, onChangeSound, onChangeBoard }: {
   library: SoundLibrary;
   results: HotkeyResult[];
   corsairState: CorsairState;
+  capabilities: AppCapabilities | null;
   onChangeSettings: (patch: Partial<SoundLibrary["settings"]>) => void;
   onChangeSound: (id: string, patch: Partial<SoundSlot>) => void;
   onChangeBoard: (id: string, patch: Partial<SoundBoard>) => void;
 }) {
   const allSounds = library.boards.flatMap((board) => board.sounds.map((sound) => ({ board, sound })));
+  const hasMacPermissionIssue = capabilities?.platform === "darwin" && results.some((result) => result.reason === "macos-input-monitoring-permission");
   return (
     <div className="panel hotkeysPanel">
       <section className="hotkeysSection">
@@ -1711,6 +1806,13 @@ function HotkeyPanel({ library, results, corsairState, onChangeSettings, onChang
         <p className={corsairState === "connected" ? "corsairStatus connected" : "corsairStatus"}>
           {corsairStateLabels[corsairState]}
         </p>
+        {hasMacPermissionIssue && (
+          <div className="permissionNotice">
+            <AlertCircle size={18} />
+            <span>macOS blocked keyboard monitoring. Allow SoundDeck Studio in Privacy & Security, then retry the hotkey.</span>
+            <button onClick={() => void window.sounddeck.openExternal(capabilities.hotkeys.permissionHelpUrl || "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent")}>Open Settings</button>
+          </div>
+        )}
         <div className="hotkeyList">
           <div className="hotkeyRow emergency">
             <span className="dot stopDot" />

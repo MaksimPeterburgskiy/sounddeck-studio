@@ -8,10 +8,10 @@ function New-IconPng([int]$s) {
     $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
     $g.Clear([System.Drawing.Color]::Transparent)
 
-    # Rounded-square background
-    $m = [float]($s * 0.03)
+    # Rounded-square background with taskbar-friendly transparent padding.
+    $m = [float]($s * 0.08)
     $w = [float]($s - 2 * $m)
-    $r = [float]($s * 0.22)
+    $r = [float]($w * 0.24)
     $path = New-Object System.Drawing.Drawing2D.GraphicsPath
     $path.AddArc($m, $m, $r * 2, $r * 2, 180, 90)
     $path.AddArc($m + $w - $r * 2, $m, $r * 2, $r * 2, 270, 90)
@@ -28,14 +28,14 @@ function New-IconPng([int]$s) {
 
     # Equalizer bars
     $heights = @(0.32, 0.56, 0.80, 0.52, 0.30)
-    $bw = [float]($s * 0.085)
-    $gap = [float]($s * 0.055)
+    $bw = [float]($w * 0.105)
+    $gap = [float]($w * 0.062)
     $total = $heights.Count * $bw + ($heights.Count - 1) * $gap
     $x = [float](($s - $total) / 2)
     $cy = [float]($s / 2)
     $white = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::White)
     foreach ($h in $heights) {
-        $bh = [float]($s * 0.7 * $h)
+        $bh = [float]($w * 0.72 * $h)
         $bp = New-Object System.Drawing.Drawing2D.GraphicsPath
         $br = [float]($bw / 2)
         $top = [float]($cy - $bh / 2)
