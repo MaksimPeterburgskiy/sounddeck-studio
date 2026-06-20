@@ -4,5 +4,8 @@ allowBuilds:
   ffmpeg-static: true
   uiohook-napi: true
   youtube-dl-exec: true
+overrides:
+  "@electron/get@5.0.0>undici": 7.28.0
+  "node-gyp@12.4.0>undici": 6.27.0
 
 strictDepBuilds: true
