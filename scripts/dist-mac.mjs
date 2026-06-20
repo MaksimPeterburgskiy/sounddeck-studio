@@ -44,8 +44,8 @@ const electronBuilderArgs = unsigned
   ? ["exec", "electron-builder", "--mac", "dir", "--universal", "--publish", "never", "-c.mac.identity=null", "-c.mac.notarize=false"]
   : [
       "exec", "electron-builder", "--mac", "--universal", "--publish", "never",
-      `-c.mac.identity=${signingEnv.CSC_NAME}`,
-      `-c.pkg.identity=${signingEnv.MACOS_INSTALLER_IDENTITY}`
+      `-c.mac.identity=${electronBuilderIdentity(signingEnv.CSC_NAME)}`,
+      `-c.pkg.identity=${electronBuilderIdentity(signingEnv.MACOS_INSTALLER_IDENTITY)}`
     ];
 
 const steps = [
@@ -104,9 +104,9 @@ function presentEnv(source) {
 function selectSigningEnv(values, skip) {
   if (skip) return {};
 
-  const cscName = values.CSC_NAME;
-  const installerName = values.MACOS_INSTALLER_IDENTITY || values.CSC_INSTALLER_NAME;
-  const blackHoleIdentity = values.BLACKHOLE_CODESIGN_IDENTITY || cscName;
+  const cscName = cleanIdentity(values.CSC_NAME);
+  const installerName = cleanIdentity(values.MACOS_INSTALLER_IDENTITY || values.CSC_INSTALLER_NAME);
+  const blackHoleIdentity = cleanIdentity(values.BLACKHOLE_CODESIGN_IDENTITY || cscName);
   const missing = [];
 
   if (!cscName) missing.push("CSC_NAME");
@@ -126,6 +126,17 @@ function selectSigningEnv(values, skip) {
     MACOS_INSTALLER_IDENTITY: installerName,
     BLACKHOLE_CODESIGN_IDENTITY: blackHoleIdentity
   };
+}
+
+function cleanIdentity(value) {
+  return value?.trim();
+}
+
+function electronBuilderIdentity(value) {
+  return cleanIdentity(value)?.replace(
+    /^(Developer ID Application|Developer ID Installer|3rd Party Mac Developer Application|3rd Party Mac Developer Installer|Apple Distribution|Apple Development|Mac App Distribution|Mac Developer):\s*/,
+    ""
+  );
 }
 
 function selectNotarizationEnv(values, skip) {
