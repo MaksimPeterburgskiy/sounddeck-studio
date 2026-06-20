@@ -145,6 +145,7 @@ function appCapabilities() {
       lastFailureReason,
       ...(process.platform === "darwin" ? { permissionHelpUrl: macOSHotkeyPermissionHelpUrl() } : {})
     },
+    updateChecksSupported: app.isPackaged && !process.env.PORTABLE_EXECUTABLE_DIR,
     corsairAvailable: isCorsairSupportedPlatform()
   };
 }
@@ -555,14 +556,20 @@ function registerHotkeys(bindings) {
 const UPDATE_CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
 
 function setupAutoUpdates() {
-  const registerNoopUpdateHandlers = () => {
-    ipcMain.handle("update:check", () => undefined);
-    ipcMain.handle("update:install", () => undefined);
+  const registerUnsupportedUpdateHandlers = () => {
+    const message = "Update checks are not supported for this build.";
+    ipcMain.handle("update:check", () => {
+      mainWindow?.webContents.send("update-status", { state: "error", message });
+      throw new Error(message);
+    });
+    ipcMain.handle("update:install", () => {
+      throw new Error(message);
+    });
   };
   // Portable Windows builds have no installer to hand updates to. Installed
   // Windows and signed/notarized macOS packages can use electron-updater.
   if (!app.isPackaged || process.env.PORTABLE_EXECUTABLE_DIR) {
-    registerNoopUpdateHandlers();
+    registerUnsupportedUpdateHandlers();
     return;
   }
   let autoUpdater;
@@ -570,7 +577,7 @@ function setupAutoUpdates() {
     ({ autoUpdater } = require("electron-updater"));
   } catch (error) {
     console.error("electron-updater unavailable:", error);
-    registerNoopUpdateHandlers();
+    registerUnsupportedUpdateHandlers();
     return;
   }
   const sendStatus = (status) => mainWindow?.webContents.send("update-status", status);

@@ -90,6 +90,7 @@ export function installDevBridge() {
           globalShortcutFallbackAvailable: false,
           lastFailureReason: ""
         },
+        updateChecksSupported: false,
         corsairAvailable: false
       };
     },
@@ -109,7 +110,7 @@ export function installDevBridge() {
       return () => undefined;
     },
     async checkForUpdates() {
-      // No updater outside Electron.
+      throw new Error("Update checks are not supported in browser preview.");
     },
     async installUpdate() {
       // No updater outside Electron.

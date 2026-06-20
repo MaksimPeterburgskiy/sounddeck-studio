@@ -89,11 +89,17 @@ function App() {
       });
       // A hidden download toast should still resurface once the update is ready.
       if (status.state === "ready") setUpdateDismissed(false);
-      if (!manualUpdateCheckActiveRef.current) return;
+      if (!manualUpdateCheckActiveRef.current) {
+        if (status.state === "downloading" || status.state === "ready" || status.state === "error") {
+          setUpdateCheckStatus("idle");
+        }
+        return;
+      }
       if (status.state === "checking") setUpdateCheckStatus("checking");
       else if (status.state === "up-to-date") {
         manualUpdateCheckActiveRef.current = false;
         setUpdateCheckStatus("up-to-date");
+        setTimeout(() => setUpdateCheckStatus("idle"), 4000);
       } else if (status.state === "downloading" || status.state === "ready") {
         manualUpdateCheckActiveRef.current = false;
         setUpdateCheckStatus("idle");
@@ -707,6 +713,7 @@ function App() {
   const inputDevices = devices.filter((device) => device.kind === "audioinput" && isSelectableMediaDevice(device));
   const defaultInputLabel = getDefaultDeviceLabel(devices, "audioinput");
   const defaultOutputLabel = getDefaultDeviceLabel(devices, "audiooutput");
+  const updateChecksSupported = capabilities?.updateChecksSupported ?? false;
 
   return (
     <main
@@ -776,17 +783,21 @@ function App() {
         {appVersion && (
           <div className="appVersionRow">
             <span className="appVersion">v{appVersion}</span>
-            <button
-              className="checkUpdatesButton" type="button"
-              title={updateCheckStatus === "checking" ? "Checking for updates…" : updateCheckStatus === "up-to-date" ? "You're up to date" : updateCheckStatus === "error" ? "Couldn't check for updates" : "Check for updates"}
-              aria-label="Check for updates"
-              disabled={updateCheckStatus === "checking"}
-              onClick={() => void checkForUpdates()}
-            >
-              <RefreshCw size={12} className={updateCheckStatus === "checking" ? "spin" : ""} />
-            </button>
-            {updateCheckStatus === "up-to-date" && <span className="checkUpdatesResult">Up to date</span>}
-            {updateCheckStatus === "error" && <span className="checkUpdatesResult checkUpdatesResult-error">Check failed</span>}
+            {updateChecksSupported && (
+              <>
+                <button
+                  className="checkUpdatesButton" type="button"
+                  title={updateCheckStatus === "checking" ? "Checking for updates…" : updateCheckStatus === "up-to-date" ? "You're up to date" : updateCheckStatus === "error" ? "Couldn't check for updates" : "Check for updates"}
+                  aria-label="Check for updates"
+                  disabled={updateCheckStatus === "checking"}
+                  onClick={() => void checkForUpdates()}
+                >
+                  <RefreshCw size={12} className={updateCheckStatus === "checking" ? "spin" : ""} />
+                </button>
+                {updateCheckStatus === "up-to-date" && <span className="checkUpdatesResult">Up to date</span>}
+                {updateCheckStatus === "error" && <span className="checkUpdatesResult checkUpdatesResult-error">Check failed</span>}
+              </>
+            )}
           </div>
         )}
       </aside>

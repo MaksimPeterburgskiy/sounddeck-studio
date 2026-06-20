@@ -116,6 +116,7 @@ export interface AppCapabilities {
     lastFailureReason: string;
     permissionHelpUrl?: string;
   };
+  updateChecksSupported: boolean;
   corsairAvailable: boolean;
 }
 
