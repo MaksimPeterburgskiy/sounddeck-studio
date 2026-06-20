@@ -120,6 +120,8 @@ export interface AppCapabilities {
 }
 
 export type UpdateStatus =
+  | { state: "checking" }
+  | { state: "up-to-date" }
   | { state: "downloading"; version?: string; percent?: number }
   | { state: "ready"; version: string };
 
@@ -148,6 +150,7 @@ declare global {
       getCorsairStatus: () => Promise<CorsairState>;
       onCorsairStatus: (callback: (state: CorsairState) => void) => () => void;
       onCorsairKey: (callback: (key: string) => void) => () => void;
+      checkForUpdates: () => Promise<void>;
       installUpdate: () => Promise<void>;
       onUpdateStatus: (callback: (status: UpdateStatus) => void) => () => void;
     };

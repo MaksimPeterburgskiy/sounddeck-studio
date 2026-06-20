@@ -16,6 +16,7 @@ import {
   Plus,
   Radio,
   RefreshCcw,
+  RefreshCw,
   RotateCcw,
   Save,
   Scissors,
@@ -65,6 +66,7 @@ function App() {
   const [corsairState, setCorsairState] = useState<CorsairState>("unavailable");
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
   const [updateDismissed, setUpdateDismissed] = useState(false);
+  const [updateCheckStatus, setUpdateCheckStatus] = useState<"idle" | "checking" | "up-to-date" | "error">("idle");
   const [appVersion, setAppVersion] = useState("");
   const [platform, setPlatform] = useState<SoundDeckPlatform>("unknown");
   const [capabilities, setCapabilities] = useState<AppCapabilities | null>(null);
@@ -83,8 +85,26 @@ function App() {
       setUpdateStatus(status);
       // A hidden download toast should still resurface once the update is ready.
       if (status.state === "ready") setUpdateDismissed(false);
+      // Mirror the manual-check lifecycle in the sidebar badge.
+      if (status.state === "checking") setUpdateCheckStatus("checking");
+      else if (status.state === "up-to-date") setUpdateCheckStatus("up-to-date");
+      else if (status.state === "downloading" || status.state === "ready") setUpdateCheckStatus("idle");
     });
   }, []);
+
+  const checkForUpdates = useCallback(async () => {
+    if (updateCheckStatus === "checking") return;
+    setUpdateCheckStatus("checking");
+    try {
+      await window.sounddeck.checkForUpdates();
+      // electron-updater reports back via update-status events; if nothing
+      // arrives (dev mode, portable build), show a brief up-to-date blip.
+      setTimeout(() => setUpdateCheckStatus((current) => (current === "checking" ? "up-to-date" : current)), 4000);
+    } catch {
+      setUpdateCheckStatus("error");
+      setTimeout(() => setUpdateCheckStatus("idle"), 4000);
+    }
+  }, [updateCheckStatus]);
 
   useEffect(() => {
     void window.sounddeck.getCorsairStatus().then(setCorsairState);
@@ -734,7 +754,22 @@ function App() {
           <button className={view === "devices" ? "active" : ""} onClick={() => setView("devices")}><Settings size={18} /> Devices</button>
           <button className={view === "hotkeys" ? "active" : ""} onClick={() => setView("hotkeys")}><Keyboard size={18} /> Hotkeys</button>
         </div>
-        {appVersion && <div className="appVersion">v{appVersion}</div>}
+        {appVersion && (
+          <div className="appVersionRow">
+            <span className="appVersion">v{appVersion}</span>
+            <button
+              className="checkUpdatesButton" type="button"
+              title={updateCheckStatus === "checking" ? "Checking for updates…" : updateCheckStatus === "up-to-date" ? "You're up to date" : updateCheckStatus === "error" ? "Couldn't check for updates" : "Check for updates"}
+              aria-label="Check for updates"
+              disabled={updateCheckStatus === "checking"}
+              onClick={() => void checkForUpdates()}
+            >
+              <RefreshCw size={12} className={updateCheckStatus === "checking" ? "spin" : ""} />
+            </button>
+            {updateCheckStatus === "up-to-date" && <span className="checkUpdatesResult">Up to date</span>}
+            {updateCheckStatus === "error" && <span className="checkUpdatesResult checkUpdatesResult-error">Check failed</span>}
+          </div>
+        )}
       </aside>
 
       <section className="workspace">
@@ -857,7 +892,7 @@ function App() {
         )}
       </section>
 
-      {updateStatus && !updateDismissed && (
+      {updateStatus && (updateStatus.state === "downloading" || updateStatus.state === "ready") && !updateDismissed && (
         <UpdateToast
           status={updateStatus}
           onInstall={() => void window.sounddeck.installUpdate()}
@@ -938,7 +973,7 @@ function UrlImportModal({ onClose, onImport }: { onClose: () => void; onImport: 
   );
 }
 
-function UpdateToast({ status, onInstall, onDismiss }: { status: UpdateStatus; onInstall: () => void; onDismiss: () => void }) {
+function UpdateToast({ status, onInstall, onDismiss }: { status: Extract<UpdateStatus, { state: "downloading" } | { state: "ready" }>; onInstall: () => void; onDismiss: () => void }) {
   const percent = Math.max(0, Math.min(100, Math.round(status.state === "downloading" ? status.percent ?? 0 : 100)));
   return (
     <aside className="updateToast" role="status" data-state={status.state}>

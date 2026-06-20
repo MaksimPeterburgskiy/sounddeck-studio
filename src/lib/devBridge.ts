@@ -108,6 +108,9 @@ export function installDevBridge() {
     onCorsairKey() {
       return () => undefined;
     },
+    async checkForUpdates() {
+      // No updater outside Electron.
+    },
     async installUpdate() {
       // No updater outside Electron.
     },

@@ -563,7 +563,9 @@ function setupAutoUpdates() {
   }
   const sendStatus = (status) => mainWindow?.webContents.send("update-status", status);
   autoUpdater.on("error", (error) => console.error("Auto-update error:", error));
+  autoUpdater.on("checking-for-update", () => sendStatus({ state: "checking" }));
   autoUpdater.on("update-available", (info) => sendStatus({ state: "downloading", version: info.version, percent: 0 }));
+  autoUpdater.on("update-not-available", () => sendStatus({ state: "up-to-date" }));
   autoUpdater.on("download-progress", (progress) => sendStatus({ state: "downloading", percent: progress.percent }));
   autoUpdater.on("update-downloaded", (info) => sendStatus({ state: "ready", version: info.version }));
   ipcMain.handle("update:install", () => {
@@ -571,6 +573,10 @@ function setupAutoUpdates() {
     // Silent install with auto-relaunch: no installer pages, no "run app?" prompt.
     autoUpdater.quitAndInstall(true, true);
   });
+  ipcMain.handle("update:check", () => autoUpdater.checkForUpdates().catch((error) => {
+    console.error("Manual update check failed:", error);
+    sendStatus({ state: "up-to-date" });
+  }));
   const check = () => autoUpdater.checkForUpdates().catch((error) => {
     console.error("Auto-update check failed:", error);
   });
