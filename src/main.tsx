@@ -783,21 +783,17 @@ function App() {
         {appVersion && (
           <div className="appVersionRow">
             <span className="appVersion">v{appVersion}</span>
-            {updateChecksSupported && (
-              <>
-                <button
-                  className="checkUpdatesButton" type="button"
-                  title={updateCheckStatus === "checking" ? "Checking for updates…" : updateCheckStatus === "up-to-date" ? "You're up to date" : updateCheckStatus === "error" ? "Couldn't check for updates" : "Check for updates"}
-                  aria-label="Check for updates"
-                  disabled={updateCheckStatus === "checking"}
-                  onClick={() => void checkForUpdates()}
-                >
-                  <RefreshCw size={12} className={updateCheckStatus === "checking" ? "spin" : ""} />
-                </button>
-                {updateCheckStatus === "up-to-date" && <span className="checkUpdatesResult">Up to date</span>}
-                {updateCheckStatus === "error" && <span className="checkUpdatesResult checkUpdatesResult-error">Check failed</span>}
-              </>
-            )}
+            <button
+              className="checkUpdatesButton" type="button"
+              title={!updateChecksSupported ? "Update checks unavailable in this build" : updateCheckStatus === "checking" ? "Checking for updates…" : updateCheckStatus === "up-to-date" ? "You're up to date" : updateCheckStatus === "error" ? "Couldn't check for updates" : "Check for updates"}
+              aria-label="Check for updates"
+              disabled={!updateChecksSupported || updateCheckStatus === "checking"}
+              onClick={() => void checkForUpdates()}
+            >
+              <RefreshCw size={12} className={updateCheckStatus === "checking" ? "spin" : ""} />
+            </button>
+            {updateCheckStatus === "up-to-date" && <span className="checkUpdatesResult">Up to date</span>}
+            {updateCheckStatus === "error" && <span className="checkUpdatesResult checkUpdatesResult-error">Check failed</span>}
           </div>
         )}
       </aside>
