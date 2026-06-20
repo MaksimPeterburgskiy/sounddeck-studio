@@ -137,6 +137,7 @@ jobs:
         run: pnpm install --frozen-lockfile
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          YOUTUBE_DL_SKIP_DOWNLOAD: "true"
 
       - name: Build signed and notarized macOS package
         env:
