@@ -713,8 +713,6 @@ function App() {
   const inputDevices = devices.filter((device) => device.kind === "audioinput" && isSelectableMediaDevice(device));
   const defaultInputLabel = getDefaultDeviceLabel(devices, "audioinput");
   const defaultOutputLabel = getDefaultDeviceLabel(devices, "audiooutput");
-  const updateChecksSupported = capabilities?.updateChecksSupported ?? false;
-
   return (
     <main
       className="app"
@@ -785,9 +783,9 @@ function App() {
             <span className="appVersion">v{appVersion}</span>
             <button
               className="checkUpdatesButton" type="button"
-              title={!updateChecksSupported ? "Update checks unavailable in this build" : updateCheckStatus === "checking" ? "Checking for updates…" : updateCheckStatus === "up-to-date" ? "You're up to date" : updateCheckStatus === "error" ? "Couldn't check for updates" : "Check for updates"}
+              title={updateCheckStatus === "checking" ? "Checking for updates…" : updateCheckStatus === "up-to-date" ? "You're up to date" : updateCheckStatus === "error" ? "Couldn't check for updates" : "Check for updates"}
               aria-label="Check for updates"
-              disabled={!updateChecksSupported || updateCheckStatus === "checking"}
+              disabled={updateCheckStatus === "checking"}
               onClick={() => void checkForUpdates()}
             >
               <RefreshCw size={12} className={updateCheckStatus === "checking" ? "spin" : ""} />

@@ -557,14 +557,15 @@ const UPDATE_CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
 
 function setupAutoUpdates() {
   const registerUnsupportedUpdateHandlers = () => {
-    const message = "Update checks are not supported for this build.";
+    // No auto-updater is available for this build (dev, portable, or missing
+    // electron-updater). Keep the IPC handlers registered so the renderer's
+    // check-for-updates button stays responsive instead of hanging; quietly
+    // report "up-to-date" so the UI doesn't surface an error for something
+    // that simply isn't wired up here.
     ipcMain.handle("update:check", () => {
-      mainWindow?.webContents.send("update-status", { state: "error", message });
-      throw new Error(message);
+      mainWindow?.webContents.send("update-status", { state: "up-to-date" });
     });
-    ipcMain.handle("update:install", () => {
-      throw new Error(message);
-    });
+    ipcMain.handle("update:install", () => undefined);
   };
   // Portable Windows builds have no installer to hand updates to. Installed
   // Windows and signed/notarized macOS packages can use electron-updater.

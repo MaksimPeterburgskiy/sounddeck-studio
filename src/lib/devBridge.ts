@@ -110,7 +110,7 @@ export function installDevBridge() {
       return () => undefined;
     },
     async checkForUpdates() {
-      throw new Error("Update checks are not supported in browser preview.");
+      // No updater in browser preview; let the renderer's timeout settle the status.
     },
     async installUpdate() {
       // No updater outside Electron.
