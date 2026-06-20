@@ -14,9 +14,6 @@ if (process.platform !== "darwin") {
 }
 
 const defaults = {
-  APPLE_TEAM_ID: "7WX3FK3V9U",
-  CSC_NAME: "Maksim Peterburgskiy (7WX3FK3V9U)",
-  BLACKHOLE_CODESIGN_IDENTITY: "Developer ID Application: Maksim Peterburgskiy (7WX3FK3V9U)",
   BLACKHOLE_REPO: "https://github.com/ExistentialAudio/BlackHole.git",
   BLACKHOLE_COMMIT: "11efc147fef0ac537be1c24ea7e29e4b2a2d63c7"
 };
@@ -30,18 +27,26 @@ const merged = {
 
 if (merged.APPLE_KEYCHAIN) merged.APPLE_KEYCHAIN = expandHome(merged.APPLE_KEYCHAIN);
 
+const signingEnv = selectSigningEnv(merged, unsigned);
 const notarizationEnv = selectNotarizationEnv(merged, unsigned);
 const env = {
   ...process.env,
   ...merged,
+  ...signingEnv,
   ...notarizationEnv,
-  BLACKHOLE_CODESIGN_IDENTITY: unsigned ? "-" : merged.BLACKHOLE_CODESIGN_IDENTITY,
-  CSC_NAME: unsigned ? "" : merged.CSC_NAME
+  BLACKHOLE_CODESIGN_IDENTITY: unsigned ? "-" : signingEnv.BLACKHOLE_CODESIGN_IDENTITY,
+  CSC_NAME: unsigned ? "" : signingEnv.CSC_NAME,
+  CSC_INSTALLER_NAME: unsigned ? "" : signingEnv.CSC_INSTALLER_NAME,
+  MACOS_INSTALLER_IDENTITY: unsigned ? "" : signingEnv.MACOS_INSTALLER_IDENTITY
 };
 
 const electronBuilderArgs = unsigned
   ? ["exec", "electron-builder", "--mac", "dir", "--universal", "--publish", "never", "-c.mac.identity=null", "-c.mac.notarize=false"]
-  : ["exec", "electron-builder", "--mac", "--universal", "--publish", "never"];
+  : [
+      "exec", "electron-builder", "--mac", "--universal", "--publish", "never",
+      `-c.mac.identity=${signingEnv.CSC_NAME}`,
+      `-c.pkg.identity=${signingEnv.MACOS_INSTALLER_IDENTITY}`
+    ];
 
 const steps = [
   ["pnpm", ["run", "clean:release"]],
@@ -94,6 +99,33 @@ function expandHome(value) {
 
 function presentEnv(source) {
   return Object.fromEntries(Object.entries(source).filter(([, value]) => value !== undefined && value !== ""));
+}
+
+function selectSigningEnv(values, skip) {
+  if (skip) return {};
+
+  const cscName = values.CSC_NAME;
+  const installerName = values.MACOS_INSTALLER_IDENTITY || values.CSC_INSTALLER_NAME;
+  const blackHoleIdentity = values.BLACKHOLE_CODESIGN_IDENTITY || cscName;
+  const missing = [];
+
+  if (!cscName) missing.push("CSC_NAME");
+  if (!installerName) missing.push("MACOS_INSTALLER_IDENTITY or CSC_INSTALLER_NAME");
+  if (!blackHoleIdentity) missing.push("BLACKHOLE_CODESIGN_IDENTITY or CSC_NAME");
+
+  if (missing.length) {
+    throw new Error([
+      "Missing macOS signing identity configuration.",
+      `Set ${missing.join(", ")} in .env.macos.local or CI environment.`
+    ].join(" "));
+  }
+
+  return {
+    CSC_NAME: cscName,
+    CSC_INSTALLER_NAME: installerName,
+    MACOS_INSTALLER_IDENTITY: installerName,
+    BLACKHOLE_CODESIGN_IDENTITY: blackHoleIdentity
+  };
 }
 
 function selectNotarizationEnv(values, skip) {

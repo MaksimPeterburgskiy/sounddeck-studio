@@ -141,8 +141,10 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          CSC_NAME: "Maksim Peterburgskiy (7WX3FK3V9U)"
-          BLACKHOLE_CODESIGN_IDENTITY: "Developer ID Application: Maksim Peterburgskiy (7WX3FK3V9U)"
+          CSC_NAME: ${{ secrets.MACOS_CSC_NAME }}
+          BLACKHOLE_CODESIGN_IDENTITY: ${{ secrets.MACOS_CSC_NAME }}
+          CSC_INSTALLER_NAME: ${{ secrets.MACOS_INSTALLER_IDENTITY }}
+          MACOS_INSTALLER_IDENTITY: ${{ secrets.MACOS_INSTALLER_IDENTITY }}
           BLACKHOLE_REPO: https://github.com/ExistentialAudio/BlackHole.git
           BLACKHOLE_COMMIT: 11efc147fef0ac537be1c24ea7e29e4b2a2d63c7
         run: pnpm run dist:mac

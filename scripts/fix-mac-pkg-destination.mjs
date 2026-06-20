@@ -9,9 +9,7 @@ const execFileAsync = promisify(execFile);
 applyLocalEnv(await readEnvFile(path.join(process.cwd(), ".env.macos.local")));
 
 const pkgPath = process.argv[2] || await findReleasePkg();
-const installerIdentity = process.env.MACOS_INSTALLER_IDENTITY ||
-  process.env.CSC_INSTALLER_NAME ||
-  "Developer ID Installer: Maksim Peterburgskiy (7WX3FK3V9U)";
+const installerIdentity = process.env.MACOS_INSTALLER_IDENTITY || process.env.CSC_INSTALLER_NAME;
 
 if (process.platform !== "darwin") {
   throw new Error("macOS PKG destination postprocessing can only run on macOS.");
@@ -82,8 +80,9 @@ function forceSingleSystemDestination(distribution) {
 async function notarizeAndStaple(filePath) {
   const args = ["notarytool", "submit", filePath, "--wait", "--output-format", "json"];
 
-  if (process.env.APPLE_KEYCHAIN_PROFILE && process.env.APPLE_KEYCHAIN) {
-    args.push("--keychain", process.env.APPLE_KEYCHAIN, "--keychain-profile", process.env.APPLE_KEYCHAIN_PROFILE);
+  if (process.env.APPLE_KEYCHAIN_PROFILE) {
+    if (process.env.APPLE_KEYCHAIN) args.push("--keychain", process.env.APPLE_KEYCHAIN);
+    args.push("--keychain-profile", process.env.APPLE_KEYCHAIN_PROFILE);
   } else if (process.env.APPLE_ID && process.env.APPLE_APP_SPECIFIC_PASSWORD && process.env.APPLE_TEAM_ID) {
     args.push(
       "--apple-id", process.env.APPLE_ID,
