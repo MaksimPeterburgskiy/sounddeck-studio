@@ -97,6 +97,10 @@ function App() {
       } else if (status.state === "downloading" || status.state === "ready") {
         manualUpdateCheckActiveRef.current = false;
         setUpdateCheckStatus("idle");
+      } else if (status.state === "error") {
+        manualUpdateCheckActiveRef.current = false;
+        setUpdateCheckStatus("error");
+        setTimeout(() => setUpdateCheckStatus("idle"), 4000);
       }
     });
   }, []);
@@ -1860,7 +1864,7 @@ function HotkeyPanel({ library, results, corsairState, capabilities, onChangeSet
           <div className="permissionNotice">
             <AlertCircle size={18} />
             <span>macOS blocked keyboard monitoring. Allow SoundDeck Studio in Privacy & Security, then retry the hotkey.</span>
-            <button onClick={() => void window.sounddeck.openExternal(capabilities.hotkeys.permissionHelpUrl || "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent")}>Open Settings</button>
+            <button onClick={() => void window.sounddeck.openExternal(capabilities?.hotkeys.permissionHelpUrl || "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent")}>Open Settings</button>
           </div>
         )}
         <div className="hotkeyList">

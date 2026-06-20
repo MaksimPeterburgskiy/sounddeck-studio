@@ -452,7 +452,11 @@ function createTrayIcon() {
   if (icon.isEmpty() || process.platform === "win32") return icon;
 
   const traySize = process.platform === "darwin" ? 18 : 24;
-  return icon.resize({ width: traySize, height: traySize, quality: "best" });
+  const resized = icon.resize({ width: traySize, height: traySize, quality: "best" });
+  if (process.platform === "darwin") {
+    resized.setTemplateImage(true);
+  }
+  return resized;
 }
 
 function showMainWindow() {
@@ -570,7 +574,10 @@ function setupAutoUpdates() {
     return;
   }
   const sendStatus = (status) => mainWindow?.webContents.send("update-status", status);
-  autoUpdater.on("error", (error) => console.error("Auto-update error:", error));
+  autoUpdater.on("error", (error) => {
+    console.error("Auto-update error:", error);
+    sendStatus({ state: "error", message: error?.message || "Update check failed." });
+  });
   autoUpdater.on("checking-for-update", () => sendStatus({ state: "checking" }));
   autoUpdater.on("update-available", (info) => sendStatus({ state: "downloading", version: info.version, percent: 0 }));
   autoUpdater.on("update-not-available", () => sendStatus({ state: "up-to-date" }));

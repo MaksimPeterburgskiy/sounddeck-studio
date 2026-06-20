@@ -122,6 +122,7 @@ export interface AppCapabilities {
 export type UpdateStatus =
   | { state: "checking" }
   | { state: "up-to-date" }
+  | { state: "error"; message?: string }
   | { state: "downloading"; version?: string; percent?: number }
   | { state: "ready"; version: string };
 
