@@ -67,6 +67,7 @@ function App() {
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
   const [updateDismissed, setUpdateDismissed] = useState(false);
   const [updateCheckStatus, setUpdateCheckStatus] = useState<"idle" | "checking" | "up-to-date" | "error">("idle");
+  const manualUpdateCheckActiveRef = useRef(false);
   const [appVersion, setAppVersion] = useState("");
   const [platform, setPlatform] = useState<SoundDeckPlatform>("unknown");
   const [capabilities, setCapabilities] = useState<AppCapabilities | null>(null);
@@ -82,25 +83,39 @@ function App() {
 
   useEffect(() => {
     return window.sounddeck.onUpdateStatus((status) => {
-      setUpdateStatus(status);
+      setUpdateStatus((current) => {
+        if (current?.state === "ready" && (status.state === "checking" || status.state === "up-to-date")) return current;
+        return status;
+      });
       // A hidden download toast should still resurface once the update is ready.
       if (status.state === "ready") setUpdateDismissed(false);
-      // Mirror the manual-check lifecycle in the sidebar badge.
+      if (!manualUpdateCheckActiveRef.current) return;
       if (status.state === "checking") setUpdateCheckStatus("checking");
-      else if (status.state === "up-to-date") setUpdateCheckStatus("up-to-date");
-      else if (status.state === "downloading" || status.state === "ready") setUpdateCheckStatus("idle");
+      else if (status.state === "up-to-date") {
+        manualUpdateCheckActiveRef.current = false;
+        setUpdateCheckStatus("up-to-date");
+      } else if (status.state === "downloading" || status.state === "ready") {
+        manualUpdateCheckActiveRef.current = false;
+        setUpdateCheckStatus("idle");
+      }
     });
   }, []);
 
   const checkForUpdates = useCallback(async () => {
     if (updateCheckStatus === "checking") return;
+    manualUpdateCheckActiveRef.current = true;
     setUpdateCheckStatus("checking");
     try {
       await window.sounddeck.checkForUpdates();
       // electron-updater reports back via update-status events; if nothing
       // arrives (dev mode, portable build), show a brief up-to-date blip.
-      setTimeout(() => setUpdateCheckStatus((current) => (current === "checking" ? "up-to-date" : current)), 4000);
+      setTimeout(() => setUpdateCheckStatus((current) => {
+        if (current !== "checking") return current;
+        manualUpdateCheckActiveRef.current = false;
+        return "up-to-date";
+      }), 4000);
     } catch {
+      manualUpdateCheckActiveRef.current = false;
       setUpdateCheckStatus("error");
       setTimeout(() => setUpdateCheckStatus("idle"), 4000);
     }

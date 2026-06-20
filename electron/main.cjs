@@ -551,14 +551,22 @@ function registerHotkeys(bindings) {
 const UPDATE_CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
 
 function setupAutoUpdates() {
+  const registerNoopUpdateHandlers = () => {
+    ipcMain.handle("update:check", () => undefined);
+    ipcMain.handle("update:install", () => undefined);
+  };
   // Portable Windows builds have no installer to hand updates to. Installed
   // Windows and signed/notarized macOS packages can use electron-updater.
-  if (!app.isPackaged || process.env.PORTABLE_EXECUTABLE_DIR) return;
+  if (!app.isPackaged || process.env.PORTABLE_EXECUTABLE_DIR) {
+    registerNoopUpdateHandlers();
+    return;
+  }
   let autoUpdater;
   try {
     ({ autoUpdater } = require("electron-updater"));
   } catch (error) {
     console.error("electron-updater unavailable:", error);
+    registerNoopUpdateHandlers();
     return;
   }
   const sendStatus = (status) => mainWindow?.webContents.send("update-status", status);
@@ -573,10 +581,15 @@ function setupAutoUpdates() {
     // Silent install with auto-relaunch: no installer pages, no "run app?" prompt.
     autoUpdater.quitAndInstall(true, true);
   });
-  ipcMain.handle("update:check", () => autoUpdater.checkForUpdates().catch((error) => {
-    console.error("Manual update check failed:", error);
-    sendStatus({ state: "up-to-date" });
-  }));
+  ipcMain.handle("update:check", async () => {
+    try {
+      const result = await autoUpdater.checkForUpdates();
+      await result?.downloadPromise;
+    } catch (error) {
+      console.error("Manual update check failed:", error);
+      throw error;
+    }
+  });
   const check = () => autoUpdater.checkForUpdates().catch((error) => {
     console.error("Auto-update check failed:", error);
   });
