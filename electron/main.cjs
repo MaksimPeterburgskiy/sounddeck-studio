@@ -145,6 +145,7 @@ function appCapabilities() {
       lastFailureReason,
       ...(process.platform === "darwin" ? { permissionHelpUrl: macOSHotkeyPermissionHelpUrl() } : {})
     },
+    updateChecksSupported: app.isPackaged && !process.env.PORTABLE_EXECUTABLE_DIR,
     corsairAvailable: isCorsairSupportedPlatform()
   };
 }
@@ -452,7 +453,11 @@ function createTrayIcon() {
   if (icon.isEmpty() || process.platform === "win32") return icon;
 
   const traySize = process.platform === "darwin" ? 18 : 24;
-  return icon.resize({ width: traySize, height: traySize, quality: "best" });
+  const resized = icon.resize({ width: traySize, height: traySize, quality: "best" });
+  if (process.platform === "darwin") {
+    resized.setTemplateImage(true);
+  }
+  return resized;
 }
 
 function showMainWindow() {
@@ -551,25 +556,54 @@ function registerHotkeys(bindings) {
 const UPDATE_CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
 
 function setupAutoUpdates() {
+  const registerUnsupportedUpdateHandlers = () => {
+    // No auto-updater is available for this build (dev, portable, or missing
+    // electron-updater). Keep the IPC handlers registered so the renderer's
+    // check-for-updates button stays responsive instead of hanging; quietly
+    // report "up-to-date" so the UI doesn't surface an error for something
+    // that simply isn't wired up here.
+    ipcMain.handle("update:check", () => {
+      mainWindow?.webContents.send("update-status", { state: "up-to-date" });
+    });
+    ipcMain.handle("update:install", () => undefined);
+  };
   // Portable Windows builds have no installer to hand updates to. Installed
   // Windows and signed/notarized macOS packages can use electron-updater.
-  if (!app.isPackaged || process.env.PORTABLE_EXECUTABLE_DIR) return;
+  if (!app.isPackaged || process.env.PORTABLE_EXECUTABLE_DIR) {
+    registerUnsupportedUpdateHandlers();
+    return;
+  }
   let autoUpdater;
   try {
     ({ autoUpdater } = require("electron-updater"));
   } catch (error) {
     console.error("electron-updater unavailable:", error);
+    registerUnsupportedUpdateHandlers();
     return;
   }
   const sendStatus = (status) => mainWindow?.webContents.send("update-status", status);
-  autoUpdater.on("error", (error) => console.error("Auto-update error:", error));
+  autoUpdater.on("error", (error) => {
+    console.error("Auto-update error:", error);
+    sendStatus({ state: "error", message: error?.message || "Update check failed." });
+  });
+  autoUpdater.on("checking-for-update", () => sendStatus({ state: "checking" }));
   autoUpdater.on("update-available", (info) => sendStatus({ state: "downloading", version: info.version, percent: 0 }));
+  autoUpdater.on("update-not-available", () => sendStatus({ state: "up-to-date" }));
   autoUpdater.on("download-progress", (progress) => sendStatus({ state: "downloading", percent: progress.percent }));
   autoUpdater.on("update-downloaded", (info) => sendStatus({ state: "ready", version: info.version }));
   ipcMain.handle("update:install", () => {
     isQuitting = true;
     // Silent install with auto-relaunch: no installer pages, no "run app?" prompt.
     autoUpdater.quitAndInstall(true, true);
+  });
+  ipcMain.handle("update:check", async () => {
+    try {
+      const result = await autoUpdater.checkForUpdates();
+      await result?.downloadPromise;
+    } catch (error) {
+      console.error("Manual update check failed:", error);
+      throw error;
+    }
   });
   const check = () => autoUpdater.checkForUpdates().catch((error) => {
     console.error("Auto-update check failed:", error);

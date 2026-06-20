@@ -16,6 +16,7 @@ import {
   Plus,
   Radio,
   RefreshCcw,
+  RefreshCw,
   RotateCcw,
   Save,
   Scissors,
@@ -41,6 +42,7 @@ installDevBridge();
 
 type View = "board" | "devices" | "hotkeys" | "recorder";
 type EngineStatus = "idle" | "playing" | "paused";
+type UpdateCheckStatus = "idle" | "checking" | "up-to-date" | "error";
 
 function App() {
   const [library, setLibrary] = useState<SoundLibrary | null>(null);
@@ -65,6 +67,11 @@ function App() {
   const [corsairState, setCorsairState] = useState<CorsairState>("unavailable");
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
   const [updateDismissed, setUpdateDismissed] = useState(false);
+  const [updateCheckStatus, setUpdateCheckStatus] = useState<UpdateCheckStatus>("idle");
+  const manualUpdateCheckActiveRef = useRef(false);
+  const updateCheckFallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const updateCheckResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const updateCheckTokenRef = useRef(0);
   const [appVersion, setAppVersion] = useState("");
   const [platform, setPlatform] = useState<SoundDeckPlatform>("unknown");
   const [capabilities, setCapabilities] = useState<AppCapabilities | null>(null);
@@ -78,13 +85,87 @@ function App() {
 
   useEffect(() => () => dragCleanupRef.current?.(), []);
 
+  const clearUpdateCheckTimers = useCallback(() => {
+    if (updateCheckFallbackTimerRef.current !== null) {
+      clearTimeout(updateCheckFallbackTimerRef.current);
+      updateCheckFallbackTimerRef.current = null;
+    }
+    if (updateCheckResetTimerRef.current !== null) {
+      clearTimeout(updateCheckResetTimerRef.current);
+      updateCheckResetTimerRef.current = null;
+    }
+  }, []);
+
+  const scheduleUpdateCheckReset = useCallback((token: number) => {
+    if (updateCheckResetTimerRef.current !== null) clearTimeout(updateCheckResetTimerRef.current);
+    updateCheckResetTimerRef.current = setTimeout(() => {
+      updateCheckResetTimerRef.current = null;
+      if (token === updateCheckTokenRef.current) setUpdateCheckStatus("idle");
+    }, 4000);
+  }, []);
+
+  const finishManualUpdateCheck = useCallback((status: Exclude<UpdateCheckStatus, "checking">) => {
+    const token = updateCheckTokenRef.current;
+    clearUpdateCheckTimers();
+    manualUpdateCheckActiveRef.current = false;
+    setUpdateCheckStatus(status);
+    if (status === "up-to-date" || status === "error") scheduleUpdateCheckReset(token);
+  }, [clearUpdateCheckTimers, scheduleUpdateCheckReset]);
+
   useEffect(() => {
     return window.sounddeck.onUpdateStatus((status) => {
-      setUpdateStatus(status);
+      setUpdateStatus((current) => {
+        // Once an update is downloaded and ready to install, don't let a later
+        // background check (checking / up-to-date / error) displace it. The
+        // downloaded update is still available, so the restart prompt should stay.
+        if (current?.state === "ready" && status.state !== "downloading" && status.state !== "ready") return current;
+        return status;
+      });
       // A hidden download toast should still resurface once the update is ready.
       if (status.state === "ready") setUpdateDismissed(false);
+      if (!manualUpdateCheckActiveRef.current) {
+        if (status.state === "downloading" || status.state === "ready" || status.state === "error") {
+          setUpdateCheckStatus("idle");
+        }
+        return;
+      }
+      if (status.state === "checking") setUpdateCheckStatus("checking");
+      else if (status.state === "up-to-date") {
+        finishManualUpdateCheck("up-to-date");
+      } else if (status.state === "downloading" || status.state === "ready") {
+        finishManualUpdateCheck("idle");
+      } else if (status.state === "error") {
+        finishManualUpdateCheck("error");
+      }
     });
-  }, []);
+  }, [finishManualUpdateCheck]);
+
+  const checkForUpdates = useCallback(async () => {
+    if (updateCheckStatus === "checking" || !capabilities?.updateChecksSupported) return;
+    clearUpdateCheckTimers();
+    const token = updateCheckTokenRef.current + 1;
+    updateCheckTokenRef.current = token;
+    manualUpdateCheckActiveRef.current = true;
+    setUpdateCheckStatus("checking");
+    try {
+      await window.sounddeck.checkForUpdates();
+      // electron-updater reports back via update-status events; if nothing
+      // arrives, show a brief up-to-date blip instead of leaving a spinner.
+      if (token !== updateCheckTokenRef.current || !manualUpdateCheckActiveRef.current) return;
+      updateCheckFallbackTimerRef.current = setTimeout(() => setUpdateCheckStatus((current) => {
+        updateCheckFallbackTimerRef.current = null;
+        if (token !== updateCheckTokenRef.current) return current;
+        if (current !== "checking") return current;
+        manualUpdateCheckActiveRef.current = false;
+        scheduleUpdateCheckReset(token);
+        return "up-to-date";
+      }), 4000);
+    } catch {
+      if (token === updateCheckTokenRef.current) finishManualUpdateCheck("error");
+    }
+  }, [capabilities?.updateChecksSupported, clearUpdateCheckTimers, finishManualUpdateCheck, scheduleUpdateCheckReset, updateCheckStatus]);
+
+  useEffect(() => () => clearUpdateCheckTimers(), [clearUpdateCheckTimers]);
 
   useEffect(() => {
     void window.sounddeck.getCorsairStatus().then(setCorsairState);
@@ -668,7 +749,7 @@ function App() {
   const inputDevices = devices.filter((device) => device.kind === "audioinput" && isSelectableMediaDevice(device));
   const defaultInputLabel = getDefaultDeviceLabel(devices, "audioinput");
   const defaultOutputLabel = getDefaultDeviceLabel(devices, "audiooutput");
-
+  const canCheckForUpdates = capabilities?.updateChecksSupported === true;
   return (
     <main
       className="app"
@@ -734,7 +815,26 @@ function App() {
           <button className={view === "devices" ? "active" : ""} onClick={() => setView("devices")}><Settings size={18} /> Devices</button>
           <button className={view === "hotkeys" ? "active" : ""} onClick={() => setView("hotkeys")}><Keyboard size={18} /> Hotkeys</button>
         </div>
-        {appVersion && <div className="appVersion">v{appVersion}</div>}
+        {appVersion && (
+          <div className="appVersionRow">
+            <span className="appVersion">v{appVersion}</span>
+            {canCheckForUpdates && (
+              <>
+                <button
+                  className="checkUpdatesButton" type="button"
+                  title={updateCheckStatus === "checking" ? "Checking for updates…" : updateCheckStatus === "up-to-date" ? "You're up to date" : updateCheckStatus === "error" ? "Couldn't check for updates" : "Check for updates"}
+                  aria-label="Check for updates"
+                  disabled={updateCheckStatus === "checking"}
+                  onClick={() => void checkForUpdates()}
+                >
+                  <RefreshCw size={12} className={updateCheckStatus === "checking" ? "spin" : ""} />
+                </button>
+                {updateCheckStatus === "up-to-date" && <span className="checkUpdatesResult">Up to date</span>}
+                {updateCheckStatus === "error" && <span className="checkUpdatesResult checkUpdatesResult-error">Check failed</span>}
+              </>
+            )}
+          </div>
+        )}
       </aside>
 
       <section className="workspace">
@@ -857,7 +957,7 @@ function App() {
         )}
       </section>
 
-      {updateStatus && !updateDismissed && (
+      {updateStatus && (updateStatus.state === "downloading" || updateStatus.state === "ready") && !updateDismissed && (
         <UpdateToast
           status={updateStatus}
           onInstall={() => void window.sounddeck.installUpdate()}
@@ -938,7 +1038,7 @@ function UrlImportModal({ onClose, onImport }: { onClose: () => void; onImport: 
   );
 }
 
-function UpdateToast({ status, onInstall, onDismiss }: { status: UpdateStatus; onInstall: () => void; onDismiss: () => void }) {
+function UpdateToast({ status, onInstall, onDismiss }: { status: Extract<UpdateStatus, { state: "downloading" } | { state: "ready" }>; onInstall: () => void; onDismiss: () => void }) {
   const percent = Math.max(0, Math.min(100, Math.round(status.state === "downloading" ? status.percent ?? 0 : 100)));
   return (
     <aside className="updateToast" role="status" data-state={status.state}>
@@ -1810,7 +1910,7 @@ function HotkeyPanel({ library, results, corsairState, capabilities, onChangeSet
           <div className="permissionNotice">
             <AlertCircle size={18} />
             <span>macOS blocked keyboard monitoring. Allow SoundDeck Studio in Privacy & Security, then retry the hotkey.</span>
-            <button onClick={() => void window.sounddeck.openExternal(capabilities.hotkeys.permissionHelpUrl || "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent")}>Open Settings</button>
+            <button onClick={() => void window.sounddeck.openExternal(capabilities?.hotkeys.permissionHelpUrl || "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent")}>Open Settings</button>
           </div>
         )}
         <div className="hotkeyList">

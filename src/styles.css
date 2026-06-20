@@ -304,11 +304,60 @@ small { color: var(--text-dim); font-size: 12px; }
 }
 
 .appVersion {
-  margin: -10px 6px 0;
   font-family: var(--font-mono);
   font-size: 10.5px;
   letter-spacing: 0.08em;
   color: var(--text-faint);
+}
+
+.appVersionRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: -10px 6px 0;
+}
+
+.checkUpdatesButton {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.checkUpdatesButton:hover:not(:disabled) {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.checkUpdatesButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.checkUpdatesButton .spin {
+  animation: spin 0.9s linear infinite;
+}
+
+.checkUpdatesResult {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+}
+
+.checkUpdatesResult-error {
+  color: var(--warn);
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 /* ---------- workspace ---------- */

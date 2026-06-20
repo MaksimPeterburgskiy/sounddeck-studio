@@ -30,6 +30,7 @@ contextBridge.exposeInMainWorld("sounddeck", {
     ipcRenderer.on("corsair-status", listener);
     return () => ipcRenderer.removeListener("corsair-status", listener);
   },
+  checkForUpdates: () => ipcRenderer.invoke("update:check"),
   installUpdate: () => ipcRenderer.invoke("update:install"),
   onUpdateStatus: (callback) => {
     const listener = (_event, status) => callback(status);

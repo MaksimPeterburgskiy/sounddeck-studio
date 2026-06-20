@@ -90,6 +90,7 @@ export function installDevBridge() {
           globalShortcutFallbackAvailable: false,
           lastFailureReason: ""
         },
+        updateChecksSupported: false,
         corsairAvailable: false
       };
     },
@@ -107,6 +108,9 @@ export function installDevBridge() {
     },
     onCorsairKey() {
       return () => undefined;
+    },
+    async checkForUpdates() {
+      // No updater in browser preview; let the renderer's timeout settle the status.
     },
     async installUpdate() {
       // No updater outside Electron.
