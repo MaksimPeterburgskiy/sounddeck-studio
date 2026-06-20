@@ -42,6 +42,7 @@ installDevBridge();
 
 type View = "board" | "devices" | "hotkeys" | "recorder";
 type EngineStatus = "idle" | "playing" | "paused";
+type UpdateCheckStatus = "idle" | "checking" | "up-to-date" | "error";
 
 function App() {
   const [library, setLibrary] = useState<SoundLibrary | null>(null);
@@ -66,8 +67,11 @@ function App() {
   const [corsairState, setCorsairState] = useState<CorsairState>("unavailable");
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
   const [updateDismissed, setUpdateDismissed] = useState(false);
-  const [updateCheckStatus, setUpdateCheckStatus] = useState<"idle" | "checking" | "up-to-date" | "error">("idle");
+  const [updateCheckStatus, setUpdateCheckStatus] = useState<UpdateCheckStatus>("idle");
   const manualUpdateCheckActiveRef = useRef(false);
+  const updateCheckFallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const updateCheckResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const updateCheckTokenRef = useRef(0);
   const [appVersion, setAppVersion] = useState("");
   const [platform, setPlatform] = useState<SoundDeckPlatform>("unknown");
   const [capabilities, setCapabilities] = useState<AppCapabilities | null>(null);
@@ -80,6 +84,33 @@ function App() {
   }, []);
 
   useEffect(() => () => dragCleanupRef.current?.(), []);
+
+  const clearUpdateCheckTimers = useCallback(() => {
+    if (updateCheckFallbackTimerRef.current !== null) {
+      clearTimeout(updateCheckFallbackTimerRef.current);
+      updateCheckFallbackTimerRef.current = null;
+    }
+    if (updateCheckResetTimerRef.current !== null) {
+      clearTimeout(updateCheckResetTimerRef.current);
+      updateCheckResetTimerRef.current = null;
+    }
+  }, []);
+
+  const scheduleUpdateCheckReset = useCallback((token: number) => {
+    if (updateCheckResetTimerRef.current !== null) clearTimeout(updateCheckResetTimerRef.current);
+    updateCheckResetTimerRef.current = setTimeout(() => {
+      updateCheckResetTimerRef.current = null;
+      if (token === updateCheckTokenRef.current) setUpdateCheckStatus("idle");
+    }, 4000);
+  }, []);
+
+  const finishManualUpdateCheck = useCallback((status: Exclude<UpdateCheckStatus, "checking">) => {
+    const token = updateCheckTokenRef.current;
+    clearUpdateCheckTimers();
+    manualUpdateCheckActiveRef.current = false;
+    setUpdateCheckStatus(status);
+    if (status === "up-to-date" || status === "error") scheduleUpdateCheckReset(token);
+  }, [clearUpdateCheckTimers, scheduleUpdateCheckReset]);
 
   useEffect(() => {
     return window.sounddeck.onUpdateStatus((status) => {
@@ -100,39 +131,41 @@ function App() {
       }
       if (status.state === "checking") setUpdateCheckStatus("checking");
       else if (status.state === "up-to-date") {
-        manualUpdateCheckActiveRef.current = false;
-        setUpdateCheckStatus("up-to-date");
-        setTimeout(() => setUpdateCheckStatus("idle"), 4000);
+        finishManualUpdateCheck("up-to-date");
       } else if (status.state === "downloading" || status.state === "ready") {
-        manualUpdateCheckActiveRef.current = false;
-        setUpdateCheckStatus("idle");
+        finishManualUpdateCheck("idle");
       } else if (status.state === "error") {
-        manualUpdateCheckActiveRef.current = false;
-        setUpdateCheckStatus("error");
-        setTimeout(() => setUpdateCheckStatus("idle"), 4000);
+        finishManualUpdateCheck("error");
       }
     });
-  }, []);
+  }, [finishManualUpdateCheck]);
 
   const checkForUpdates = useCallback(async () => {
-    if (updateCheckStatus === "checking") return;
+    if (updateCheckStatus === "checking" || !capabilities?.updateChecksSupported) return;
+    clearUpdateCheckTimers();
+    const token = updateCheckTokenRef.current + 1;
+    updateCheckTokenRef.current = token;
     manualUpdateCheckActiveRef.current = true;
     setUpdateCheckStatus("checking");
     try {
       await window.sounddeck.checkForUpdates();
       // electron-updater reports back via update-status events; if nothing
-      // arrives (dev mode, portable build), show a brief up-to-date blip.
-      setTimeout(() => setUpdateCheckStatus((current) => {
+      // arrives, show a brief up-to-date blip instead of leaving a spinner.
+      if (token !== updateCheckTokenRef.current || !manualUpdateCheckActiveRef.current) return;
+      updateCheckFallbackTimerRef.current = setTimeout(() => setUpdateCheckStatus((current) => {
+        updateCheckFallbackTimerRef.current = null;
+        if (token !== updateCheckTokenRef.current) return current;
         if (current !== "checking") return current;
         manualUpdateCheckActiveRef.current = false;
+        scheduleUpdateCheckReset(token);
         return "up-to-date";
       }), 4000);
     } catch {
-      manualUpdateCheckActiveRef.current = false;
-      setUpdateCheckStatus("error");
-      setTimeout(() => setUpdateCheckStatus("idle"), 4000);
+      if (token === updateCheckTokenRef.current) finishManualUpdateCheck("error");
     }
-  }, [updateCheckStatus]);
+  }, [capabilities?.updateChecksSupported, clearUpdateCheckTimers, finishManualUpdateCheck, scheduleUpdateCheckReset, updateCheckStatus]);
+
+  useEffect(() => () => clearUpdateCheckTimers(), [clearUpdateCheckTimers]);
 
   useEffect(() => {
     void window.sounddeck.getCorsairStatus().then(setCorsairState);
@@ -716,6 +749,7 @@ function App() {
   const inputDevices = devices.filter((device) => device.kind === "audioinput" && isSelectableMediaDevice(device));
   const defaultInputLabel = getDefaultDeviceLabel(devices, "audioinput");
   const defaultOutputLabel = getDefaultDeviceLabel(devices, "audiooutput");
+  const canCheckForUpdates = capabilities?.updateChecksSupported === true;
   return (
     <main
       className="app"
@@ -784,17 +818,21 @@ function App() {
         {appVersion && (
           <div className="appVersionRow">
             <span className="appVersion">v{appVersion}</span>
-            <button
-              className="checkUpdatesButton" type="button"
-              title={updateCheckStatus === "checking" ? "Checking for updates…" : updateCheckStatus === "up-to-date" ? "You're up to date" : updateCheckStatus === "error" ? "Couldn't check for updates" : "Check for updates"}
-              aria-label="Check for updates"
-              disabled={updateCheckStatus === "checking"}
-              onClick={() => void checkForUpdates()}
-            >
-              <RefreshCw size={12} className={updateCheckStatus === "checking" ? "spin" : ""} />
-            </button>
-            {updateCheckStatus === "up-to-date" && <span className="checkUpdatesResult">Up to date</span>}
-            {updateCheckStatus === "error" && <span className="checkUpdatesResult checkUpdatesResult-error">Check failed</span>}
+            {canCheckForUpdates && (
+              <>
+                <button
+                  className="checkUpdatesButton" type="button"
+                  title={updateCheckStatus === "checking" ? "Checking for updates…" : updateCheckStatus === "up-to-date" ? "You're up to date" : updateCheckStatus === "error" ? "Couldn't check for updates" : "Check for updates"}
+                  aria-label="Check for updates"
+                  disabled={updateCheckStatus === "checking"}
+                  onClick={() => void checkForUpdates()}
+                >
+                  <RefreshCw size={12} className={updateCheckStatus === "checking" ? "spin" : ""} />
+                </button>
+                {updateCheckStatus === "up-to-date" && <span className="checkUpdatesResult">Up to date</span>}
+                {updateCheckStatus === "error" && <span className="checkUpdatesResult checkUpdatesResult-error">Check failed</span>}
+              </>
+            )}
           </div>
         )}
       </aside>
