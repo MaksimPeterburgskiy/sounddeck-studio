@@ -31,3 +31,11 @@
   ${EndIf}
   ${EnableX64FSRedirection}
 !macroend
+
+!macro customUnInstall
+  DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "SoundDeck Studio"
+  ; Clean up possible names used by earlier builds before the startup item
+  ; name was made explicit in app.setLoginItemSettings().
+  DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "com.sounddeck.studio"
+  DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "sounddeck-studio"
+!macroend

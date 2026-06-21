@@ -1823,13 +1823,16 @@ function SettingsPanel({ startupSettings, startupUpdateStatus, capabilities, onC
 }) {
   const startupSupported = capabilities?.runAtStartupSupported ?? startupSettings.supported;
   const disabled = !startupSupported || startupUpdateStatus === "saving";
+  const startupNeedsApproval = startupSettings.status === "requires-approval" || startupSettings.status === "not-approved";
   const startupCopy = !startupSupported
-    ? "Startup launch is available on macOS and Windows builds."
+    ? startupSettings.reason === "portable-build"
+      ? "Startup launch is disabled for portable Windows builds."
+      : "Startup launch is available on macOS and Windows builds."
     : startupUpdateStatus === "saving"
     ? "Saving startup preference..."
-    : startupUpdateStatus === "error"
+    : startupUpdateStatus === "error" || startupSettings.reason
       ? startupSettings.reason || "Could not update startup preference."
-      : startupSettings.status === "requires-approval"
+      : startupNeedsApproval
         ? "Startup is enabled, but your system still needs approval."
         : startupSettings.enabled
           ? "SoundDeck opens automatically when you sign in."
