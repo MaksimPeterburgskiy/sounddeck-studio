@@ -1,9 +1,12 @@
 import { execFile } from "node:child_process";
+import { createRequire } from "node:module";
 import { mkdir, copyFile, rm } from "node:fs/promises";
 import { promisify } from "node:util";
 import path from "node:path";
 
 const execFileAsync = promisify(execFile);
+const require = createRequire(import.meta.url);
+const { writeMacTrayTemplateFiles } = require("../electron/trayIcon.cjs");
 const root = process.cwd();
 const sourcePng = path.join(root, "docs", "icon.png");
 const buildDir = path.join(root, "build");
@@ -13,6 +16,7 @@ const iconIcns = path.join(buildDir, "icon.icns");
 
 await mkdir(buildDir, { recursive: true });
 await copyFile(sourcePng, iconPng);
+await writeMacTrayTemplateFiles(buildDir);
 
 if (process.platform !== "darwin") {
   console.warn("Skipping icon.icns generation because macOS iconutil is only available on macOS.");

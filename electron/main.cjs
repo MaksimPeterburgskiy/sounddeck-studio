@@ -9,6 +9,7 @@ const { spawn } = require("node:child_process");
 const { createCorsairBridge, isCorsairSupportedPlatform, isGKeyAccelerator } = require("./corsair.cjs");
 const { createHotkeyEngine } = require("./hotkeys.cjs");
 const { buildCropArgs } = require("./ffmpegArgs.cjs");
+const { createMacTrayTemplateImage, MAC_TRAY_ICON_FILENAME } = require("./trayIcon.cjs");
 
 const isDev = !app.isPackaged;
 if (isDev && process.env.SOUNDDECK_USER_DATA) app.setPath("userData", process.env.SOUNDDECK_USER_DATA);
@@ -448,16 +449,28 @@ function trayIconPath() {
   return isDev ? devPath : path.join(process.resourcesPath, iconFile);
 }
 
+function macTrayIconPath() {
+  const devPath = path.join(__dirname, "../build", MAC_TRAY_ICON_FILENAME);
+  return isDev ? devPath : path.join(process.resourcesPath, MAC_TRAY_ICON_FILENAME);
+}
+
+function createMacTrayIcon() {
+  const icon = nativeImage.createFromPath(macTrayIconPath());
+  if (icon.isEmpty()) return createMacTrayTemplateImage(nativeImage);
+
+  icon.setTemplateImage(true);
+  return icon;
+}
+
 function createTrayIcon() {
+  if (process.platform === "darwin") {
+    return createMacTrayIcon();
+  }
+
   const icon = nativeImage.createFromPath(trayIconPath());
   if (icon.isEmpty() || process.platform === "win32") return icon;
 
-  const traySize = process.platform === "darwin" ? 18 : 24;
-  const resized = icon.resize({ width: traySize, height: traySize, quality: "best" });
-  if (process.platform === "darwin") {
-    resized.setTemplateImage(true);
-  }
-  return resized;
+  return icon.resize({ width: 24, height: 24, quality: "best" });
 }
 
 function showMainWindow() {

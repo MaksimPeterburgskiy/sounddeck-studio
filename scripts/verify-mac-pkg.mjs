@@ -63,6 +63,14 @@ async function verifyAppPayload(appPath) {
     path.join(appPath, "Contents/Frameworks/Electron Framework.framework/Versions/Current"),
     "Electron Framework.framework/Versions/Current must remain a symlink."
   );
+  await assertFile(
+    path.join(appPath, "Contents/Resources/trayTemplate.png"),
+    "App payload must include the 1x macOS tray template icon."
+  );
+  await assertFile(
+    path.join(appPath, "Contents/Resources/trayTemplate@2x.png"),
+    "App payload must include the 2x macOS tray template icon."
+  );
   await run("codesign", ["--verify", "--deep", "--strict", "--verbose=2", appPath]);
   await run("spctl", ["--assess", "--verbose", "--type", "execute", appPath]);
 }
@@ -76,6 +84,20 @@ async function assertSymlink(filePath, message) {
   } catch (error) {
     if (error.code === "ENOENT") {
       throw new Error(`${message} File or directory does not exist at ${filePath}`);
+    }
+    throw error;
+  }
+}
+
+async function assertFile(filePath, message) {
+  try {
+    const stats = await lstat(filePath);
+    if (!stats.isFile()) {
+      throw new Error(`${message} Found ${filePath} but it is not a file.`);
+    }
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      throw new Error(`${message} File does not exist at ${filePath}`);
     }
     throw error;
   }
