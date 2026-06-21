@@ -26,6 +26,7 @@ let corsairBindings = new Map();
 let hotkeyCaptureActive = false;
 
 const WINDOWS_STARTUP_NAME = "SoundDeck Studio";
+const WINDOWS_LEGACY_STARTUP_NAMES = ["com.sounddeck.studio", "sounddeck-studio"];
 
 const hotkeyEngine = createHotkeyEngine({
   onTrigger: (binding) => mainWindow?.webContents.send("hotkey-trigger", binding)
@@ -166,6 +167,13 @@ function startupUnsupportedReason() {
 function startupLoginItemOptions(openAtLogin) {
   if (process.platform !== "win32") return { openAtLogin };
   return { openAtLogin, enabled: openAtLogin, name: WINDOWS_STARTUP_NAME };
+}
+
+function clearLegacyWindowsStartupItems() {
+  if (process.platform !== "win32") return;
+  for (const name of WINDOWS_LEGACY_STARTUP_NAMES) {
+    app.setLoginItemSettings({ openAtLogin: false, enabled: false, name });
+  }
 }
 
 function windowsStartupEnabled(settings) {
@@ -922,7 +930,9 @@ ipcMain.handle("app:getStartupSettings", () => getStartupSettings());
 ipcMain.handle("app:setRunAtStartup", (_event, enabled) => {
   if (!startupSettingsSupported()) return { ok: false, ...getStartupSettings() };
   try {
-    app.setLoginItemSettings(startupLoginItemOptions(Boolean(enabled)));
+    const openAtLogin = Boolean(enabled);
+    app.setLoginItemSettings(startupLoginItemOptions(openAtLogin));
+    if (!openAtLogin) clearLegacyWindowsStartupItems();
     return { ok: true, ...getStartupSettings() };
   } catch (error) {
     return { ok: false, ...getStartupSettings(), reason: error?.message || "startup-settings-unavailable" };
