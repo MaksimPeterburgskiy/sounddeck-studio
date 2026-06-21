@@ -91,8 +91,15 @@ export function installDevBridge() {
           lastFailureReason: ""
         },
         updateChecksSupported: false,
+        runAtStartupSupported: false,
         corsairAvailable: false
       };
+    },
+    async getStartupSettings() {
+      return { supported: false, enabled: false, reason: "Run in Electron to manage startup settings" };
+    },
+    async setRunAtStartup() {
+      return { ok: false, supported: false, enabled: false, reason: "Run in Electron to manage startup settings" };
     },
     getPathForFile(file: File) {
       return file.name;

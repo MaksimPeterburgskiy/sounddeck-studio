@@ -139,6 +139,7 @@ function appCapabilities() {
     platform: sounddeckPlatform(),
     managedVirtualBackend: managedVirtualBackend(),
     managedVirtualMicAvailable: process.platform === "win32" || process.platform === "darwin" || process.platform === "linux",
+    runAtStartupSupported: startupSettingsSupported(),
     hotkeys: {
       advancedHookAvailable: Boolean(hotkeyStatus.advancedHookAvailable),
       globalShortcutFallbackAvailable: Boolean(hotkeyStatus.globalShortcutFallbackAvailable),
@@ -148,6 +149,24 @@ function appCapabilities() {
     updateChecksSupported: app.isPackaged && !process.env.PORTABLE_EXECUTABLE_DIR,
     corsairAvailable: isCorsairSupportedPlatform()
   };
+}
+
+function startupSettingsSupported() {
+  return process.platform === "darwin" || process.platform === "win32";
+}
+
+function getStartupSettings() {
+  if (!startupSettingsSupported()) return { supported: false, enabled: false, reason: "unsupported-platform" };
+  try {
+    const settings = app.getLoginItemSettings();
+    return {
+      supported: true,
+      enabled: Boolean(settings.openAtLogin),
+      ...(typeof settings.status === "string" ? { status: settings.status } : {})
+    };
+  } catch (error) {
+    return { supported: false, enabled: false, reason: error?.message || "startup-settings-unavailable" };
+  }
 }
 
 // Reads the source stream's native sample rate from ffmpeg's banner (printed to stderr).
@@ -875,3 +894,15 @@ ipcMain.handle("app:getVersion", () => app.getVersion());
 ipcMain.handle("app:getPlatform", () => sounddeckPlatform());
 
 ipcMain.handle("app:getCapabilities", () => appCapabilities());
+
+ipcMain.handle("app:getStartupSettings", () => getStartupSettings());
+
+ipcMain.handle("app:setRunAtStartup", (_event, enabled) => {
+  if (!startupSettingsSupported()) return { ok: false, ...getStartupSettings() };
+  try {
+    app.setLoginItemSettings({ openAtLogin: Boolean(enabled) });
+    return { ok: true, ...getStartupSettings() };
+  } catch (error) {
+    return { ok: false, ...getStartupSettings(), reason: error?.message || "startup-settings-unavailable" };
+  }
+});

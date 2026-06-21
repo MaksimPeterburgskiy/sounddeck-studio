@@ -1275,6 +1275,7 @@ input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent);
 /* ---------- panels (devices / hotkeys / recorder) ---------- */
 
 .panel { display: grid; grid-template-columns: minmax(420px, 640px) minmax(300px, 1fr); gap: 18px; align-items: start; }
+.settingsPanel { grid-template-columns: minmax(0, 1fr); }
 .panel section {
   display: grid;
   align-content: start;
@@ -1303,6 +1304,19 @@ input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent);
 }
 .toggleRow label:hover { border-color: var(--line-bright); }
 .toggleRow label:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); color: var(--text); }
+.settingsToggleRow { grid-template-columns: 1fr; }
+.settingsToggle.disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+.settingsToggle input:disabled { cursor: not-allowed; }
+.settingsToggleText {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+.settingsToggleText strong { font-size: 13px; color: var(--text); }
+.settingsToggleText small { line-height: 1.4; }
 
 .buttonLine { display: flex; flex-wrap: wrap; gap: 10px; }
 
