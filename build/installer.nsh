@@ -39,5 +39,21 @@
     ; name was made explicit in app.setLoginItemSettings().
     DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "com.sounddeck.studio"
     DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "sounddeck-studio"
+
+    StrCpy $0 0
+    ${Do}
+      ClearErrors
+      EnumRegKey $1 HKU "" $0
+      ${If} ${Errors}
+        ${Break}
+      ${EndIf}
+      ${If} $1 == ""
+        ${Break}
+      ${EndIf}
+      DeleteRegValue HKU "$1\Software\Microsoft\Windows\CurrentVersion\Run" "SoundDeck Studio"
+      DeleteRegValue HKU "$1\Software\Microsoft\Windows\CurrentVersion\Run" "com.sounddeck.studio"
+      DeleteRegValue HKU "$1\Software\Microsoft\Windows\CurrentVersion\Run" "sounddeck-studio"
+      IntOp $0 $0 + 1
+    ${Loop}
   ${EndIf}
 !macroend
