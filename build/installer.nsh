@@ -72,21 +72,18 @@
         ${Break}
       ${EndIf}
 
-      StrCpy $2 $1 8
-      ${If} $2 == "S-1-5-21"
-        ClearErrors
-        EnumRegKey $3 HKU "$1" 0
-        ${If} ${Errors}
-          ReadRegStr $2 HKLM "${SOUNDDECK_PROFILE_LIST_KEY}\$1" "ProfileImagePath"
-          ExpandEnvStrings $2 "$2"
-          ${If} ${FileExists} "$2\NTUSER.DAT"
-            StrCpy $3 "SoundDeckUninstall$0"
+      ClearErrors
+      EnumRegKey $3 HKU "$1" 0
+      ${If} ${Errors}
+        ReadRegStr $2 HKLM "${SOUNDDECK_PROFILE_LIST_KEY}\$1" "ProfileImagePath"
+        ExpandEnvStrings $2 "$2"
+        ${If} ${FileExists} "$2\NTUSER.DAT"
+          StrCpy $3 "SoundDeckUninstall$0"
+          ExecWait 'reg.exe unload "HKU\$3"' $4
+          ExecWait 'reg.exe load "HKU\$3" "$2\NTUSER.DAT"' $4
+          ${If} $4 == 0
+            !insertmacro DeleteSoundDeckStartupValues HKU "$3\${SOUNDDECK_RUN_KEY}"
             ExecWait 'reg.exe unload "HKU\$3"' $4
-            ExecWait 'reg.exe load "HKU\$3" "$2\NTUSER.DAT"' $4
-            ${If} $4 == 0
-              !insertmacro DeleteSoundDeckStartupValues HKU "$3\${SOUNDDECK_RUN_KEY}"
-              ExecWait 'reg.exe unload "HKU\$3"' $4
-            ${EndIf}
           ${EndIf}
         ${EndIf}
       ${EndIf}
