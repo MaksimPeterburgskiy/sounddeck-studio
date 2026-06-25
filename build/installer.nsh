@@ -1,6 +1,17 @@
 !include "LogicLib.nsh"
 !include "x64.nsh"
 
+!define SOUNDDECK_RUN_KEY "Software\Microsoft\Windows\CurrentVersion\Run"
+!define SOUNDDECK_PROFILE_LIST_KEY "SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList"
+
+!macro DeleteSoundDeckStartupValues ROOT_KEY RUN_KEY
+  DeleteRegValue ${ROOT_KEY} "${RUN_KEY}" "SoundDeck Studio"
+  ; Clean up possible names used by earlier builds before the startup item
+  ; name was made explicit in app.setLoginItemSettings().
+  DeleteRegValue ${ROOT_KEY} "${RUN_KEY}" "com.sounddeck.studio"
+  DeleteRegValue ${ROOT_KEY} "${RUN_KEY}" "sounddeck-studio"
+!macroend
+
 ; Expand the install log by default so users can watch what is happening,
 ; and recolor it to match the app theme (lime text on charcoal).
 !macro customHeader
@@ -34,11 +45,7 @@
 
 !macro customUnInstall
   ${IfNot} ${isUpdated}
-    DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "SoundDeck Studio"
-    ; Clean up possible names used by earlier builds before the startup item
-    ; name was made explicit in app.setLoginItemSettings().
-    DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "com.sounddeck.studio"
-    DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "sounddeck-studio"
+    !insertmacro DeleteSoundDeckStartupValues HKCU "${SOUNDDECK_RUN_KEY}"
 
     StrCpy $0 0
     ${Do}
@@ -50,9 +57,39 @@
       ${If} $1 == ""
         ${Break}
       ${EndIf}
-      DeleteRegValue HKU "$1\Software\Microsoft\Windows\CurrentVersion\Run" "SoundDeck Studio"
-      DeleteRegValue HKU "$1\Software\Microsoft\Windows\CurrentVersion\Run" "com.sounddeck.studio"
-      DeleteRegValue HKU "$1\Software\Microsoft\Windows\CurrentVersion\Run" "sounddeck-studio"
+      !insertmacro DeleteSoundDeckStartupValues HKU "$1\${SOUNDDECK_RUN_KEY}"
+      IntOp $0 $0 + 1
+    ${Loop}
+
+    StrCpy $0 0
+    ${Do}
+      ClearErrors
+      EnumRegKey $1 HKLM "${SOUNDDECK_PROFILE_LIST_KEY}" $0
+      ${If} ${Errors}
+        ${Break}
+      ${EndIf}
+      ${If} $1 == ""
+        ${Break}
+      ${EndIf}
+
+      StrCpy $2 $1 8
+      ${If} $2 == "S-1-5-21"
+        ClearErrors
+        EnumRegKey $3 HKU "$1" 0
+        ${If} ${Errors}
+          ReadRegStr $2 HKLM "${SOUNDDECK_PROFILE_LIST_KEY}\$1" "ProfileImagePath"
+          ExpandEnvStrings $2 "$2"
+          ${If} ${FileExists} "$2\NTUSER.DAT"
+            StrCpy $3 "SoundDeckUninstall$0"
+            ExecWait 'reg.exe unload "HKU\$3"' $4
+            ExecWait 'reg.exe load "HKU\$3" "$2\NTUSER.DAT"' $4
+            ${If} $4 == 0
+              !insertmacro DeleteSoundDeckStartupValues HKU "$3\${SOUNDDECK_RUN_KEY}"
+              ExecWait 'reg.exe unload "HKU\$3"' $4
+            ${EndIf}
+          ${EndIf}
+        ${EndIf}
+      ${EndIf}
       IntOp $0 $0 + 1
     ${Loop}
   ${EndIf}
