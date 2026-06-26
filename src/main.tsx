@@ -14,6 +14,7 @@ import {
   Pencil,
   Play,
   Plus,
+  Power,
   Radio,
   RefreshCcw,
   RefreshCw,
@@ -35,14 +36,15 @@ import { acceleratorLooksReserved, formatBytes, formatDuration, makeBoard, norma
 import { claimCaptureSlot, eventToToken, formatAccelerator, MODIFIER_TOKENS, normalizeAccelerator, orderTokens } from "./lib/hotkeys";
 import { makeWaveform } from "./lib/waveform";
 import { installDevBridge } from "./lib/devBridge";
-import type { AppCapabilities, CorsairState, HotkeyBinding, HotkeyResult, MediaImportResult, SoundBoard, SoundDeckPlatform, SoundLibrary, SoundSlot, UpdateStatus, VirtualBackend } from "./types";
+import type { AppCapabilities, CorsairState, HotkeyBinding, HotkeyResult, MediaImportResult, SoundBoard, SoundDeckPlatform, SoundLibrary, SoundSlot, StartupSettings, UpdateStatus, VirtualBackend } from "./types";
 import "./styles.css";
 
 installDevBridge();
 
-type View = "board" | "devices" | "hotkeys" | "recorder";
+type View = "board" | "devices" | "settings" | "hotkeys" | "recorder";
 type EngineStatus = "idle" | "playing" | "paused";
 type UpdateCheckStatus = "idle" | "checking" | "up-to-date" | "error";
+type StartupUpdateStatus = "idle" | "saving" | "error";
 
 function App() {
   const [library, setLibrary] = useState<SoundLibrary | null>(null);
@@ -75,12 +77,17 @@ function App() {
   const [appVersion, setAppVersion] = useState("");
   const [platform, setPlatform] = useState<SoundDeckPlatform>("unknown");
   const [capabilities, setCapabilities] = useState<AppCapabilities | null>(null);
+  const [startupSettings, setStartupSettings] = useState<StartupSettings>({ supported: false, enabled: false });
+  const [startupUpdateStatus, setStartupUpdateStatus] = useState<StartupUpdateStatus>("idle");
   const engineRef = useRef<AudioEngine | null>(null);
 
   useEffect(() => {
     void window.sounddeck.getVersion().then(setAppVersion).catch(() => undefined);
     void window.sounddeck.getPlatform().then(setPlatform).catch(() => undefined);
     void window.sounddeck.getCapabilities().then(setCapabilities).catch(() => undefined);
+    void window.sounddeck.getStartupSettings().then(setStartupSettings).catch(() => {
+      setStartupSettings({ supported: false, enabled: false, reason: "Startup settings are unavailable." });
+    });
   }, []);
 
   useEffect(() => () => dragCleanupRef.current?.(), []);
@@ -743,6 +750,21 @@ function App() {
     updateLibrary((current) => ({ ...current, settings: { ...current.settings, ...normalizedPatch } }));
   }
 
+  async function updateRunAtStartup(enabled: boolean) {
+    const previous = startupSettings;
+    setStartupSettings({ ...startupSettings, enabled });
+    setStartupUpdateStatus("saving");
+    try {
+      const next = await window.sounddeck.setRunAtStartup(enabled);
+      setStartupSettings(next);
+      setStartupUpdateStatus(next.ok ? "idle" : "error");
+      if (next.ok) setMessage(enabled ? "SoundDeck will run when you sign in" : "SoundDeck will stay closed at sign-in");
+    } catch {
+      setStartupSettings({ ...previous, reason: "Could not update startup settings." });
+      setStartupUpdateStatus("error");
+    }
+  }
+
   if (!library || !activeBoard) return <div className="boot">Loading SoundDeck Studio...</div>;
 
   const outputDevices = devices.filter((device) => device.kind === "audiooutput" && isSelectableMediaDevice(device));
@@ -750,6 +772,8 @@ function App() {
   const defaultInputLabel = getDefaultDeviceLabel(devices, "audioinput");
   const defaultOutputLabel = getDefaultDeviceLabel(devices, "audiooutput");
   const canCheckForUpdates = capabilities?.updateChecksSupported === true;
+  const isGlobalView = view === "devices" || view === "settings" || view === "hotkeys";
+  const globalViewTitle = view === "devices" ? "Devices" : view === "settings" ? "Settings" : "Hotkeys";
   return (
     <main
       className="app"
@@ -812,7 +836,8 @@ function App() {
           <button className={view === "recorder" ? "active" : ""} onClick={() => setView("recorder")}><Mic size={18} /> Recorder</button>
           <div className="sideNavDivider" />
           <div className="sideNavLabel">Global settings</div>
-          <button className={view === "devices" ? "active" : ""} onClick={() => setView("devices")}><Settings size={18} /> Devices</button>
+          <button className={view === "devices" ? "active" : ""} onClick={() => setView("devices")}><Headphones size={18} /> Devices</button>
+          <button className={view === "settings" ? "active" : ""} onClick={() => setView("settings")}><Settings size={18} /> Settings</button>
           <button className={view === "hotkeys" ? "active" : ""} onClick={() => setView("hotkeys")}><Keyboard size={18} /> Hotkeys</button>
         </div>
         {appVersion && (
@@ -839,9 +864,9 @@ function App() {
 
       <section className="workspace">
         <header className="topbar">
-          {view === "devices" || view === "hotkeys" ? (
+          {isGlobalView ? (
             <div className="topbarTitleBlock">
-              <div className="boardTitle"><h1>{view === "devices" ? "Devices" : "Hotkeys"}</h1></div>
+              <div className="boardTitle"><h1>{globalViewTitle}</h1></div>
               <p className="topbarMeta">Global settings · applies to every board · {message}</p>
             </div>
           ) : (
@@ -925,6 +950,15 @@ function App() {
             capabilities={capabilities}
             onRefresh={refreshDevices}
             onChange={changeSettings}
+          />
+        )}
+
+        {view === "settings" && (
+          <SettingsPanel
+            startupSettings={startupSettings}
+            startupUpdateStatus={startupUpdateStatus}
+            capabilities={capabilities}
+            onChangeStartup={(enabled) => void updateRunAtStartup(enabled)}
           />
         )}
 
@@ -1777,6 +1811,52 @@ function ClipEditor({ sound, engine, onChange, onClose, mediaUsedElsewhere }: {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function SettingsPanel({ startupSettings, startupUpdateStatus, capabilities, onChangeStartup }: {
+  startupSettings: StartupSettings;
+  startupUpdateStatus: StartupUpdateStatus;
+  capabilities: AppCapabilities | null;
+  onChangeStartup: (enabled: boolean) => void;
+}) {
+  const startupSupported = capabilities?.runAtStartupSupported ?? startupSettings.supported;
+  const disabled = !startupSupported || startupUpdateStatus === "saving";
+  const startupNeedsApproval = startupSettings.status === "requires-approval" || startupSettings.status === "not-approved";
+  const startupCopy = !startupSupported
+    ? startupSettings.reason === "portable-build"
+      ? "Startup launch is disabled for portable Windows builds."
+      : "Startup launch is available on macOS and Windows builds."
+    : startupUpdateStatus === "saving"
+    ? "Saving startup preference..."
+    : startupUpdateStatus === "error" || startupSettings.reason
+      ? startupSettings.reason || "Could not update startup preference."
+      : startupNeedsApproval
+        ? "Startup is enabled, but your system still needs approval."
+        : startupSettings.enabled
+          ? "SoundDeck opens automatically when you sign in."
+          : "SoundDeck stays closed until you open it.";
+  return (
+    <div className="panel settingsPanel">
+      <section>
+        <h2>App Settings</h2>
+        <div className="toggleRow settingsToggleRow">
+          <label className={disabled ? "settingsToggle disabled" : "settingsToggle"}>
+            <input
+              type="checkbox"
+              checked={startupSettings.enabled}
+              disabled={disabled}
+              onChange={(event) => onChangeStartup(event.target.checked)}
+            />
+            <Power size={17} />
+            <span className="settingsToggleText">
+              <strong>Run on start</strong>
+              <small>{startupCopy}</small>
+            </span>
+          </label>
+        </div>
+      </section>
     </div>
   );
 }

@@ -110,6 +110,7 @@ export interface AppCapabilities {
   platform: SoundDeckPlatform;
   managedVirtualBackend: VirtualBackend;
   managedVirtualMicAvailable: boolean;
+  runAtStartupSupported: boolean;
   hotkeys: {
     advancedHookAvailable: boolean;
     globalShortcutFallbackAvailable: boolean;
@@ -126,6 +127,13 @@ export type UpdateStatus =
   | { state: "error"; message?: string }
   | { state: "downloading"; version?: string; percent?: number }
   | { state: "ready"; version: string };
+
+export interface StartupSettings {
+  supported: boolean;
+  enabled: boolean;
+  status?: string;
+  reason?: string;
+}
 
 declare global {
   interface Window {
@@ -147,6 +155,8 @@ declare global {
       getVersion: () => Promise<string>;
       getPlatform: () => Promise<SoundDeckPlatform>;
       getCapabilities: () => Promise<AppCapabilities>;
+      getStartupSettings: () => Promise<StartupSettings>;
+      setRunAtStartup: (enabled: boolean) => Promise<StartupSettings & { ok: boolean }>;
       getPathForFile: (file: File) => string;
       onHotkeyTrigger: (callback: (binding: HotkeyBinding) => void) => () => void;
       getCorsairStatus: () => Promise<CorsairState>;

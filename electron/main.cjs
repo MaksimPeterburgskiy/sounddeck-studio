@@ -26,6 +26,9 @@ let isQuitting = false;
 let corsairBindings = new Map();
 let hotkeyCaptureActive = false;
 
+const WINDOWS_STARTUP_NAME = "SoundDeck Studio";
+const WINDOWS_LEGACY_STARTUP_NAMES = ["com.sounddeck.studio", "sounddeck-studio"];
+
 const hotkeyEngine = createHotkeyEngine({
   onTrigger: (binding) => mainWindow?.webContents.send("hotkey-trigger", binding)
 });
@@ -140,6 +143,7 @@ function appCapabilities() {
     platform: sounddeckPlatform(),
     managedVirtualBackend: managedVirtualBackend(),
     managedVirtualMicAvailable: process.platform === "win32" || process.platform === "darwin" || process.platform === "linux",
+    runAtStartupSupported: startupSettingsSupported(),
     hotkeys: {
       advancedHookAvailable: Boolean(hotkeyStatus.advancedHookAvailable),
       globalShortcutFallbackAvailable: Boolean(hotkeyStatus.globalShortcutFallbackAvailable),
@@ -149,6 +153,51 @@ function appCapabilities() {
     updateChecksSupported: app.isPackaged && !process.env.PORTABLE_EXECUTABLE_DIR,
     corsairAvailable: isCorsairSupportedPlatform()
   };
+}
+
+function startupSettingsSupported() {
+  if (process.platform === "win32" && process.env.PORTABLE_EXECUTABLE_DIR) return false;
+  return process.platform === "darwin" || process.platform === "win32";
+}
+
+function startupUnsupportedReason() {
+  if (process.platform === "win32" && process.env.PORTABLE_EXECUTABLE_DIR) return "portable-build";
+  return "unsupported-platform";
+}
+
+function startupLoginItemOptions(openAtLogin) {
+  if (process.platform !== "win32") return { openAtLogin };
+  return { openAtLogin, enabled: openAtLogin, name: WINDOWS_STARTUP_NAME };
+}
+
+function clearLegacyWindowsStartupItems() {
+  if (process.platform !== "win32") return;
+  for (const name of WINDOWS_LEGACY_STARTUP_NAMES) {
+    app.setLoginItemSettings({ openAtLogin: false, enabled: false, name });
+  }
+}
+
+function windowsStartupEnabled(settings) {
+  if (typeof settings.executableWillLaunchAtLogin === "boolean") return settings.executableWillLaunchAtLogin;
+  const launchItem = Array.isArray(settings.launchItems)
+    ? settings.launchItems.find((item) => item?.name === WINDOWS_STARTUP_NAME || item?.path === process.execPath)
+    : null;
+  if (typeof launchItem?.enabled === "boolean") return launchItem.enabled;
+  return Boolean(settings.openAtLogin);
+}
+
+function getStartupSettings() {
+  if (!startupSettingsSupported()) return { supported: false, enabled: false, reason: startupUnsupportedReason() };
+  try {
+    const settings = app.getLoginItemSettings();
+    return {
+      supported: true,
+      enabled: process.platform === "win32" ? windowsStartupEnabled(settings) : Boolean(settings.openAtLogin),
+      ...(typeof settings.status === "string" ? { status: settings.status } : {})
+    };
+  } catch (error) {
+    return { supported: false, enabled: false, reason: error?.message || "startup-settings-unavailable" };
+  }
 }
 
 // Reads the source stream's native sample rate from ffmpeg's banner (printed to stderr).
@@ -888,3 +937,17 @@ ipcMain.handle("app:getVersion", () => app.getVersion());
 ipcMain.handle("app:getPlatform", () => sounddeckPlatform());
 
 ipcMain.handle("app:getCapabilities", () => appCapabilities());
+
+ipcMain.handle("app:getStartupSettings", () => getStartupSettings());
+
+ipcMain.handle("app:setRunAtStartup", (_event, enabled) => {
+  if (!startupSettingsSupported()) return { ok: false, ...getStartupSettings() };
+  try {
+    const openAtLogin = Boolean(enabled);
+    app.setLoginItemSettings(startupLoginItemOptions(openAtLogin));
+    if (!openAtLogin) clearLegacyWindowsStartupItems();
+    return { ok: true, ...getStartupSettings() };
+  } catch (error) {
+    return { ok: false, ...getStartupSettings(), reason: error?.message || "startup-settings-unavailable" };
+  }
+});
