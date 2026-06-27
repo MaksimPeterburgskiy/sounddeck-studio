@@ -1,9 +1,16 @@
 # Security Policy
 
-## Supported versions
+## Supported Releases
 
 Only the latest release of SoundDeck Studio receives security fixes.
 
-## Reporting a vulnerability
+## Reporting a Vulnerability
 
-Please **do not** open a public issue for security vulnerabilities. Instead, report them privately via [GitHub Security Advisories](https://github.com/MaksimPeterburgskiy/sounddeck-studio/security/advisories/new).
+Do not open a public issue for a security vulnerability. Report it privately through [GitHub Security Advisories](https://github.com/MaksimPeterburgskiy/sounddeck-studio/security/advisories/new).
+
+Include:
+
+- The affected version and operating system
+- Steps to reproduce the issue
+- What an attacker could access or change
+- Any logs, screenshots, or proof-of-concept details that help confirm the report

@@ -1,13 +1,13 @@
-## What does this PR do?
+## Summary
 
-<!-- Short summary of the change and why it's needed. Link the related issue: Fixes #123 -->
+<!-- What changed, why it changed, and any related issue, such as Fixes #123. -->
 
-## How was it tested?
+## Testing
 
-<!-- e.g. ran `pnpm test`, manually verified in `pnpm start`, built the installer -->
+<!-- Commands run, manual checks, or the reason testing was not needed. -->
 
 ## Checklist
 
 - [ ] `pnpm run build` and `pnpm test` pass locally
-- [ ] Added/updated tests for logic changes in `src/lib/`
-- [ ] Screenshots or recording attached (for UI changes)
+- [ ] Tests added or updated for logic changes in `src/lib/`
+- [ ] Screenshots or recording attached for UI changes
