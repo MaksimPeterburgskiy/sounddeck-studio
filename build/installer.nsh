@@ -26,6 +26,8 @@
 ; Install the bundled VB-Audio Virtual Cable driver if it is not present yet.
 ; VBCABLE_Setup_x64.exe flags: -i = install, -h = hidden (no UI).
 !macro customInstall
+  SetDetailsPrint both
+  DetailPrint "Checking bundled driver prerequisites..."
   ${DisableX64FSRedirection}
   ; The driver service key exists whenever VB-Cable is installed, even when the
   ; .sys file lives only in the DriverStore rather than System32\drivers.
@@ -37,10 +39,12 @@
     DetailPrint "VB-Audio Virtual Cable already installed, skipping."
   ${Else}
     DetailPrint "Installing VB-Audio Virtual Cable driver..."
+    DetailPrint "Running bundled VB-CABLE setup in hidden install mode."
     ExecWait '"$INSTDIR\resources\vbcable\VBCABLE_Setup_x64.exe" -i -h' $0
     DetailPrint "VB-Cable setup finished (exit code $0)."
   ${EndIf}
   ${EnableX64FSRedirection}
+  DetailPrint "Installer tasks finished."
 !macroend
 
 !macro customUnInstall

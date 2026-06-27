@@ -1,0 +1,7 @@
+diff --git a/templates/nsis/installSection.nsh b/templates/nsis/installSection.nsh
+index 053772f55ca6ece52f0a34c4fa0f05c9a5f07bd2..3a063689f9a68e6305ed81828411139953215ed9 100644
+--- a/templates/nsis/installSection.nsh
++++ b/templates/nsis/installSection.nsh
+@@ -6 +6 @@
+-  SetDetailsPrint none
++  SetDetailsPrint both

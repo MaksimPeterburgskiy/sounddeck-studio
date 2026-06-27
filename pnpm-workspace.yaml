@@ -8,4 +8,7 @@ overrides:
   "@electron/get@5.0.0>undici": 7.28.0
   "node-gyp@12.4.0>undici": 6.27.0
 
+patchedDependencies:
+  app-builder-lib@26.15.3: patches/app-builder-lib@26.15.3.patch
+
 strictDepBuilds: true
