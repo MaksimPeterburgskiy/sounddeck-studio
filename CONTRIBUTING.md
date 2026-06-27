@@ -50,7 +50,7 @@ All PRs require maintainer review before merging. PRs are squash-merged, so your
 ```
 electron/   Main process (window, tray, hotkeys, library storage, Corsair, auto-update)
 src/        Renderer (React + TypeScript)
-src/lib/    Pure logic (board model, audio engine, hotkeys, waveforms)
+src/lib/    Pure logic (board model, audio engine, hotkey parsing, waveforms)
 build/      Packaging resources (icons, NSIS script, generated macOS package inputs)
 scripts/    Build helper scripts for Windows and macOS packaging
 ```

@@ -96,7 +96,7 @@ Tech stack: Electron, React 19, TypeScript, Vite, Web Audio API, and electron-bu
 
 ```
 electron/   Main process (window, tray, global hotkeys, library storage, Corsair, auto-update)
-src/        Renderer (React UI)
+src/        Renderer (React + TypeScript)
 src/lib/    Pure logic (board model, audio engine, hotkey parsing, waveforms)
 build/      Packaging resources (icons, NSIS script, generated macOS package inputs)
 scripts/    Build helpers (VB-CABLE download, BlackHole build/package steps, release utilities)
