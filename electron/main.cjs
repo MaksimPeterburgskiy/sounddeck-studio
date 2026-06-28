@@ -210,12 +210,19 @@ function windowsStartupEnabled(settings) {
 function getStartupSettings() {
   if (!startupSettingsSupported()) return { supported: false, enabled: false, reason: startupUnsupportedReason() };
   try {
-    const settings = app.getLoginItemSettings(startupLoginItemQueryOptions());
+    const queryOptions = startupLoginItemQueryOptions();
+    let settings = app.getLoginItemSettings(queryOptions);
+    if (process.platform === "win32" && !settings.openAtLogin && windowsStartupEnabled(settings)) {
+      app.setLoginItemSettings(startupLoginItemOptions(true));
+      clearLegacyWindowsStartupItems();
+      settings = app.getLoginItemSettings(queryOptions);
+    }
+    const isStartupLaunch = hasStartupArg();
     return {
       supported: true,
       enabled: process.platform === "win32" ? windowsStartupEnabled(settings) : Boolean(settings.openAtLogin),
-      wasOpenedAtLogin: Boolean(settings.wasOpenedAtLogin || hasStartupArg()),
-      wasOpenedAsHidden: Boolean(settings.wasOpenedAsHidden),
+      wasOpenedAtLogin: Boolean(settings.wasOpenedAtLogin || isStartupLaunch),
+      wasOpenedAsHidden: Boolean(settings.wasOpenedAsHidden || (process.platform === "win32" && isStartupLaunch)),
       ...(typeof settings.status === "string" ? { status: settings.status } : {})
     };
   } catch (error) {
@@ -576,7 +583,7 @@ function createTray() {
 async function createWindow() {
   await ensureLibrary();
   Menu.setApplicationMenu(null);
-  const startHidden = getStartupSettings().wasOpenedAtLogin || hasStartupArg();
+  const startHidden = getStartupSettings().wasOpenedAtLogin;
   mainWindow = new BrowserWindow({
     width: 1360,
     height: 860,
