@@ -1,11 +1,30 @@
-import type { AudioSettings, OutputTarget, SoundSlot } from "../types";
+import type { AudioSettings, OutputTarget, SoundEffects, SoundSlot } from "../types";
 import { makeMicrophoneConstraints, normalizeSelectableDeviceId } from "./devices";
+import { normalizeSoundEffects } from "./model";
+
+interface ActiveEffectChain {
+  source: AudioBufferSourceNode;
+  baseRate: number;
+  low?: BiquadFilterNode;
+  mid?: BiquadFilterNode;
+  high?: BiquadFilterNode;
+  compressor?: DynamicsCompressorNode;
+  limiter?: DynamicsCompressorNode;
+  reverb?: {
+    convolver: ConvolverNode;
+    wet: GainNode;
+    dry: GainNode;
+    decaySec: number;
+  };
+  nodes: AudioNode[];
+}
 
 interface ActiveVoice {
   id: string;
   soundId: string;
   sources: AudioBufferSourceNode[];
   gains: GainNode[];
+  effects: ActiveEffectChain[];
   startedAt: number;
   fadeOutMs: number;
   trimStart: number;
@@ -17,6 +36,7 @@ interface ActiveVoice {
 interface PreviewVoice {
   sources: AudioBufferSourceNode[];
   gains: GainNode[];
+  effects: ActiveEffectChain[];
   soundId: string;
   trimStart: number;
   trimEnd: number;
@@ -38,6 +58,7 @@ export class AudioEngine {
   private previewVoice: PreviewVoice | null = null;
   private previewOffset = 0;
   private previewGeneration = 0;
+  private reverbImpulses = new WeakMap<BaseAudioContext, Map<string, AudioBuffer>>();
   private micStream?: MediaStream;
   private micNodes: Array<{ source: MediaStreamAudioSourceNode; gain: GainNode; context: AudioContext }> = [];
   private micConfigureGeneration = 0;
@@ -111,7 +132,8 @@ export class AudioEngine {
     const trimEnd = Math.min(Math.max(trimStart + 0.01, sound.trimEndSec ?? buffer.duration), buffer.duration);
     const clipDuration = Math.max(0.01, trimEnd - trimStart);
     const rate = Math.max(0.0625, sound.playbackRate ?? 1);
-    const voice: ActiveVoice = { id: crypto.randomUUID(), soundId: sound.id, sources: [], gains: [], startedAt: performance.now(), fadeOutMs: sound.fadeOutMs, trimStart, clipDuration, rate, loop: sound.loop };
+    const effects = normalizeSoundEffects(sound.effects);
+    const voice: ActiveVoice = { id: crypto.randomUUID(), soundId: sound.id, sources: [], gains: [], effects: [], startedAt: performance.now(), fadeOutMs: sound.fadeOutMs, trimStart, clipDuration, rate, loop: sound.loop };
 
     for (const route of contexts) {
       const context = route.context;
@@ -120,12 +142,14 @@ export class AudioEngine {
       const totalGain = sound.volume;
       source.buffer = buffer;
       source.playbackRate.value = rate;
+      if (source.detune) source.detune.value = effects.pitchEnabled ? effects.pitchSemitones * 100 : 0;
       source.loop = sound.loop;
       if (sound.loop) {
         source.loopStart = trimStart;
         source.loopEnd = trimEnd;
       }
-      source.connect(gain).connect(route.bus);
+      const chain = this.connectEffectChain(context, source, gain, effects, rate);
+      gain.connect(route.bus);
       const now = context.currentTime;
       gain.gain.setValueAtTime(sound.fadeInMs > 0 ? 0.0001 : totalGain, now);
       if (sound.fadeInMs > 0) gain.gain.exponentialRampToValueAtTime(Math.max(0.0001, totalGain), now + sound.fadeInMs / 1000);
@@ -134,6 +158,7 @@ export class AudioEngine {
       else source.start(0, trimStart, clipDuration);
       voice.sources.push(source);
       voice.gains.push(gain);
+      voice.effects.push(chain);
     }
 
     this.active.set(sound.id, [...(this.active.get(sound.id) || []), voice]);
@@ -189,6 +214,17 @@ export class AudioEngine {
     }
   }
 
+  /** Apply new per-sound effects to any currently playing voices and preview audio. */
+  setSoundEffects(soundId: string, effects: SoundEffects | undefined) {
+    const normalized = normalizeSoundEffects(effects);
+    for (const voice of this.active.get(soundId) || []) {
+      for (const chain of voice.effects) this.applyEffectsToChain(chain, normalized, true);
+    }
+    if (this.previewVoice?.soundId === soundId) {
+      for (const chain of this.previewVoice.effects) this.applyEffectsToChain(chain, normalized, true);
+    }
+  }
+
   /** Current playback position in seconds within the source buffer, or null when not playing. */
   getPosition(soundId: string): number | null {
     const voices = this.active.get(soundId);
@@ -219,11 +255,14 @@ export class AudioEngine {
     if (generation !== this.previewGeneration || this.disposed) return;
     const source = this.monitorContext.createBufferSource();
     const gain = this.monitorContext.createGain();
+    const effects = normalizeSoundEffects(sound.effects);
     source.buffer = buffer;
     source.playbackRate.value = safeRate;
-    source.connect(gain).connect(this.monitorBus);
+    if (source.detune) source.detune.value = effects.pitchEnabled ? effects.pitchSemitones * 100 : 0;
+    const chain = this.connectEffectChain(this.monitorContext, source, gain, effects, safeRate);
+    gain.connect(this.monitorBus);
     gain.gain.setValueAtTime(sound.volume, this.monitorContext.currentTime);
-    const voice: PreviewVoice = { sources: [source], gains: [gain], soundId: sound.id, trimStart, trimEnd, rate: safeRate, baseOffset: offset, startedAt: performance.now() };
+    const voice: PreviewVoice = { sources: [source], gains: [gain], effects: [chain], soundId: sound.id, trimStart, trimEnd, rate: safeRate, baseOffset: offset, startedAt: performance.now() };
     source.onended = () => {
       if (this.previewVoice === voice) {
         this.previewVoice = null;
@@ -286,6 +325,9 @@ export class AudioEngine {
       }
     }
     for (const gain of voice.gains) gain.disconnect();
+    for (const chain of voice.effects) {
+      for (const node of chain.nodes) node.disconnect();
+    }
   }
 
   /** Drop the cached decoded buffer for a media path (e.g. after that file is removed). */
@@ -301,6 +343,114 @@ export class AudioEngine {
     this.micConfigureGeneration += 1;
     this.stopMic();
     await Promise.allSettled([this.monitorContext.close(), this.virtualContext.close(), this.decodeContext.close()]);
+  }
+
+  private connectEffectChain(context: AudioContext, source: AudioBufferSourceNode, output: AudioNode, effects: SoundEffects, baseRate: number): ActiveEffectChain {
+    const low = context.createBiquadFilter();
+    const mid = context.createBiquadFilter();
+    const high = context.createBiquadFilter();
+    const compressor = context.createDynamicsCompressor();
+    const limiter = context.createDynamicsCompressor();
+    const convolver = context.createConvolver();
+    const wet = context.createGain();
+    const dry = context.createGain();
+
+    low.type = "lowshelf";
+    low.frequency.value = 320;
+    mid.type = "peaking";
+    mid.frequency.value = 1000;
+    mid.Q.value = 1;
+    high.type = "highshelf";
+    high.frequency.value = 3200;
+
+    source.connect(low).connect(mid).connect(high).connect(compressor).connect(limiter);
+    limiter.connect(dry).connect(output);
+    limiter.connect(convolver).connect(wet).connect(output);
+
+    const chain: ActiveEffectChain = {
+      source,
+      baseRate,
+      low,
+      mid,
+      high,
+      compressor,
+      limiter,
+      reverb: { convolver, wet, dry, decaySec: 0 },
+      nodes: [low, mid, high, compressor, limiter, convolver, wet, dry]
+    };
+    this.applyEffectsToChain(chain, effects, false);
+    return chain;
+  }
+
+  private applyEffectsToChain(chain: ActiveEffectChain, effects: SoundEffects, smooth: boolean) {
+    const now = chain.source.context.currentTime;
+    const set = (param: AudioParam, value: number) => {
+      param.cancelScheduledValues(now);
+      if (smooth) param.setTargetAtTime(value, now, 0.02);
+      else param.setValueAtTime(value, now);
+    };
+
+    const pitchRatio = effects.pitchEnabled ? 2 ** (effects.pitchSemitones / 12) : 1;
+    if (chain.source.detune) set(chain.source.detune, effects.pitchEnabled ? effects.pitchSemitones * 100 : 0);
+    else set(chain.source.playbackRate, chain.baseRate * pitchRatio);
+
+    if (chain.low && chain.mid && chain.high) {
+      set(chain.low.gain, effects.eq.enabled ? effects.eq.lowGainDb : 0);
+      set(chain.mid.gain, effects.eq.enabled ? effects.eq.midGainDb : 0);
+      set(chain.high.gain, effects.eq.enabled ? effects.eq.highGainDb : 0);
+    }
+
+    if (chain.compressor) {
+      set(chain.compressor.threshold, effects.compressor.enabled ? effects.compressor.thresholdDb : 0);
+      set(chain.compressor.knee, effects.compressor.enabled ? 18 : 0);
+      set(chain.compressor.ratio, effects.compressor.enabled ? effects.compressor.ratio : 1);
+      set(chain.compressor.attack, effects.compressor.attackMs / 1000);
+      set(chain.compressor.release, effects.compressor.releaseMs / 1000);
+    }
+
+    if (chain.limiter) {
+      set(chain.limiter.threshold, effects.limiter.enabled ? effects.limiter.ceilingDb : 0);
+      set(chain.limiter.knee, 0);
+      set(chain.limiter.ratio, effects.limiter.enabled ? 20 : 1);
+      set(chain.limiter.attack, effects.limiter.enabled ? 0.001 : 0.003);
+      set(chain.limiter.release, effects.limiter.enabled ? 0.05 : 0.25);
+    }
+
+    if (chain.reverb) {
+      const mix = effects.reverb.enabled ? effects.reverb.mix : 0;
+      set(chain.reverb.dry.gain, 1 - mix);
+      set(chain.reverb.wet.gain, mix);
+      if (mix > 0 && (Math.abs(chain.reverb.decaySec - effects.reverb.decaySec) > 0.001 || !chain.reverb.convolver.buffer)) {
+        chain.reverb.decaySec = effects.reverb.decaySec;
+        chain.reverb.convolver.buffer = this.getReverbImpulse(chain.source.context, effects.reverb.decaySec);
+      } else if (mix === 0) {
+        chain.reverb.decaySec = effects.reverb.decaySec;
+      }
+    }
+  }
+
+  private getReverbImpulse(context: BaseAudioContext, decaySec: number) {
+    const safeDecay = Math.min(6, Math.max(0.1, decaySec));
+    const sampleRate = context.sampleRate || 48000;
+    const key = `${sampleRate}:${safeDecay.toFixed(2)}`;
+    let contextCache = this.reverbImpulses.get(context);
+    if (!contextCache) {
+      contextCache = new Map();
+      this.reverbImpulses.set(context, contextCache);
+    }
+    const cached = contextCache.get(key);
+    if (cached) return cached;
+    const length = Math.max(1, Math.floor(sampleRate * safeDecay));
+    const impulse = context.createBuffer(2, length, sampleRate);
+    for (let channel = 0; channel < impulse.numberOfChannels; channel += 1) {
+      const data = impulse.getChannelData(channel);
+      for (let i = 0; i < length; i += 1) {
+        const t = i / length;
+        data[i] = (Math.random() * 2 - 1) * ((1 - t) ** 2);
+      }
+    }
+    contextCache.set(key, impulse);
+    return impulse;
   }
 
   private contextsForTarget(target: OutputTarget) {

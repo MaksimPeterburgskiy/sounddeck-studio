@@ -4,6 +4,33 @@ export type SoundDeckPlatform = "win32" | "darwin" | "linux" | "unknown";
 export type VirtualOutputMode = "managed" | "manual";
 export type VirtualBackend = "windows-vbcable" | "macos-bundled-blackhole" | "linux-managed-pactl" | "linux-managed-pipewire" | "manual";
 
+export interface SoundEffects {
+  pitchEnabled: boolean;
+  pitchSemitones: number;
+  eq: {
+    enabled: boolean;
+    lowGainDb: number;
+    midGainDb: number;
+    highGainDb: number;
+  };
+  compressor: {
+    enabled: boolean;
+    thresholdDb: number;
+    ratio: number;
+    attackMs: number;
+    releaseMs: number;
+  };
+  limiter: {
+    enabled: boolean;
+    ceilingDb: number;
+  };
+  reverb: {
+    enabled: boolean;
+    mix: number;
+    decaySec: number;
+  };
+}
+
 export interface SoundSlot {
   id: string;
   title: string;
@@ -16,6 +43,7 @@ export interface SoundSlot {
   trimStartSec?: number;
   trimEndSec?: number;
   playbackRate?: number;
+  effects?: SoundEffects;
   color: string;
   icon: string;
   image?: string;
@@ -131,9 +159,6 @@ export type UpdateStatus =
 export interface StartupSettings {
   supported: boolean;
   enabled: boolean;
-  hideOnStartup?: boolean;
-  wasOpenedAtLogin?: boolean;
-  wasOpenedAsHidden?: boolean;
   status?: string;
   reason?: string;
 }
@@ -159,7 +184,7 @@ declare global {
       getPlatform: () => Promise<SoundDeckPlatform>;
       getCapabilities: () => Promise<AppCapabilities>;
       getStartupSettings: () => Promise<StartupSettings>;
-      setRunAtStartup: (enabled: boolean, options?: { hideOnStartup?: boolean }) => Promise<StartupSettings & { ok: boolean }>;
+      setRunAtStartup: (enabled: boolean) => Promise<StartupSettings & { ok: boolean }>;
       getPathForFile: (file: File) => string;
       onHotkeyTrigger: (callback: (binding: HotkeyBinding) => void) => () => void;
       getCorsairStatus: () => Promise<CorsairState>;

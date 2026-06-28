@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { acceleratorLooksReserved, formatBytes, formatDuration, normalizeLibrary, soundFromImport } from "./model";
+import { acceleratorLooksReserved, formatBytes, formatDuration, normalizeLibrary, normalizeSoundEffects, soundEffectsAreDefault, soundFromImport } from "./model";
 import type { SoundLibrary } from "../types";
 
 describe("model helpers", () => {
@@ -95,6 +95,55 @@ describe("model helpers", () => {
     expect(sound?.outputTarget).toBe("both");
     expect(sound?.retriggerMode).toBe("restart");
     expect(sound?.soloPlay).toBe(true);
+    expect(soundEffectsAreDefault(sound?.effects)).toBe(true);
+  });
+
+  it("normalizes sound effect defaults and clamps invalid values", () => {
+    const effects = normalizeSoundEffects({
+      pitchSemitones: 99,
+      eq: { enabled: true, lowGainDb: -99, midGainDb: 4, highGainDb: 99 },
+      compressor: { enabled: true, thresholdDb: -99, ratio: 99, attackMs: -1, releaseMs: 99999 },
+      limiter: { enabled: true, ceilingDb: 10 },
+      reverb: { enabled: true, mix: 2, decaySec: 99 }
+    });
+
+    expect(effects.pitchEnabled).toBe(true);
+    expect(effects.pitchSemitones).toBe(24);
+    expect(effects.eq.lowGainDb).toBe(-12);
+    expect(effects.eq.midGainDb).toBe(4);
+    expect(effects.eq.highGainDb).toBe(12);
+    expect(effects.compressor.thresholdDb).toBe(-60);
+    expect(effects.compressor.ratio).toBe(20);
+    expect(effects.compressor.attackMs).toBe(0);
+    expect(effects.compressor.releaseMs).toBe(3000);
+    expect(effects.limiter.ceilingDb).toBe(0);
+    expect(effects.reverb.mix).toBe(1);
+    expect(effects.reverb.decaySec).toBe(6);
+  });
+
+  it("keeps explicit pitch disabled while preserving the semitone value", () => {
+    const effects = normalizeSoundEffects({ pitchEnabled: false, pitchSemitones: 7 });
+
+    expect(effects.pitchEnabled).toBe(false);
+    expect(effects.pitchSemitones).toBe(7);
+  });
+
+  it("adds default effects to legacy sounds during library normalization", () => {
+    const library = normalizeLibrary({
+      version: 1,
+      activeBoardId: "a",
+      settings: {} as SoundLibrary["settings"],
+      boards: [{
+        id: "a", name: "A", color: "#fff", icon: "zap", createdAt: "", updatedAt: "",
+        sounds: [{
+          id: "s", title: "S", mediaPath: "", storedName: "", mime: "", ext: "", size: 0, color: "#fff", icon: "zap",
+          volume: 1, fadeInMs: 0, fadeOutMs: 0, loop: false, soloPlay: true, retriggerMode: "restart",
+          hotkey: "", outputTarget: "both", createdAt: "", updatedAt: ""
+        }]
+      }]
+    });
+
+    expect(soundEffectsAreDefault(library.boards[0].sounds[0].effects)).toBe(true);
   });
 
   it("formats metadata for compact cards", () => {
