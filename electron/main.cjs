@@ -211,6 +211,15 @@ function clearLegacyWindowsStartupItems() {
   }
 }
 
+function clearWindowsStartupItems() {
+  if (process.platform !== "win32") return;
+  app.setLoginItemSettings(startupLoginItemOptions(false));
+  app.setLoginItemSettings({ openAtLogin: false, enabled: false, name: WINDOWS_STARTUP_NAME });
+  app.setLoginItemSettings({ openAtLogin: false, enabled: false, name: WINDOWS_STARTUP_NAME, path: process.execPath });
+  app.setLoginItemSettings({ openAtLogin: false, enabled: false, path: process.execPath });
+  clearLegacyWindowsStartupItems();
+}
+
 function windowsStartupEnabled(settings) {
   if (typeof settings.executableWillLaunchAtLogin === "boolean") return settings.executableWillLaunchAtLogin;
   const launchItem = Array.isArray(settings.launchItems)
@@ -754,6 +763,13 @@ function setupAutoUpdates() {
 
 app.whenReady().then(async () => {
   await createWindow();
+  app.on("activate", () => {
+    if (mainWindow) {
+      showMainWindow();
+      return;
+    }
+    void createWindow();
+  });
   createTray();
   corsair.start();
   setupAutoUpdates();
@@ -766,14 +782,6 @@ app.on("before-quit", () => {
 app.on("will-quit", () => {
   hotkeyEngine.stop();
   corsair.stop();
-});
-
-app.on("activate", () => {
-  if (mainWindow) {
-    showMainWindow();
-    return;
-  }
-  void createWindow();
 });
 
 app.on("window-all-closed", () => {
@@ -1031,8 +1039,12 @@ ipcMain.handle("app:setRunAtStartup", async (_event, enabled, options = {}) => {
     const currentPreferences = await readStartupPreferences();
     const hideOnStartup = typeof options?.hideOnStartup === "boolean" ? options.hideOnStartup : currentPreferences.hideOnStartup;
     await writeStartupPreferences({ hideOnStartup });
-    app.setLoginItemSettings(startupLoginItemOptions(openAtLogin, hideOnStartup));
-    if (!openAtLogin) clearLegacyWindowsStartupItems();
+    if (openAtLogin) {
+      app.setLoginItemSettings(startupLoginItemOptions(true, hideOnStartup));
+      clearLegacyWindowsStartupItems();
+    } else {
+      clearWindowsStartupItems();
+    }
     return { ok: true, ...(await getStartupSettings()) };
   } catch (error) {
     return { ok: false, ...(await getStartupSettings()), reason: error?.message || "startup-settings-unavailable" };
