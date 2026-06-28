@@ -1,4 +1,4 @@
-import type { MediaImportResult, OutputTarget, SoundBoard, SoundLibrary, SoundSlot } from "../types";
+import type { MediaImportResult, OutputTarget, SoundBoard, SoundEffects, SoundLibrary, SoundSlot } from "../types";
 import { normalizeSelectableDeviceId } from "./devices";
 import { normalizeAccelerator } from "./hotkeys";
 
@@ -30,6 +30,105 @@ const defaultSoundOptions: Pick<SoundSlot, "fadeInMs" | "fadeOutMs" | "loop" | "
   hotkey: "",
   outputTarget: "both"
 };
+const defaultEffects: SoundEffects = {
+  pitchEnabled: false,
+  pitchSemitones: 0,
+  eq: {
+    enabled: false,
+    lowGainDb: 0,
+    midGainDb: 0,
+    highGainDb: 0
+  },
+  compressor: {
+    enabled: false,
+    thresholdDb: -24,
+    ratio: 3,
+    attackMs: 3,
+    releaseMs: 250
+  },
+  limiter: {
+    enabled: false,
+    ceilingDb: -1
+  },
+  reverb: {
+    enabled: false,
+    mix: 0.18,
+    decaySec: 1.4
+  }
+};
+
+function cloneEffects(effects: SoundEffects): SoundEffects {
+  return {
+    pitchEnabled: effects.pitchEnabled,
+    pitchSemitones: effects.pitchSemitones,
+    eq: { ...effects.eq },
+    compressor: { ...effects.compressor },
+    limiter: { ...effects.limiter },
+    reverb: { ...effects.reverb }
+  };
+}
+
+function numberIn(value: unknown, fallback: number, min: number, max: number) {
+  return typeof value === "number" && Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : fallback;
+}
+
+function boolOr(value: unknown, fallback = false) {
+  return typeof value === "boolean" ? value : fallback;
+}
+
+export function getDefaultSoundEffects(): SoundEffects {
+  return cloneEffects(defaultEffects);
+}
+
+export function normalizeSoundEffects(value: unknown): SoundEffects {
+  const incoming = (value || {}) as Partial<SoundEffects>;
+  const eq = (incoming.eq || {}) as Partial<SoundEffects["eq"]>;
+  const compressor = (incoming.compressor || {}) as Partial<SoundEffects["compressor"]>;
+  const limiter = (incoming.limiter || {}) as Partial<SoundEffects["limiter"]>;
+  const reverb = (incoming.reverb || {}) as Partial<SoundEffects["reverb"]>;
+  const legacyPitchEnabled = typeof incoming.pitchSemitones === "number" && Number.isFinite(incoming.pitchSemitones) && Math.abs(incoming.pitchSemitones) > 0.001;
+  return {
+    pitchEnabled: boolOr(incoming.pitchEnabled, legacyPitchEnabled),
+    pitchSemitones: numberIn(incoming.pitchSemitones, defaultEffects.pitchSemitones, -24, 24),
+    eq: {
+      enabled: boolOr(eq.enabled, defaultEffects.eq.enabled),
+      lowGainDb: numberIn(eq.lowGainDb, defaultEffects.eq.lowGainDb, -12, 12),
+      midGainDb: numberIn(eq.midGainDb, defaultEffects.eq.midGainDb, -12, 12),
+      highGainDb: numberIn(eq.highGainDb, defaultEffects.eq.highGainDb, -12, 12)
+    },
+    compressor: {
+      enabled: boolOr(compressor.enabled, defaultEffects.compressor.enabled),
+      thresholdDb: numberIn(compressor.thresholdDb, defaultEffects.compressor.thresholdDb, -60, 0),
+      ratio: numberIn(compressor.ratio, defaultEffects.compressor.ratio, 1, 20),
+      attackMs: numberIn(compressor.attackMs, defaultEffects.compressor.attackMs, 0, 1000),
+      releaseMs: numberIn(compressor.releaseMs, defaultEffects.compressor.releaseMs, 10, 1000)
+    },
+    limiter: {
+      enabled: boolOr(limiter.enabled, defaultEffects.limiter.enabled),
+      ceilingDb: numberIn(limiter.ceilingDb, defaultEffects.limiter.ceilingDb, -12, 0)
+    },
+    reverb: {
+      enabled: boolOr(reverb.enabled, defaultEffects.reverb.enabled),
+      mix: numberIn(reverb.mix, defaultEffects.reverb.mix, 0, 1),
+      decaySec: numberIn(reverb.decaySec, defaultEffects.reverb.decaySec, 0.1, 6)
+    }
+  };
+}
+
+export function soundEffectsAreDefault(value: unknown) {
+  return JSON.stringify(normalizeSoundEffects(value)) === JSON.stringify(defaultEffects);
+}
+
+export function soundEffectsAreActive(value: unknown) {
+  const effects = normalizeSoundEffects(value);
+  return (
+    effects.pitchEnabled ||
+    effects.eq.enabled ||
+    effects.compressor.enabled ||
+    effects.limiter.enabled ||
+    effects.reverb.enabled
+  );
+}
 
 export function makeId(prefix: string) {
   return `${prefix}-${crypto.randomUUID()}`;
@@ -74,6 +173,7 @@ export function soundFromImport(result: MediaImportResult, index: number, output
     retriggerMode: "restart",
     hotkey: "",
     outputTarget,
+    effects: getDefaultSoundEffects(),
     createdAt: timestamp,
     updatedAt: timestamp
   };
@@ -116,7 +216,8 @@ export function normalizeLibrary(library: SoundLibrary): SoundLibrary {
         ...defaultSoundOptions,
         ...sound,
         hotkey: normalizeAccelerator(sound.hotkey || ""),
-        volume: sound.volume === 0.9 ? 1 : sound.volume
+        volume: sound.volume === 0.9 ? 1 : sound.volume,
+        effects: normalizeSoundEffects(sound.effects)
       }))
     }))
   };

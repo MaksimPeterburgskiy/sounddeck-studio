@@ -34,11 +34,11 @@ import {
 import { AudioEngine } from "./lib/audioEngine";
 import { findVirtualAudioCandidates, getDefaultDeviceLabel, isSelectableMediaDevice, makeMicrophoneConstraints, normalizeSelectableDeviceId } from "./lib/devices";
 import type { VirtualAudioCandidate } from "./lib/devices";
-import { acceleratorLooksReserved, formatBytes, formatDuration, makeBoard, normalizeLibrary, now, soundFromImport } from "./lib/model";
+import { acceleratorLooksReserved, formatBytes, formatDuration, getDefaultSoundEffects, makeBoard, normalizeLibrary, normalizeSoundEffects, now, soundEffectsAreActive, soundEffectsAreDefault, soundFromImport } from "./lib/model";
 import { claimCaptureSlot, eventToToken, formatAccelerator, MODIFIER_TOKENS, normalizeAccelerator, orderTokens } from "./lib/hotkeys";
 import { makeWaveform } from "./lib/waveform";
 import { installDevBridge } from "./lib/devBridge";
-import type { AppCapabilities, CorsairState, HotkeyBinding, HotkeyResult, MediaImportResult, SoundBoard, SoundDeckPlatform, SoundLibrary, SoundSlot, StartupSettings, UpdateStatus, VirtualBackend } from "./types";
+import type { AppCapabilities, CorsairState, HotkeyBinding, HotkeyResult, MediaImportResult, SoundBoard, SoundDeckPlatform, SoundEffects, SoundLibrary, SoundSlot, StartupSettings, UpdateStatus, VirtualBackend } from "./types";
 import "./styles.css";
 
 installDevBridge();
@@ -385,6 +385,7 @@ function App() {
 
   function updateSound(soundId: string, patch: Partial<SoundSlot>) {
     if (patch.volume !== undefined) engineRef.current?.setSoundVolume(soundId, patch.volume);
+    if (patch.effects !== undefined) engineRef.current?.setSoundEffects(soundId, patch.effects);
     updateLibrary((current) => ({
       ...current,
       boards: current.boards.map((board) => ({
@@ -1523,6 +1524,149 @@ function SpeedInput({ value, min, max, onChange }: { value: number; min: number;
   );
 }
 
+function EffectSlider({ label, value, min, max, step, unit = "", onChange }: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  unit?: string;
+  onChange: (value: number) => void;
+}) {
+  const display = unit === "%" ? Math.round(value * 100) : Math.round(value * 100) / 100;
+  const numberValue = unit === "%" ? Math.round(value * 100) : value;
+  const numberMin = unit === "%" ? min * 100 : min;
+  const numberMax = unit === "%" ? max * 100 : max;
+  const numberStep = unit === "%" ? step * 100 : step;
+  const fromNumber = (raw: number) => unit === "%" ? raw / 100 : raw;
+  const [text, setText] = useState(String(numberValue));
+  const [focused, setFocused] = useState(false);
+
+  useEffect(() => {
+    if (!focused) setText(String(numberValue));
+  }, [focused, numberValue]);
+
+  const commit = () => {
+    const trimmed = text.trim();
+    if (trimmed === "") {
+      setText(String(numberValue));
+      return;
+    }
+    const next = Number(trimmed);
+    if (Number.isFinite(next)) {
+      const clamped = Math.min(numberMax, Math.max(numberMin, next));
+      onChange(fromNumber(clamped));
+      setText(String(clamped));
+    } else {
+      setText(String(numberValue));
+    }
+  };
+
+  return (
+    <label className="effectSlider">
+      <span>{label}</span>
+      <input type="range" min={min} max={max} step={step} value={value} onChange={(event) => onChange(Number(event.target.value))} />
+      <input
+        type="number"
+        min={numberMin}
+        max={numberMax}
+        step={numberStep}
+        value={text}
+        onChange={(event) => setText(event.target.value)}
+        onFocus={() => setFocused(true)}
+        onBlur={() => { setFocused(false); commit(); }}
+        onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }}
+      />
+      <em>{unit || display}</em>
+    </label>
+  );
+}
+
+function LiveEffectsEditor({ effects, onChange }: { effects?: SoundEffects; onChange: (effects: SoundEffects) => void }) {
+  const normalized = normalizeSoundEffects(effects);
+  const [openRows, setOpenRows] = useState(() => ({
+    pitch: normalized.pitchEnabled,
+    eq: normalized.eq.enabled,
+    compressor: normalized.compressor.enabled,
+    limiter: normalized.limiter.enabled,
+    reverb: normalized.reverb.enabled
+  }));
+  const effectsActive = soundEffectsAreActive(normalized);
+  const effectsChanged = !soundEffectsAreDefault(normalized);
+  const toggleRow = (row: keyof typeof openRows) => (event: React.SyntheticEvent<HTMLDetailsElement>) => {
+    const open = event.currentTarget.open;
+    setOpenRows((current) => current[row] === open ? current : { ...current, [row]: open });
+  };
+  const update = (patch: Partial<SoundEffects>) => onChange(normalizeSoundEffects({ ...normalized, ...patch }));
+  const pitchSummary = normalized.pitchEnabled ? `${normalized.pitchSemitones > 0 ? "+" : ""}${normalized.pitchSemitones} st` : "Off";
+  const updateEq = (patch: Partial<SoundEffects["eq"]>) => update({ eq: { ...normalized.eq, ...patch } });
+  const updateCompressor = (patch: Partial<SoundEffects["compressor"]>) => update({ compressor: { ...normalized.compressor, ...patch } });
+  const updateLimiter = (patch: Partial<SoundEffects["limiter"]>) => update({ limiter: { ...normalized.limiter, ...patch } });
+  const updateReverb = (patch: Partial<SoundEffects["reverb"]>) => update({ reverb: { ...normalized.reverb, ...patch } });
+  const chips = [
+    normalized.pitchEnabled ? `Pitch ${normalized.pitchSemitones > 0 ? "+" : ""}${normalized.pitchSemitones} st` : "",
+    normalized.eq.enabled ? `EQ ${normalized.eq.lowGainDb}/${normalized.eq.midGainDb}/${normalized.eq.highGainDb} dB` : "",
+    normalized.compressor.enabled ? `Comp ${normalized.compressor.ratio}:1` : "",
+    normalized.limiter.enabled ? `Limit ${normalized.limiter.ceilingDb} dB` : "",
+    normalized.reverb.enabled ? `Reverb ${Math.round(normalized.reverb.mix * 100)}%` : ""
+  ].filter(Boolean);
+
+  return (
+    <section className="liveEffects">
+      <header>
+        <div>
+          <strong>Live effects</strong>
+          <span>{effectsActive ? chips.join(" · ") : "No live effects"}</span>
+        </div>
+        <button onClick={() => onChange(getDefaultSoundEffects())} disabled={!effectsChanged}><RefreshCcw size={14} /> Reset effects</button>
+      </header>
+      <div className="effectRows">
+        <details className="effectRow" open={openRows.pitch} onToggle={toggleRow("pitch")}>
+          <summary>
+            <span className="effectToggle"><input aria-label="Enable pitch" type="checkbox" checked={normalized.pitchEnabled} onClick={(event) => event.stopPropagation()} onChange={(event) => update({ pitchEnabled: event.target.checked })} /> Pitch</span>
+            <em>{pitchSummary}</em>
+          </summary>
+          <EffectSlider label="Semitones" value={normalized.pitchSemitones} min={-24} max={24} step={1} unit="st" onChange={(pitchSemitones) => update({ pitchSemitones })} />
+        </details>
+        <details className="effectRow" open={openRows.eq} onToggle={toggleRow("eq")}>
+          <summary>
+            <span className="effectToggle"><input aria-label="Enable EQ" type="checkbox" checked={normalized.eq.enabled} onClick={(event) => event.stopPropagation()} onChange={(event) => updateEq({ enabled: event.target.checked })} /> EQ</span>
+            <em>{normalized.eq.enabled ? `${normalized.eq.lowGainDb}/${normalized.eq.midGainDb}/${normalized.eq.highGainDb} dB` : "Off"}</em>
+          </summary>
+          <EffectSlider label="Low" value={normalized.eq.lowGainDb} min={-12} max={12} step={1} unit="dB" onChange={(lowGainDb) => updateEq({ lowGainDb })} />
+          <EffectSlider label="Mid" value={normalized.eq.midGainDb} min={-12} max={12} step={1} unit="dB" onChange={(midGainDb) => updateEq({ midGainDb })} />
+          <EffectSlider label="High" value={normalized.eq.highGainDb} min={-12} max={12} step={1} unit="dB" onChange={(highGainDb) => updateEq({ highGainDb })} />
+        </details>
+        <details className="effectRow" open={openRows.compressor} onToggle={toggleRow("compressor")}>
+          <summary>
+            <span className="effectToggle"><input aria-label="Enable compressor" type="checkbox" checked={normalized.compressor.enabled} onClick={(event) => event.stopPropagation()} onChange={(event) => updateCompressor({ enabled: event.target.checked })} /> Compressor</span>
+            <em>{normalized.compressor.enabled ? `${normalized.compressor.thresholdDb} dB · ${normalized.compressor.ratio}:1` : "Off"}</em>
+          </summary>
+          <EffectSlider label="Threshold" value={normalized.compressor.thresholdDb} min={-60} max={0} step={1} unit="dB" onChange={(thresholdDb) => updateCompressor({ thresholdDb })} />
+          <EffectSlider label="Ratio" value={normalized.compressor.ratio} min={1} max={20} step={1} unit=":1" onChange={(ratio) => updateCompressor({ ratio })} />
+          <EffectSlider label="Attack" value={normalized.compressor.attackMs} min={0} max={1000} step={1} unit="ms" onChange={(attackMs) => updateCompressor({ attackMs })} />
+          <EffectSlider label="Release" value={normalized.compressor.releaseMs} min={10} max={1000} step={10} unit="ms" onChange={(releaseMs) => updateCompressor({ releaseMs })} />
+        </details>
+        <details className="effectRow" open={openRows.limiter} onToggle={toggleRow("limiter")}>
+          <summary>
+            <span className="effectToggle"><input aria-label="Enable limiter" type="checkbox" checked={normalized.limiter.enabled} onClick={(event) => event.stopPropagation()} onChange={(event) => updateLimiter({ enabled: event.target.checked })} /> Limiter</span>
+            <em>{normalized.limiter.enabled ? `${normalized.limiter.ceilingDb} dB` : "Off"}</em>
+          </summary>
+          <EffectSlider label="Ceiling" value={normalized.limiter.ceilingDb} min={-12} max={0} step={1} unit="dB" onChange={(ceilingDb) => updateLimiter({ ceilingDb })} />
+        </details>
+        <details className="effectRow" open={openRows.reverb} onToggle={toggleRow("reverb")}>
+          <summary>
+            <span className="effectToggle"><input aria-label="Enable reverb" type="checkbox" checked={normalized.reverb.enabled} onClick={(event) => event.stopPropagation()} onChange={(event) => updateReverb({ enabled: event.target.checked })} /> Reverb</span>
+            <em>{normalized.reverb.enabled ? `${Math.round(normalized.reverb.mix * 100)}% · ${normalized.reverb.decaySec}s` : "Off"}</em>
+          </summary>
+          <EffectSlider label="Mix" value={normalized.reverb.mix} min={0} max={1} step={0.01} unit="%" onChange={(mix) => updateReverb({ mix })} />
+          <EffectSlider label="Decay" value={normalized.reverb.decaySec} min={0.1} max={6} step={0.1} unit="s" onChange={(decaySec) => updateReverb({ decaySec })} />
+        </details>
+      </div>
+    </section>
+  );
+}
+
 function ClipEditor({ sound, engine, onChange, onClose, mediaUsedElsewhere }: {
   sound: SoundSlot;
   engine: AudioEngine | null;
@@ -1792,6 +1936,7 @@ function ClipEditor({ sound, engine, onChange, onClose, mediaUsedElsewhere }: {
           <SpeedInput value={rate} min={0.25} max={4} onChange={changeRate} />
           <span className="clipPlayheadTime">Playhead <em>{relPlayhead.toFixed(2)}s</em> / {clipLength.toFixed(2)}s</span>
         </div>
+        <LiveEffectsEditor effects={sound.effects} onChange={(effects) => onChange({ effects })} />
         <div className="clipActions">
           <button className="clipPreview" onClick={previewState === "playing" ? pausePreview : playPreview} disabled={!duration}>
             {previewState === "playing" ? <Pause size={15} /> : <Play size={15} />}{previewState === "playing" ? "Pause" : previewState === "paused" ? "Resume" : "Play"}
@@ -1808,7 +1953,7 @@ function ClipEditor({ sound, engine, onChange, onClose, mediaUsedElsewhere }: {
               <strong>Finish editing</strong>
               <button onClick={() => setShowDone(false)} disabled={cropping} aria-label="Close"><X size={16} /></button>
             </header>
-            <p>Keep the original file and just remember your trim and speed, or cut the file down on disk to bake them in permanently?</p>
+            <p>Keep the original file and remember trim, speed, and live effects, or cut the file down on disk to bake only trim and speed? Live effects stay editable on this pad.</p>
             {cropError && <p className="clipError">{cropError}</p>}
             <div className="clipDoneActions">
               <button onClick={onClose} disabled={cropping}>Save timestamps</button>
