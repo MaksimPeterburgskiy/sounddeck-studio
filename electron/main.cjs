@@ -239,7 +239,10 @@ async function readAppSettings() {
 
 async function readStartupPreferences() {
   const settings = await readAppSettings();
-  return { hideOnStartup: settings?.startup?.hideOnStartup !== false };
+  return {
+    hideOnStartup: settings?.startup?.hideOnStartup !== false,
+    runAtStartup: typeof settings?.startup?.runAtStartup === "boolean" ? settings.startup.runAtStartup : undefined
+  };
 }
 
 async function writeStartupPreferences(preferences) {
@@ -257,7 +260,10 @@ async function getStartupSettings(argv = process.argv) {
   try {
     const queryOptions = startupLoginItemQueryOptions();
     let settings = app.getLoginItemSettings(queryOptions);
-    if (process.platform === "win32" && !settings.openAtLogin && windowsStartupEnabled(settings)) {
+    if (process.platform === "win32" && preferences.runAtStartup === false && windowsStartupEnabled(settings)) {
+      clearWindowsStartupItems();
+      settings = app.getLoginItemSettings(queryOptions);
+    } else if (process.platform === "win32" && preferences.runAtStartup !== false && !settings.openAtLogin && windowsStartupEnabled(settings)) {
       app.setLoginItemSettings(startupLoginItemOptions(true, preferences.hideOnStartup));
       clearLegacyWindowsStartupItems();
       settings = app.getLoginItemSettings(queryOptions);
@@ -266,7 +272,9 @@ async function getStartupSettings(argv = process.argv) {
     const wasOpenedAtLogin = Boolean(settings.wasOpenedAtLogin || isStartupLaunch);
     return {
       supported: true,
-      enabled: process.platform === "win32" ? windowsStartupEnabled(settings) : Boolean(settings.openAtLogin),
+      enabled: preferences.runAtStartup === false
+        ? false
+        : process.platform === "win32" ? windowsStartupEnabled(settings) : Boolean(settings.openAtLogin),
       hideOnStartup: preferences.hideOnStartup,
       wasOpenedAtLogin,
       wasOpenedAsHidden: Boolean(settings.wasOpenedAsHidden || (wasOpenedAtLogin && preferences.hideOnStartup)),
@@ -635,7 +643,7 @@ async function createWindow() {
   await ensureLibrary();
   Menu.setApplicationMenu(null);
   const startupSettings = await getStartupSettings();
-  const startHidden = Boolean(startupSettings.wasOpenedAtLogin && startupSettings.hideOnStartup && !pendingShowMainWindow);
+  const startHidden = Boolean(startupSettings.enabled && startupSettings.wasOpenedAtLogin && startupSettings.hideOnStartup && !pendingShowMainWindow);
   mainWindow = new BrowserWindow({
     width: 1360,
     height: 860,
@@ -1038,7 +1046,7 @@ ipcMain.handle("app:setRunAtStartup", async (_event, enabled, options = {}) => {
     const openAtLogin = Boolean(enabled);
     const currentPreferences = await readStartupPreferences();
     const hideOnStartup = typeof options?.hideOnStartup === "boolean" ? options.hideOnStartup : currentPreferences.hideOnStartup;
-    await writeStartupPreferences({ hideOnStartup });
+    await writeStartupPreferences({ hideOnStartup, runAtStartup: openAtLogin });
     if (openAtLogin) {
       app.setLoginItemSettings(startupLoginItemOptions(true, hideOnStartup));
       clearLegacyWindowsStartupItems();
