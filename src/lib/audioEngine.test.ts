@@ -365,6 +365,7 @@ describe("AudioEngine live effects", () => {
       sounddeck: {
         readMedia: vi.fn(async () => new ArrayBuffer(8))
       },
+      clearTimeout,
       setTimeout
     });
   });
@@ -444,6 +445,104 @@ describe("AudioEngine live effects", () => {
     const monitorContext = FakeAudioContext.instances[0];
     expect(monitorContext.bufferSources[0].detune.value).toBe(1200);
     expect(monitorContext.biquads).toHaveLength(3);
+
+    await engine.dispose();
+  });
+
+  it("keeps reverb tails active until their cleanup timer expires", async () => {
+    vi.useFakeTimers();
+    window.setTimeout = setTimeout;
+    window.clearTimeout = clearTimeout;
+    const engine = new AudioEngine(playbackSettings, vi.fn());
+
+    try {
+      await engine.play(makeSound({
+        effects: {
+          pitchEnabled: false,
+          pitchSemitones: 0,
+          eq: { enabled: false, lowGainDb: 0, midGainDb: 0, highGainDb: 0 },
+          compressor: { enabled: false, thresholdDb: -24, ratio: 3, attackMs: 3, releaseMs: 250 },
+          limiter: { enabled: false, ceilingDb: -1 },
+          reverb: { enabled: true, mix: 0.25, decaySec: 1.5 }
+        }
+      }));
+
+      const monitorContext = FakeAudioContext.instances[0];
+      const source = monitorContext.bufferSources[0];
+      source.onended?.();
+
+      expect(engine.isPlaying("sound-1")).toBe(true);
+      expect(monitorContext.convolvers[0].disconnect).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1499);
+      expect(engine.isPlaying("sound-1")).toBe(true);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(engine.isPlaying("sound-1")).toBe(false);
+      expect(monitorContext.convolvers[0].disconnect).toHaveBeenCalled();
+    } finally {
+      await engine.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("includes pitch detune in active playback position", async () => {
+    const now = vi.spyOn(performance, "now").mockReturnValue(1000);
+    const engine = new AudioEngine(playbackSettings, vi.fn());
+    await engine.play(makeSound({
+      effects: {
+        pitchEnabled: true,
+        pitchSemitones: 12,
+        eq: { enabled: false, lowGainDb: 0, midGainDb: 0, highGainDb: 0 },
+        compressor: { enabled: false, thresholdDb: -24, ratio: 3, attackMs: 3, releaseMs: 250 },
+        limiter: { enabled: false, ceilingDb: -1 },
+        reverb: { enabled: false, mix: 0.18, decaySec: 1.4 }
+      }
+    }));
+
+    now.mockReturnValue(1250);
+    expect(engine.getPosition("sound-1")).toBeCloseTo(0.5);
+
+    await engine.dispose();
+  });
+
+  it("keeps active playback position continuous when pitch changes", async () => {
+    const now = vi.spyOn(performance, "now").mockReturnValue(1000);
+    const engine = new AudioEngine(playbackSettings, vi.fn());
+    await engine.play(makeSound());
+
+    now.mockReturnValue(1500);
+    engine.setSoundEffects("sound-1", {
+      pitchEnabled: true,
+      pitchSemitones: 12,
+      eq: { enabled: false, lowGainDb: 0, midGainDb: 0, highGainDb: 0 },
+      compressor: { enabled: false, thresholdDb: -24, ratio: 3, attackMs: 3, releaseMs: 250 },
+      limiter: { enabled: false, ceilingDb: -1 },
+      reverb: { enabled: false, mix: 0.18, decaySec: 1.4 }
+    });
+
+    now.mockReturnValue(1750);
+    expect(engine.getPosition("sound-1")).toBeCloseTo(1);
+
+    await engine.dispose();
+  });
+
+  it("includes pitch detune in preview playback position", async () => {
+    const now = vi.spyOn(performance, "now").mockReturnValue(1000);
+    const engine = new AudioEngine(playbackSettings, vi.fn());
+    await engine.previewPlay(makeSound({
+      effects: {
+        pitchEnabled: true,
+        pitchSemitones: 12,
+        eq: { enabled: false, lowGainDb: 0, midGainDb: 0, highGainDb: 0 },
+        compressor: { enabled: false, thresholdDb: -24, ratio: 3, attackMs: 3, releaseMs: 250 },
+        limiter: { enabled: false, ceilingDb: -1 },
+        reverb: { enabled: false, mix: 0.18, decaySec: 1.4 }
+      }
+    }), 0.25, 1);
+
+    now.mockReturnValue(1250);
+    expect(engine.getPreviewPosition()).toBeCloseTo(0.75);
 
     await engine.dispose();
   });

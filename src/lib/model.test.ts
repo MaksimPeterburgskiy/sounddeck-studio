@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { acceleratorLooksReserved, formatBytes, formatDuration, normalizeLibrary, normalizeSoundEffects, soundEffectsAreDefault, soundFromImport } from "./model";
+import { acceleratorLooksReserved, formatBytes, formatDuration, normalizeLibrary, normalizeSoundEffects, soundEffectsAreActive, soundEffectsAreDefault, soundFromImport } from "./model";
 import type { SoundLibrary } from "../types";
 
 describe("model helpers", () => {
@@ -126,6 +126,12 @@ describe("model helpers", () => {
 
     expect(effects.pitchEnabled).toBe(false);
     expect(effects.pitchSemitones).toBe(7);
+  });
+
+  it("does not treat disabled effect values as active live effects", () => {
+    expect(soundEffectsAreDefault({ pitchEnabled: false, pitchSemitones: 7 })).toBe(false);
+    expect(soundEffectsAreActive({ pitchEnabled: false, pitchSemitones: 7 })).toBe(false);
+    expect(soundEffectsAreActive({ reverb: { enabled: true, mix: 0.18, decaySec: 1.4 } })).toBe(true);
   });
 
   it("adds default effects to legacy sounds during library normalization", () => {

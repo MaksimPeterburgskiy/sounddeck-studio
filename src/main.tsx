@@ -32,7 +32,7 @@ import {
 import { AudioEngine } from "./lib/audioEngine";
 import { findVirtualAudioCandidates, getDefaultDeviceLabel, isSelectableMediaDevice, makeMicrophoneConstraints, normalizeSelectableDeviceId } from "./lib/devices";
 import type { VirtualAudioCandidate } from "./lib/devices";
-import { acceleratorLooksReserved, formatBytes, formatDuration, getDefaultSoundEffects, makeBoard, normalizeLibrary, normalizeSoundEffects, now, soundEffectsAreDefault, soundFromImport } from "./lib/model";
+import { acceleratorLooksReserved, formatBytes, formatDuration, getDefaultSoundEffects, makeBoard, normalizeLibrary, normalizeSoundEffects, now, soundEffectsAreActive, soundEffectsAreDefault, soundFromImport } from "./lib/model";
 import { claimCaptureSlot, eventToToken, formatAccelerator, MODIFIER_TOKENS, normalizeAccelerator, orderTokens } from "./lib/hotkeys";
 import { makeWaveform } from "./lib/waveform";
 import { installDevBridge } from "./lib/devBridge";
@@ -1180,7 +1180,7 @@ function SoundPad(props: {
   const clipDuration = Number.isFinite(sound.duration)
     ? Math.max(0, Math.min(sound.trimEndSec ?? sound.duration!, sound.duration!) - Math.max(0, sound.trimStartSec ?? 0))
     : sound.duration;
-  const hasLiveEffects = !soundEffectsAreDefault(sound.effects);
+  const hasLiveEffects = soundEffectsAreActive(sound.effects);
   return (
     <article
       className={`pad${props.selected ? " selected" : ""}${props.playing ? " playing" : ""}${props.dragging ? " dragging" : ""}`}
@@ -1562,7 +1562,8 @@ function LiveEffectsEditor({ effects, onChange }: { effects?: SoundEffects; onCh
     limiter: normalized.limiter.enabled,
     reverb: normalized.reverb.enabled
   }));
-  const effectsActive = !soundEffectsAreDefault(normalized);
+  const effectsActive = soundEffectsAreActive(normalized);
+  const effectsChanged = !soundEffectsAreDefault(normalized);
   const toggleRow = (row: keyof typeof openRows) => (event: React.SyntheticEvent<HTMLDetailsElement>) => {
     const open = event.currentTarget.open;
     setOpenRows((current) => current[row] === open ? current : { ...current, [row]: open });
@@ -1588,7 +1589,7 @@ function LiveEffectsEditor({ effects, onChange }: { effects?: SoundEffects; onCh
           <strong>Live effects</strong>
           <span>{effectsActive ? chips.join(" · ") : "No live effects"}</span>
         </div>
-        <button onClick={() => onChange(getDefaultSoundEffects())} disabled={!effectsActive}><RefreshCcw size={14} /> Reset effects</button>
+        <button onClick={() => onChange(getDefaultSoundEffects())} disabled={!effectsChanged}><RefreshCcw size={14} /> Reset effects</button>
       </header>
       <div className="effectRows">
         <details className="effectRow" open={openRows.pitch} onToggle={toggleRow("pitch")}>
@@ -1946,6 +1947,7 @@ function SettingsPanel({ startupSettings, startupUpdateStatus, capabilities, onC
 }) {
   const startupSupported = capabilities?.runAtStartupSupported ?? startupSettings.supported;
   const disabled = !startupSupported || startupUpdateStatus === "saving";
+  const hideOnStartup = startupSettings.hideOnStartup === true;
   const startupNeedsApproval = startupSettings.status === "requires-approval" || startupSettings.status === "not-approved";
   const startupCopy = !startupSupported
     ? startupSettings.reason === "portable-build"
@@ -1958,7 +1960,9 @@ function SettingsPanel({ startupSettings, startupUpdateStatus, capabilities, onC
       : startupNeedsApproval
         ? "Startup is enabled, but your system still needs approval."
         : startupSettings.enabled
-          ? "SoundDeck opens automatically when you sign in."
+          ? hideOnStartup
+            ? "SoundDeck starts in the tray when you sign in."
+            : "SoundDeck opens automatically when you sign in."
           : "SoundDeck stays closed until you open it.";
   return (
     <div className="panel settingsPanel">

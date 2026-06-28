@@ -15,6 +15,7 @@ interface ActiveEffectChain {
     wet: GainNode;
     dry: GainNode;
     decaySec: number;
+    mix: number;
   };
   nodes: AudioNode[];
 }
@@ -29,8 +30,12 @@ interface ActiveVoice {
   fadeOutMs: number;
   trimStart: number;
   clipDuration: number;
+  baseRate: number;
   rate: number;
+  positionOffset: number;
   loop: boolean;
+  cleanupHandle?: number;
+  cleanedUp?: boolean;
 }
 
 interface PreviewVoice {
@@ -40,9 +45,12 @@ interface PreviewVoice {
   soundId: string;
   trimStart: number;
   trimEnd: number;
+  baseRate: number;
   rate: number;
   baseOffset: number;
   startedAt: number;
+  cleanupHandle?: number;
+  cleanedUp?: boolean;
 }
 
 type EngineStatus = "idle" | "playing" | "paused";
@@ -133,7 +141,21 @@ export class AudioEngine {
     const clipDuration = Math.max(0.01, trimEnd - trimStart);
     const rate = Math.max(0.0625, sound.playbackRate ?? 1);
     const effects = normalizeSoundEffects(sound.effects);
-    const voice: ActiveVoice = { id: crypto.randomUUID(), soundId: sound.id, sources: [], gains: [], effects: [], startedAt: performance.now(), fadeOutMs: sound.fadeOutMs, trimStart, clipDuration, rate, loop: sound.loop };
+    const voice: ActiveVoice = {
+      id: crypto.randomUUID(),
+      soundId: sound.id,
+      sources: [],
+      gains: [],
+      effects: [],
+      startedAt: performance.now(),
+      fadeOutMs: sound.fadeOutMs,
+      trimStart,
+      clipDuration,
+      baseRate: rate,
+      rate: this.effectivePlaybackRate(rate, effects),
+      positionOffset: 0,
+      loop: sound.loop
+    };
 
     for (const route of contexts) {
       const context = route.context;
@@ -153,7 +175,7 @@ export class AudioEngine {
       const now = context.currentTime;
       gain.gain.setValueAtTime(sound.fadeInMs > 0 ? 0.0001 : totalGain, now);
       if (sound.fadeInMs > 0) gain.gain.exponentialRampToValueAtTime(Math.max(0.0001, totalGain), now + sound.fadeInMs / 1000);
-      source.onended = () => this.removeVoice(sound.id, voice.id);
+      source.onended = () => this.finishVoice(sound.id, voice);
       if (sound.loop) source.start(0, trimStart);
       else source.start(0, trimStart, clipDuration);
       voice.sources.push(source);
@@ -218,9 +240,19 @@ export class AudioEngine {
   setSoundEffects(soundId: string, effects: SoundEffects | undefined) {
     const normalized = normalizeSoundEffects(effects);
     for (const voice of this.active.get(soundId) || []) {
+      const currentElapsed = this.voiceElapsed(voice);
+      voice.positionOffset = currentElapsed;
+      voice.startedAt = performance.now();
+      voice.rate = this.effectivePlaybackRate(voice.baseRate, normalized);
       for (const chain of voice.effects) this.applyEffectsToChain(chain, normalized, true);
     }
     if (this.previewVoice?.soundId === soundId) {
+      const position = this.getPreviewPosition();
+      if (position !== null) {
+        this.previewVoice.baseOffset = position;
+        this.previewVoice.startedAt = performance.now();
+        this.previewVoice.rate = this.effectivePlaybackRate(this.previewVoice.baseRate, normalized);
+      }
       for (const chain of this.previewVoice.effects) this.applyEffectsToChain(chain, normalized, true);
     }
   }
@@ -230,7 +262,7 @@ export class AudioEngine {
     const voices = this.active.get(soundId);
     if (!voices?.length) return null;
     const voice = voices[voices.length - 1];
-    const elapsed = ((performance.now() - voice.startedAt) / 1000) * voice.rate;
+    const elapsed = this.voiceElapsed(voice);
     if (voice.loop) return voice.trimStart + (elapsed % voice.clipDuration);
     return voice.trimStart + Math.min(elapsed, voice.clipDuration);
   }
@@ -262,11 +294,22 @@ export class AudioEngine {
     const chain = this.connectEffectChain(this.monitorContext, source, gain, effects, safeRate);
     gain.connect(this.monitorBus);
     gain.gain.setValueAtTime(sound.volume, this.monitorContext.currentTime);
-    const voice: PreviewVoice = { sources: [source], gains: [gain], effects: [chain], soundId: sound.id, trimStart, trimEnd, rate: safeRate, baseOffset: offset, startedAt: performance.now() };
+    const voice: PreviewVoice = {
+      sources: [source],
+      gains: [gain],
+      effects: [chain],
+      soundId: sound.id,
+      trimStart,
+      trimEnd,
+      baseRate: safeRate,
+      rate: this.effectivePlaybackRate(safeRate, effects),
+      baseOffset: offset,
+      startedAt: performance.now()
+    };
     source.onended = () => {
       if (this.previewVoice === voice) {
-        this.previewVoice = null;
         this.previewOffset = trimEnd;
+        this.finishPreviewVoice(voice);
       }
     };
     source.start(0, offset, remaining);
@@ -316,18 +359,7 @@ export class AudioEngine {
     const voice = this.previewVoice;
     this.previewVoice = null;
     if (!voice) return;
-    for (const source of voice.sources) {
-      source.onended = null;
-      try {
-        source.stop();
-      } catch {
-        // Already stopped.
-      }
-    }
-    for (const gain of voice.gains) gain.disconnect();
-    for (const chain of voice.effects) {
-      for (const node of chain.nodes) node.disconnect();
-    }
+    this.cleanupPreviewVoice(voice, true);
   }
 
   /** Drop the cached decoded buffer for a media path (e.g. after that file is removed). */
@@ -375,7 +407,7 @@ export class AudioEngine {
       high,
       compressor,
       limiter,
-      reverb: { convolver, wet, dry, decaySec: 0 },
+      reverb: { convolver, wet, dry, decaySec: 0, mix: 0 },
       nodes: [low, mid, high, compressor, limiter, convolver, wet, dry]
     };
     this.applyEffectsToChain(chain, effects, false);
@@ -418,6 +450,7 @@ export class AudioEngine {
 
     if (chain.reverb) {
       const mix = effects.reverb.enabled ? effects.reverb.mix : 0;
+      chain.reverb.mix = mix;
       set(chain.reverb.dry.gain, 1 - mix);
       set(chain.reverb.wet.gain, mix);
       if (mix > 0 && (Math.abs(chain.reverb.decaySec - effects.reverb.decaySec) > 0.001 || !chain.reverb.convolver.buffer)) {
@@ -427,6 +460,18 @@ export class AudioEngine {
         chain.reverb.decaySec = effects.reverb.decaySec;
       }
     }
+  }
+
+  private effectivePlaybackRate(baseRate: number, effects: SoundEffects) {
+    return baseRate * (effects.pitchEnabled ? 2 ** (effects.pitchSemitones / 12) : 1);
+  }
+
+  private voiceElapsed(voice: ActiveVoice) {
+    return voice.positionOffset + ((performance.now() - voice.startedAt) / 1000) * voice.rate;
+  }
+
+  private effectTailMs(effects: ActiveEffectChain[]) {
+    return Math.max(0, ...effects.map((chain) => chain.reverb && chain.reverb.mix > 0 ? chain.reverb.decaySec * 1000 : 0));
   }
 
   private getReverbImpulse(context: BaseAudioContext, decaySec: number) {
@@ -587,13 +632,73 @@ export class AudioEngine {
       if (fadeSeconds > 0) gain.gain.setTargetAtTime(0.0001, now, fadeSeconds);
       else gain.gain.setValueAtTime(0.0001, now);
     });
-    window.setTimeout(() => voice.sources.forEach((source) => {
-      try {
-        source.stop();
-      } catch {
-        // Already stopped.
+    window.setTimeout(() => {
+      voice.sources.forEach((source) => {
+        try {
+          source.stop();
+        } catch {
+          // Already stopped.
+        }
+      });
+      this.cleanupVoice(voice);
+    }, fadeSeconds * 1000 + 20);
+  }
+
+  private finishVoice(soundId: string, voice: ActiveVoice) {
+    if (voice.cleanupHandle !== undefined || voice.cleanedUp) return;
+    voice.cleanupHandle = window.setTimeout(() => {
+      this.cleanupVoice(voice);
+      this.removeVoice(soundId, voice.id);
+    }, this.effectTailMs(voice.effects));
+  }
+
+  private cleanupVoice(voice: ActiveVoice) {
+    if (voice.cleanedUp) return;
+    voice.cleanedUp = true;
+    if (voice.cleanupHandle !== undefined) {
+      window.clearTimeout(voice.cleanupHandle);
+      voice.cleanupHandle = undefined;
+    }
+    for (const source of voice.sources) {
+      source.onended = null;
+      source.disconnect();
+    }
+    for (const gain of voice.gains) gain.disconnect();
+    for (const chain of voice.effects) {
+      for (const node of chain.nodes) node.disconnect();
+    }
+  }
+
+  private finishPreviewVoice(voice: PreviewVoice) {
+    if (voice.cleanupHandle !== undefined || voice.cleanedUp) return;
+    voice.cleanupHandle = window.setTimeout(() => {
+      this.cleanupPreviewVoice(voice, false);
+      if (this.previewVoice === voice) this.previewVoice = null;
+    }, this.effectTailMs(voice.effects));
+  }
+
+  private cleanupPreviewVoice(voice: PreviewVoice, stopSources: boolean) {
+    if (voice.cleanedUp) return;
+    voice.cleanedUp = true;
+    if (voice.cleanupHandle !== undefined) {
+      window.clearTimeout(voice.cleanupHandle);
+      voice.cleanupHandle = undefined;
+    }
+    for (const source of voice.sources) {
+      source.onended = null;
+      if (stopSources) {
+        try {
+          source.stop();
+        } catch {
+          // Already stopped.
+        }
       }
-    }), fadeSeconds * 1000 + 20);
+      source.disconnect();
+    }
+    for (const gain of voice.gains) gain.disconnect();
+    for (const chain of voice.effects) {
+      for (const node of chain.nodes) node.disconnect();
+    }
   }
 
   private removeVoice(soundId: string, voiceId: string) {

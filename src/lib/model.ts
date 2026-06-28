@@ -119,6 +119,17 @@ export function soundEffectsAreDefault(value: unknown) {
   return JSON.stringify(normalizeSoundEffects(value)) === JSON.stringify(defaultEffects);
 }
 
+export function soundEffectsAreActive(value: unknown) {
+  const effects = normalizeSoundEffects(value);
+  return (
+    effects.pitchEnabled ||
+    effects.eq.enabled ||
+    effects.compressor.enabled ||
+    effects.limiter.enabled ||
+    effects.reverb.enabled
+  );
+}
+
 export function makeId(prefix: string) {
   return `${prefix}-${crypto.randomUUID()}`;
 }
