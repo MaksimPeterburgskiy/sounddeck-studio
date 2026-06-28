@@ -34,6 +34,7 @@ if (!app.requestSingleInstanceLock()) {
 let mainWindow;
 let tray;
 let isQuitting = false;
+let pendingShowMainWindow = false;
 let corsairBindings = new Map();
 let hotkeyCaptureActive = false;
 
@@ -590,7 +591,11 @@ function createTrayIcon() {
 }
 
 function showMainWindow() {
-  if (!mainWindow) return;
+  if (!mainWindow) {
+    pendingShowMainWindow = true;
+    return;
+  }
+  pendingShowMainWindow = false;
   if (mainWindow.isMinimized()) mainWindow.restore();
   mainWindow.show();
   mainWindow.focus();
@@ -621,7 +626,7 @@ async function createWindow() {
   await ensureLibrary();
   Menu.setApplicationMenu(null);
   const startupSettings = await getStartupSettings();
-  const startHidden = Boolean(startupSettings.wasOpenedAtLogin && startupSettings.hideOnStartup);
+  const startHidden = Boolean(startupSettings.wasOpenedAtLogin && startupSettings.hideOnStartup && !pendingShowMainWindow);
   mainWindow = new BrowserWindow({
     width: 1360,
     height: 860,
@@ -659,6 +664,7 @@ async function createWindow() {
   });
 
   await loadRenderer(mainWindow);
+  if (pendingShowMainWindow) showMainWindow();
 }
 
 function registerHotkeys(bindings) {
@@ -760,6 +766,14 @@ app.on("before-quit", () => {
 app.on("will-quit", () => {
   hotkeyEngine.stop();
   corsair.stop();
+});
+
+app.on("activate", () => {
+  if (mainWindow) {
+    showMainWindow();
+    return;
+  }
+  void createWindow();
 });
 
 app.on("window-all-closed", () => {

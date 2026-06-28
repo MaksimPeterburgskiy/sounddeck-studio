@@ -966,7 +966,7 @@ function App() {
             startupSettings={startupSettings}
             startupUpdateStatus={startupUpdateStatus}
             capabilities={capabilities}
-            onChangeStartup={(enabled) => void updateRunAtStartup(enabled)}
+            onChangeStartup={(enabled, hideOnStartup) => void updateRunAtStartup(enabled, hideOnStartup)}
           />
         )}
 
