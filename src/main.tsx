@@ -3,6 +3,8 @@ import { createRoot } from "react-dom/client";
 import {
   AlertCircle,
   Download,
+  Eye,
+  EyeOff,
   FolderOpen,
   GripVertical,
   Headphones,
@@ -77,7 +79,7 @@ function App() {
   const [appVersion, setAppVersion] = useState("");
   const [platform, setPlatform] = useState<SoundDeckPlatform>("unknown");
   const [capabilities, setCapabilities] = useState<AppCapabilities | null>(null);
-  const [startupSettings, setStartupSettings] = useState<StartupSettings>({ supported: false, enabled: false });
+  const [startupSettings, setStartupSettings] = useState<StartupSettings>({ supported: false, enabled: false, hideOnStartup: true });
   const [startupUpdateStatus, setStartupUpdateStatus] = useState<StartupUpdateStatus>("idle");
   const engineRef = useRef<AudioEngine | null>(null);
 
@@ -86,7 +88,7 @@ function App() {
     void window.sounddeck.getPlatform().then(setPlatform).catch(() => undefined);
     void window.sounddeck.getCapabilities().then(setCapabilities).catch(() => undefined);
     void window.sounddeck.getStartupSettings().then(setStartupSettings).catch(() => {
-      setStartupSettings({ supported: false, enabled: false, reason: "Startup settings are unavailable." });
+      setStartupSettings({ supported: false, enabled: false, hideOnStartup: true, reason: "Startup settings are unavailable." });
     });
   }, []);
 
@@ -750,15 +752,21 @@ function App() {
     updateLibrary((current) => ({ ...current, settings: { ...current.settings, ...normalizedPatch } }));
   }
 
-  async function updateRunAtStartup(enabled: boolean) {
+  async function updateRunAtStartup(enabled: boolean, hideOnStartup = startupSettings.hideOnStartup ?? true) {
     const previous = startupSettings;
-    setStartupSettings({ ...startupSettings, enabled });
+    setStartupSettings({ ...startupSettings, enabled, hideOnStartup });
     setStartupUpdateStatus("saving");
     try {
-      const next = await window.sounddeck.setRunAtStartup(enabled);
+      const next = await window.sounddeck.setRunAtStartup(enabled, { hideOnStartup });
       setStartupSettings(next);
       setStartupUpdateStatus(next.ok ? "idle" : "error");
-      if (next.ok) setMessage(enabled ? "SoundDeck will run when you sign in" : "SoundDeck will stay closed at sign-in");
+      if (next.ok) {
+        setMessage(enabled
+          ? hideOnStartup
+            ? "SoundDeck will start hidden when you sign in"
+            : "SoundDeck will open when you sign in"
+          : "SoundDeck will stay closed at sign-in");
+      }
     } catch {
       setStartupSettings({ ...previous, reason: "Could not update startup settings." });
       setStartupUpdateStatus("error");
@@ -958,7 +966,7 @@ function App() {
             startupSettings={startupSettings}
             startupUpdateStatus={startupUpdateStatus}
             capabilities={capabilities}
-            onChangeStartup={(enabled) => void updateRunAtStartup(enabled)}
+            onChangeStartup={(enabled, hideOnStartup) => void updateRunAtStartup(enabled, hideOnStartup)}
           />
         )}
 
@@ -1819,10 +1827,11 @@ function SettingsPanel({ startupSettings, startupUpdateStatus, capabilities, onC
   startupSettings: StartupSettings;
   startupUpdateStatus: StartupUpdateStatus;
   capabilities: AppCapabilities | null;
-  onChangeStartup: (enabled: boolean) => void;
+  onChangeStartup: (enabled: boolean, hideOnStartup?: boolean) => void;
 }) {
   const startupSupported = capabilities?.runAtStartupSupported ?? startupSettings.supported;
   const disabled = !startupSupported || startupUpdateStatus === "saving";
+  const hideOnStartup = startupSettings.hideOnStartup ?? true;
   const startupNeedsApproval = startupSettings.status === "requires-approval" || startupSettings.status === "not-approved";
   const startupCopy = !startupSupported
     ? startupSettings.reason === "portable-build"
@@ -1835,8 +1844,15 @@ function SettingsPanel({ startupSettings, startupUpdateStatus, capabilities, onC
       : startupNeedsApproval
         ? "Startup is enabled, but your system still needs approval."
         : startupSettings.enabled
-          ? "SoundDeck opens automatically when you sign in."
+          ? hideOnStartup
+            ? "SoundDeck starts in the tray when you sign in."
+            : "SoundDeck opens its window when you sign in."
           : "SoundDeck stays closed until you open it.";
+  const hiddenStartupCopy = startupUpdateStatus === "saving"
+    ? "Saving startup preference..."
+    : hideOnStartup
+      ? "Sign-in launches stay in the tray."
+      : "Sign-in launches show the main window.";
   return (
     <div className="panel settingsPanel">
       <section>
@@ -1853,6 +1869,19 @@ function SettingsPanel({ startupSettings, startupUpdateStatus, capabilities, onC
             <span className="settingsToggleText">
               <strong>Run on start</strong>
               <small>{startupCopy}</small>
+            </span>
+          </label>
+          <label className={disabled ? "settingsToggle disabled" : "settingsToggle"}>
+            <input
+              type="checkbox"
+              checked={hideOnStartup}
+              disabled={disabled}
+              onChange={(event) => onChangeStartup(startupSettings.enabled, event.target.checked)}
+            />
+            {hideOnStartup ? <EyeOff size={17} /> : <Eye size={17} />}
+            <span className="settingsToggleText">
+              <strong>Start hidden</strong>
+              <small>{hiddenStartupCopy}</small>
             </span>
           </label>
         </div>

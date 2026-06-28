@@ -19,7 +19,7 @@ contextBridge.exposeInMainWorld("sounddeck", {
   getPlatform: () => ipcRenderer.invoke("app:getPlatform"),
   getCapabilities: () => ipcRenderer.invoke("app:getCapabilities"),
   getStartupSettings: () => ipcRenderer.invoke("app:getStartupSettings"),
-  setRunAtStartup: (enabled) => ipcRenderer.invoke("app:setRunAtStartup", enabled),
+  setRunAtStartup: (enabled, options) => ipcRenderer.invoke("app:setRunAtStartup", enabled, options),
   getPathForFile: (file) => webUtils.getPathForFile(file),
   onHotkeyTrigger: (callback) => {
     const listener = (_event, binding) => callback(binding);

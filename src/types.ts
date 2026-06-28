@@ -131,6 +131,9 @@ export type UpdateStatus =
 export interface StartupSettings {
   supported: boolean;
   enabled: boolean;
+  hideOnStartup?: boolean;
+  wasOpenedAtLogin?: boolean;
+  wasOpenedAsHidden?: boolean;
   status?: string;
   reason?: string;
 }
@@ -156,7 +159,7 @@ declare global {
       getPlatform: () => Promise<SoundDeckPlatform>;
       getCapabilities: () => Promise<AppCapabilities>;
       getStartupSettings: () => Promise<StartupSettings>;
-      setRunAtStartup: (enabled: boolean) => Promise<StartupSettings & { ok: boolean }>;
+      setRunAtStartup: (enabled: boolean, options?: { hideOnStartup?: boolean }) => Promise<StartupSettings & { ok: boolean }>;
       getPathForFile: (file: File) => string;
       onHotkeyTrigger: (callback: (binding: HotkeyBinding) => void) => () => void;
       getCorsairStatus: () => Promise<CorsairState>;
