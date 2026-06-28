@@ -185,7 +185,7 @@ function hasStartupArg(argv = process.argv) {
   return argv.includes(STARTUP_ARG);
 }
 
-function startupLoginItemOptions(openAtLogin, hideOnStartup = false) {
+function startupLoginItemOptions(openAtLogin, hideOnStartup = true) {
   if (process.platform !== "win32") return { openAtLogin, openAsHidden: hideOnStartup };
   return {
     openAtLogin,
@@ -240,7 +240,7 @@ async function readAppSettings() {
 async function readStartupPreferences() {
   const settings = await readAppSettings();
   return {
-    hideOnStartup: settings?.startup?.hideOnStartup === true,
+    hideOnStartup: settings?.startup?.hideOnStartup !== false,
     runAtStartup: typeof settings?.startup?.runAtStartup === "boolean" ? settings.startup.runAtStartup : undefined
   };
 }

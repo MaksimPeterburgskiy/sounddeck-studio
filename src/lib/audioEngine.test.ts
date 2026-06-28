@@ -460,7 +460,7 @@ describe("AudioEngine live effects", () => {
     await engine.dispose();
   });
 
-  it("keeps reverb tails active until their cleanup timer expires", async () => {
+  it("keeps reverb tails connected without reporting the sound as playing", async () => {
     vi.useFakeTimers();
     window.setTimeout = setTimeout;
     window.clearTimeout = clearTimeout;
@@ -482,11 +482,11 @@ describe("AudioEngine live effects", () => {
       const source = monitorContext.bufferSources[0];
       source.onended?.();
 
-      expect(engine.isPlaying("sound-1")).toBe(true);
+      expect(engine.isPlaying("sound-1")).toBe(false);
       expect(monitorContext.convolvers[0].disconnect).not.toHaveBeenCalled();
 
       await vi.advanceTimersByTimeAsync(1499);
-      expect(engine.isPlaying("sound-1")).toBe(true);
+      expect(engine.isPlaying("sound-1")).toBe(false);
 
       await vi.advanceTimersByTimeAsync(1);
       expect(engine.isPlaying("sound-1")).toBe(false);

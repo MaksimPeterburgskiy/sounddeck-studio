@@ -160,6 +160,8 @@ export interface StartupSettings {
   supported: boolean;
   enabled: boolean;
   hideOnStartup?: boolean;
+  wasOpenedAtLogin?: boolean;
+  wasOpenedAsHidden?: boolean;
   status?: string;
   reason?: string;
 }

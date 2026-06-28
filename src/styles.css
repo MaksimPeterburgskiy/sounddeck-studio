@@ -642,7 +642,7 @@ small { color: var(--text-dim); font-size: 12px; }
   gap: 3px;
   color: var(--accent);
 }
-.padOutput { text-align: right; white-space: nowrap; }
+.padOutput { grid-column: -2 / -1; text-align: right; white-space: nowrap; }
 .problem, em { color: var(--warn); font-style: normal; }
 
 .padHotkey {

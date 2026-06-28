@@ -79,7 +79,7 @@ function App() {
   const [appVersion, setAppVersion] = useState("");
   const [platform, setPlatform] = useState<SoundDeckPlatform>("unknown");
   const [capabilities, setCapabilities] = useState<AppCapabilities | null>(null);
-  const [startupSettings, setStartupSettings] = useState<StartupSettings>({ supported: false, enabled: false });
+  const [startupSettings, setStartupSettings] = useState<StartupSettings>({ supported: false, enabled: false, hideOnStartup: true });
   const [startupUpdateStatus, setStartupUpdateStatus] = useState<StartupUpdateStatus>("idle");
   const engineRef = useRef<AudioEngine | null>(null);
 
@@ -88,7 +88,7 @@ function App() {
     void window.sounddeck.getPlatform().then(setPlatform).catch(() => undefined);
     void window.sounddeck.getCapabilities().then(setCapabilities).catch(() => undefined);
     void window.sounddeck.getStartupSettings().then(setStartupSettings).catch(() => {
-      setStartupSettings({ supported: false, enabled: false, reason: "Startup settings are unavailable." });
+      setStartupSettings({ supported: false, enabled: false, hideOnStartup: true, reason: "Startup settings are unavailable." });
     });
   }, []);
 
@@ -729,7 +729,10 @@ function App() {
       if (!result.canceled) setMessage("Could not read that board file");
       return;
     }
-    const imported = result.board;
+    const imported = {
+      ...result.board,
+      sounds: result.board.sounds.map((sound) => ({ ...sound, effects: normalizeSoundEffects(sound.effects) }))
+    };
     if (library) {
       const boardId = library.activeBoardId;
       const current = library.boards.find((board) => board.id === boardId);
@@ -753,7 +756,7 @@ function App() {
     updateLibrary((current) => ({ ...current, settings: { ...current.settings, ...normalizedPatch } }));
   }
 
-  async function updateRunAtStartup(enabled: boolean, hideOnStartup = startupSettings.hideOnStartup === true) {
+  async function updateRunAtStartup(enabled: boolean, hideOnStartup = startupSettings.hideOnStartup ?? true) {
     const previous = startupSettings;
     setStartupSettings({ ...startupSettings, enabled, hideOnStartup });
     setStartupUpdateStatus("saving");
@@ -1978,7 +1981,7 @@ function SettingsPanel({ startupSettings, startupUpdateStatus, capabilities, onC
 }) {
   const startupSupported = capabilities?.runAtStartupSupported ?? startupSettings.supported;
   const disabled = !startupSupported || startupUpdateStatus === "saving";
-  const hideOnStartup = startupSettings.hideOnStartup === true;
+  const hideOnStartup = startupSettings.hideOnStartup ?? true;
   const hiddenStartupDisabled = disabled || !startupSettings.enabled;
   const startupNeedsApproval = startupSettings.status === "requires-approval" || startupSettings.status === "not-approved";
   const startupCopy = !startupSupported

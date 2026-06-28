@@ -637,9 +637,9 @@ export class AudioEngine {
 
   private finishVoice(soundId: string, voice: ActiveVoice) {
     if (voice.cleanupHandle !== undefined || voice.cleanedUp) return;
+    this.removeVoice(soundId, voice.id);
     voice.cleanupHandle = window.setTimeout(() => {
       this.cleanupVoice(voice);
-      this.removeVoice(soundId, voice.id);
     }, this.effectTailMs(voice.effects));
   }
 

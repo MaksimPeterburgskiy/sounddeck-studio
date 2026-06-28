@@ -96,10 +96,10 @@ export function installDevBridge() {
       };
     },
     async getStartupSettings() {
-      return { supported: false, enabled: false, hideOnStartup: false, reason: "Run in Electron to manage startup settings" };
+      return { supported: false, enabled: false, hideOnStartup: true, reason: "Run in Electron to manage startup settings" };
     },
     async setRunAtStartup() {
-      return { ok: false, supported: false, enabled: false, hideOnStartup: false, reason: "Run in Electron to manage startup settings" };
+      return { ok: false, supported: false, enabled: false, hideOnStartup: true, reason: "Run in Electron to manage startup settings" };
     },
     getPathForFile(file: File) {
       return file.name;
