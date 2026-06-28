@@ -3,6 +3,8 @@ import { createRoot } from "react-dom/client";
 import {
   AlertCircle,
   Download,
+  Eye,
+  EyeOff,
   FolderOpen,
   GripVertical,
   Headphones,
@@ -751,15 +753,21 @@ function App() {
     updateLibrary((current) => ({ ...current, settings: { ...current.settings, ...normalizedPatch } }));
   }
 
-  async function updateRunAtStartup(enabled: boolean) {
+  async function updateRunAtStartup(enabled: boolean, hideOnStartup = startupSettings.hideOnStartup === true) {
     const previous = startupSettings;
-    setStartupSettings({ ...startupSettings, enabled });
+    setStartupSettings({ ...startupSettings, enabled, hideOnStartup });
     setStartupUpdateStatus("saving");
     try {
-      const next = await window.sounddeck.setRunAtStartup(enabled);
+      const next = await window.sounddeck.setRunAtStartup(enabled, { hideOnStartup });
       setStartupSettings(next);
       setStartupUpdateStatus(next.ok ? "idle" : "error");
-      if (next.ok) setMessage(enabled ? "SoundDeck will run when you sign in" : "SoundDeck will stay closed at sign-in");
+      if (next.ok) {
+        setMessage(enabled
+          ? hideOnStartup
+            ? "SoundDeck will start hidden when you sign in"
+            : "SoundDeck will open when you sign in"
+          : "SoundDeck will stay closed at sign-in");
+      }
     } catch {
       setStartupSettings({ ...previous, reason: "Could not update startup settings." });
       setStartupUpdateStatus("error");
@@ -959,7 +967,7 @@ function App() {
             startupSettings={startupSettings}
             startupUpdateStatus={startupUpdateStatus}
             capabilities={capabilities}
-            onChangeStartup={(enabled) => void updateRunAtStartup(enabled)}
+            onChangeStartup={(enabled, hideOnStartup) => void updateRunAtStartup(enabled, hideOnStartup)}
           />
         )}
 
@@ -1966,11 +1974,12 @@ function SettingsPanel({ startupSettings, startupUpdateStatus, capabilities, onC
   startupSettings: StartupSettings;
   startupUpdateStatus: StartupUpdateStatus;
   capabilities: AppCapabilities | null;
-  onChangeStartup: (enabled: boolean) => void;
+  onChangeStartup: (enabled: boolean, hideOnStartup?: boolean) => void;
 }) {
   const startupSupported = capabilities?.runAtStartupSupported ?? startupSettings.supported;
   const disabled = !startupSupported || startupUpdateStatus === "saving";
   const hideOnStartup = startupSettings.hideOnStartup === true;
+  const hiddenStartupDisabled = disabled || !startupSettings.enabled;
   const startupNeedsApproval = startupSettings.status === "requires-approval" || startupSettings.status === "not-approved";
   const startupCopy = !startupSupported
     ? startupSettings.reason === "portable-build"
@@ -1987,6 +1996,13 @@ function SettingsPanel({ startupSettings, startupUpdateStatus, capabilities, onC
             ? "SoundDeck starts in the tray when you sign in."
             : "SoundDeck opens automatically when you sign in."
           : "SoundDeck stays closed until you open it.";
+  const hiddenStartupCopy = startupUpdateStatus === "saving"
+    ? "Saving startup preference..."
+    : startupSettings.enabled
+      ? hideOnStartup
+        ? "Sign-in launches stay in the tray."
+        : "Sign-in launches show the main window."
+      : "Enable startup first.";
   return (
     <div className="panel settingsPanel">
       <section>
@@ -2003,6 +2019,19 @@ function SettingsPanel({ startupSettings, startupUpdateStatus, capabilities, onC
             <span className="settingsToggleText">
               <strong>Run on start</strong>
               <small>{startupCopy}</small>
+            </span>
+          </label>
+          <label className={hiddenStartupDisabled ? "settingsToggle disabled" : "settingsToggle"}>
+            <input
+              type="checkbox"
+              checked={hideOnStartup}
+              disabled={hiddenStartupDisabled}
+              onChange={(event) => onChangeStartup(startupSettings.enabled, event.target.checked)}
+            />
+            {hideOnStartup ? <EyeOff size={17} /> : <Eye size={17} />}
+            <span className="settingsToggleText">
+              <strong>Start hidden</strong>
+              <small>{hiddenStartupCopy}</small>
             </span>
           </label>
         </div>
