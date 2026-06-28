@@ -260,10 +260,7 @@ async function getStartupSettings(argv = process.argv) {
   try {
     const queryOptions = startupLoginItemQueryOptions();
     let settings = app.getLoginItemSettings(queryOptions);
-    if (process.platform === "win32" && preferences.runAtStartup === false && windowsStartupEnabled(settings)) {
-      clearWindowsStartupItems();
-      settings = app.getLoginItemSettings(queryOptions);
-    } else if (process.platform === "win32" && preferences.runAtStartup !== false && !settings.openAtLogin && windowsStartupEnabled(settings)) {
+    if (process.platform === "win32" && preferences.runAtStartup !== false && !settings.openAtLogin && windowsStartupEnabled(settings)) {
       app.setLoginItemSettings(startupLoginItemOptions(true, preferences.hideOnStartup));
       clearLegacyWindowsStartupItems();
       settings = app.getLoginItemSettings(queryOptions);
@@ -1051,7 +1048,8 @@ ipcMain.handle("app:setRunAtStartup", async (_event, enabled, options = {}) => {
       app.setLoginItemSettings(startupLoginItemOptions(true, hideOnStartup));
       clearLegacyWindowsStartupItems();
     } else {
-      clearWindowsStartupItems();
+      if (process.platform === "win32") clearWindowsStartupItems();
+      else app.setLoginItemSettings(startupLoginItemOptions(false, hideOnStartup));
     }
     return { ok: true, ...(await getStartupSettings()) };
   } catch (error) {
