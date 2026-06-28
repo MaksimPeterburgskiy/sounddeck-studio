@@ -729,10 +729,7 @@ function App() {
       if (!result.canceled) setMessage("Could not read that board file");
       return;
     }
-    const imported = {
-      ...result.board,
-      sounds: result.board.sounds.map((sound) => ({ ...sound, effects: normalizeSoundEffects(sound.effects) }))
-    };
+    const imported = result.board;
     if (library) {
       const boardId = library.activeBoardId;
       const current = library.boards.find((board) => board.id === boardId);
@@ -1191,7 +1188,6 @@ function SoundPad(props: {
   const clipDuration = Number.isFinite(sound.duration)
     ? Math.max(0, Math.min(sound.trimEndSec ?? sound.duration!, sound.duration!) - Math.max(0, sound.trimStartSec ?? 0))
     : sound.duration;
-  const hasLiveEffects = soundEffectsAreActive(sound.effects);
   return (
     <article
       className={`pad${props.selected ? " selected" : ""}${props.playing ? " playing" : ""}${props.dragging ? " dragging" : ""}`}
@@ -1227,7 +1223,6 @@ function SoundPad(props: {
       <div className="padMeta">
         <PadHotkey value={sound.hotkey} problem={props.hotkeyProblem} onChange={(hotkey) => props.onChange({ hotkey })} />
         <span className="padVolume"><Volume2 size={11} /> {Math.round(sound.volume * 100)}%</span>
-        {hasLiveEffects && <span className="padEffects"><Wand2 size={11} /> FX</span>}
         <span className="padOutput">{sound.outputTarget}</span>
       </div>
     </article>
