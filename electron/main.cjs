@@ -19,7 +19,15 @@ if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
   app.on("second-instance", (_event, argv) => {
-    if (!hasStartupArg(argv)) showMainWindow();
+    if (!hasStartupArg(argv)) {
+      showMainWindow();
+      return;
+    }
+    void readStartupPreferences()
+      .then((preferences) => {
+        if (!preferences.hideOnStartup) showMainWindow();
+      })
+      .catch(() => undefined);
   });
 }
 
@@ -56,6 +64,10 @@ function appRoot() {
 
 function libraryFile() {
   return path.join(appRoot(), "library.json");
+}
+
+function appSettingsFile() {
+  return path.join(appRoot(), "app-settings.json");
 }
 
 function mediaRoot() {
@@ -172,8 +184,8 @@ function hasStartupArg(argv = process.argv) {
   return argv.includes(STARTUP_ARG);
 }
 
-function startupLoginItemOptions(openAtLogin) {
-  if (process.platform !== "win32") return { openAtLogin };
+function startupLoginItemOptions(openAtLogin, hideOnStartup = true) {
+  if (process.platform !== "win32") return { openAtLogin, openAsHidden: hideOnStartup };
   return {
     openAtLogin,
     enabled: openAtLogin,
@@ -207,26 +219,51 @@ function windowsStartupEnabled(settings) {
   return Boolean(settings.openAtLogin);
 }
 
-function getStartupSettings() {
-  if (!startupSettingsSupported()) return { supported: false, enabled: false, reason: startupUnsupportedReason() };
+async function readAppSettings() {
+  try {
+    return JSON.parse(await fs.readFile(appSettingsFile(), "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+async function readStartupPreferences() {
+  const settings = await readAppSettings();
+  return { hideOnStartup: settings?.startup?.hideOnStartup !== false };
+}
+
+async function writeStartupPreferences(preferences) {
+  await fs.mkdir(appRoot(), { recursive: true });
+  const current = await readAppSettings();
+  const startup = { ...(current.startup || {}), ...preferences };
+  await fs.writeFile(appSettingsFile(), JSON.stringify({ ...current, startup }, null, 2));
+}
+
+async function getStartupSettings(argv = process.argv) {
+  const preferences = await readStartupPreferences();
+  if (!startupSettingsSupported()) {
+    return { supported: false, enabled: false, hideOnStartup: preferences.hideOnStartup, reason: startupUnsupportedReason() };
+  }
   try {
     const queryOptions = startupLoginItemQueryOptions();
     let settings = app.getLoginItemSettings(queryOptions);
     if (process.platform === "win32" && !settings.openAtLogin && windowsStartupEnabled(settings)) {
-      app.setLoginItemSettings(startupLoginItemOptions(true));
+      app.setLoginItemSettings(startupLoginItemOptions(true, preferences.hideOnStartup));
       clearLegacyWindowsStartupItems();
       settings = app.getLoginItemSettings(queryOptions);
     }
-    const isStartupLaunch = hasStartupArg();
+    const isStartupLaunch = hasStartupArg(argv);
+    const wasOpenedAtLogin = Boolean(settings.wasOpenedAtLogin || isStartupLaunch);
     return {
       supported: true,
       enabled: process.platform === "win32" ? windowsStartupEnabled(settings) : Boolean(settings.openAtLogin),
-      wasOpenedAtLogin: Boolean(settings.wasOpenedAtLogin || isStartupLaunch),
-      wasOpenedAsHidden: Boolean(settings.wasOpenedAsHidden || (process.platform === "win32" && isStartupLaunch)),
+      hideOnStartup: preferences.hideOnStartup,
+      wasOpenedAtLogin,
+      wasOpenedAsHidden: Boolean(settings.wasOpenedAsHidden || (wasOpenedAtLogin && preferences.hideOnStartup)),
       ...(typeof settings.status === "string" ? { status: settings.status } : {})
     };
   } catch (error) {
-    return { supported: false, enabled: false, reason: error?.message || "startup-settings-unavailable" };
+    return { supported: false, enabled: false, hideOnStartup: preferences.hideOnStartup, reason: error?.message || "startup-settings-unavailable" };
   }
 }
 
@@ -583,7 +620,8 @@ function createTray() {
 async function createWindow() {
   await ensureLibrary();
   Menu.setApplicationMenu(null);
-  const startHidden = getStartupSettings().wasOpenedAtLogin;
+  const startupSettings = await getStartupSettings();
+  const startHidden = Boolean(startupSettings.wasOpenedAtLogin && startupSettings.hideOnStartup);
   mainWindow = new BrowserWindow({
     width: 1360,
     height: 860,
@@ -972,14 +1010,17 @@ ipcMain.handle("app:getCapabilities", () => appCapabilities());
 
 ipcMain.handle("app:getStartupSettings", () => getStartupSettings());
 
-ipcMain.handle("app:setRunAtStartup", (_event, enabled) => {
-  if (!startupSettingsSupported()) return { ok: false, ...getStartupSettings() };
+ipcMain.handle("app:setRunAtStartup", async (_event, enabled, options = {}) => {
+  if (!startupSettingsSupported()) return { ok: false, ...(await getStartupSettings()) };
   try {
     const openAtLogin = Boolean(enabled);
-    app.setLoginItemSettings(startupLoginItemOptions(openAtLogin));
+    const currentPreferences = await readStartupPreferences();
+    const hideOnStartup = typeof options?.hideOnStartup === "boolean" ? options.hideOnStartup : currentPreferences.hideOnStartup;
+    await writeStartupPreferences({ hideOnStartup });
+    app.setLoginItemSettings(startupLoginItemOptions(openAtLogin, hideOnStartup));
     if (!openAtLogin) clearLegacyWindowsStartupItems();
-    return { ok: true, ...getStartupSettings() };
+    return { ok: true, ...(await getStartupSettings()) };
   } catch (error) {
-    return { ok: false, ...getStartupSettings(), reason: error?.message || "startup-settings-unavailable" };
+    return { ok: false, ...(await getStartupSettings()), reason: error?.message || "startup-settings-unavailable" };
   }
 });
