@@ -407,10 +407,20 @@ describe("AudioEngine live effects", () => {
 
   it("updates active effect params without restarting playback", async () => {
     const engine = new AudioEngine(playbackSettings, vi.fn());
-    await engine.play(makeSound());
+    await engine.play(makeSound({
+      effects: {
+        pitchEnabled: false,
+        pitchSemitones: 0,
+        eq: { enabled: false, lowGainDb: 0, midGainDb: 0, highGainDb: 0 },
+        compressor: { enabled: false, thresholdDb: -24, ratio: 3, attackMs: 3, releaseMs: 250 },
+        limiter: { enabled: false, ceilingDb: -1 },
+        reverb: { enabled: true, mix: 0.25, decaySec: 1.4 }
+      }
+    }));
 
     const monitorContext = FakeAudioContext.instances[0];
     const source = monitorContext.bufferSources[0];
+    expect(monitorContext.convolvers[0].buffer).toBeTruthy();
     engine.setSoundEffects("sound-1", {
       pitchEnabled: true,
       pitchSemitones: -5,
@@ -425,6 +435,7 @@ describe("AudioEngine live effects", () => {
     expect(monitorContext.biquads[0].gain.value).toBe(-3);
     expect(monitorContext.biquads[1].gain.value).toBe(2);
     expect(monitorContext.biquads[2].gain.value).toBe(4);
+    expect(monitorContext.convolvers[0].buffer).toBeNull();
 
     await engine.dispose();
   });

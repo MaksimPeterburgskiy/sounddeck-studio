@@ -1533,6 +1533,29 @@ function EffectSlider({ label, value, min, max, step, unit = "", onChange }: {
   const numberMax = unit === "%" ? max * 100 : max;
   const numberStep = unit === "%" ? step * 100 : step;
   const fromNumber = (raw: number) => unit === "%" ? raw / 100 : raw;
+  const [text, setText] = useState(String(numberValue));
+  const [focused, setFocused] = useState(false);
+
+  useEffect(() => {
+    if (!focused) setText(String(numberValue));
+  }, [focused, numberValue]);
+
+  const commit = () => {
+    const trimmed = text.trim();
+    if (trimmed === "") {
+      setText(String(numberValue));
+      return;
+    }
+    const next = Number(trimmed);
+    if (Number.isFinite(next)) {
+      const clamped = Math.min(numberMax, Math.max(numberMin, next));
+      onChange(fromNumber(clamped));
+      setText(String(clamped));
+    } else {
+      setText(String(numberValue));
+    }
+  };
+
   return (
     <label className="effectSlider">
       <span>{label}</span>
@@ -1542,11 +1565,11 @@ function EffectSlider({ label, value, min, max, step, unit = "", onChange }: {
         min={numberMin}
         max={numberMax}
         step={numberStep}
-        value={numberValue}
-        onChange={(event) => {
-          const next = Number(event.target.value);
-          if (Number.isFinite(next)) onChange(Math.min(max, Math.max(min, fromNumber(next))));
-        }}
+        value={text}
+        onChange={(event) => setText(event.target.value)}
+        onFocus={() => setFocused(true)}
+        onBlur={() => { setFocused(false); commit(); }}
+        onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }}
       />
       <em>{unit || display}</em>
     </label>

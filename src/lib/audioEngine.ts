@@ -66,7 +66,6 @@ export class AudioEngine {
   private previewVoice: PreviewVoice | null = null;
   private previewOffset = 0;
   private previewGeneration = 0;
-  private reverbImpulses = new WeakMap<BaseAudioContext, Map<string, AudioBuffer>>();
   private micStream?: MediaStream;
   private micNodes: Array<{ source: MediaStreamAudioSourceNode; gain: GainNode; context: AudioContext }> = [];
   private micConfigureGeneration = 0;
@@ -458,6 +457,7 @@ export class AudioEngine {
         chain.reverb.convolver.buffer = this.getReverbImpulse(chain.source.context, effects.reverb.decaySec);
       } else if (mix === 0) {
         chain.reverb.decaySec = effects.reverb.decaySec;
+        chain.reverb.convolver.buffer = null;
       }
     }
   }
@@ -477,14 +477,6 @@ export class AudioEngine {
   private getReverbImpulse(context: BaseAudioContext, decaySec: number) {
     const safeDecay = Math.min(6, Math.max(0.1, decaySec));
     const sampleRate = context.sampleRate || 48000;
-    const key = `${sampleRate}:${safeDecay.toFixed(2)}`;
-    let contextCache = this.reverbImpulses.get(context);
-    if (!contextCache) {
-      contextCache = new Map();
-      this.reverbImpulses.set(context, contextCache);
-    }
-    const cached = contextCache.get(key);
-    if (cached) return cached;
     const length = Math.max(1, Math.floor(sampleRate * safeDecay));
     const impulse = context.createBuffer(2, length, sampleRate);
     for (let channel = 0; channel < impulse.numberOfChannels; channel += 1) {
@@ -494,7 +486,6 @@ export class AudioEngine {
         data[i] = (Math.random() * 2 - 1) * ((1 - t) ** 2);
       }
     }
-    contextCache.set(key, impulse);
     return impulse;
   }
 
