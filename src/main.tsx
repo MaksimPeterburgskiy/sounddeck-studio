@@ -1982,7 +1982,6 @@ function SettingsPanel({ startupSettings, startupUpdateStatus, capabilities, onC
   const startupSupported = capabilities?.runAtStartupSupported ?? startupSettings.supported;
   const disabled = !startupSupported || startupUpdateStatus === "saving";
   const hideOnStartup = startupSettings.hideOnStartup ?? true;
-  const hiddenStartupDisabled = disabled || !startupSettings.enabled;
   const startupNeedsApproval = startupSettings.status === "requires-approval" || startupSettings.status === "not-approved";
   const startupCopy = !startupSupported
     ? startupSettings.reason === "portable-build"
@@ -1997,15 +1996,13 @@ function SettingsPanel({ startupSettings, startupUpdateStatus, capabilities, onC
         : startupSettings.enabled
           ? hideOnStartup
             ? "SoundDeck starts in the tray when you sign in."
-            : "SoundDeck opens automatically when you sign in."
+            : "SoundDeck opens its window when you sign in."
           : "SoundDeck stays closed until you open it.";
   const hiddenStartupCopy = startupUpdateStatus === "saving"
     ? "Saving startup preference..."
-    : startupSettings.enabled
-      ? hideOnStartup
-        ? "Sign-in launches stay in the tray."
-        : "Sign-in launches show the main window."
-      : "Enable startup first.";
+    : hideOnStartup
+      ? "Sign-in launches stay in the tray."
+      : "Sign-in launches show the main window.";
   return (
     <div className="panel settingsPanel">
       <section>
@@ -2024,11 +2021,11 @@ function SettingsPanel({ startupSettings, startupUpdateStatus, capabilities, onC
               <small>{startupCopy}</small>
             </span>
           </label>
-          <label className={hiddenStartupDisabled ? "settingsToggle disabled" : "settingsToggle"}>
+          <label className={disabled ? "settingsToggle disabled" : "settingsToggle"}>
             <input
               type="checkbox"
               checked={hideOnStartup}
-              disabled={hiddenStartupDisabled}
+              disabled={disabled}
               onChange={(event) => onChangeStartup(startupSettings.enabled, event.target.checked)}
             />
             {hideOnStartup ? <EyeOff size={17} /> : <Eye size={17} />}

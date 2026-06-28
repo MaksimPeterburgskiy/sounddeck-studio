@@ -1474,7 +1474,7 @@ input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent);
 }
 .toggleRow label:hover { border-color: var(--line-bright); }
 .toggleRow label:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); color: var(--text); }
-.settingsToggleRow { grid-template-columns: 1fr; }
+.settingsToggleRow { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
 .settingsToggle.disabled {
   cursor: not-allowed;
   opacity: 0.62;
