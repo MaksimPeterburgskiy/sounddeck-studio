@@ -131,6 +131,8 @@ export type UpdateStatus =
 export interface StartupSettings {
   supported: boolean;
   enabled: boolean;
+  wasOpenedAtLogin?: boolean;
+  wasOpenedAsHidden?: boolean;
   status?: string;
   reason?: string;
 }

@@ -12,12 +12,15 @@ const { buildCropArgs } = require("./ffmpegArgs.cjs");
 const { createMacTrayTemplateImage, MAC_TRAY_ICON_FILENAME } = require("./trayIcon.cjs");
 
 const isDev = !app.isPackaged;
+const STARTUP_ARG = "--sounddeck-startup";
 if (isDev && process.env.SOUNDDECK_USER_DATA) app.setPath("userData", process.env.SOUNDDECK_USER_DATA);
 
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
-  app.on("second-instance", () => showMainWindow());
+  app.on("second-instance", (_event, argv) => {
+    if (!hasStartupArg(argv)) showMainWindow();
+  });
 }
 
 let mainWindow;
@@ -165,9 +168,27 @@ function startupUnsupportedReason() {
   return "unsupported-platform";
 }
 
+function hasStartupArg(argv = process.argv) {
+  return argv.includes(STARTUP_ARG);
+}
+
 function startupLoginItemOptions(openAtLogin) {
   if (process.platform !== "win32") return { openAtLogin };
-  return { openAtLogin, enabled: openAtLogin, name: WINDOWS_STARTUP_NAME };
+  return {
+    openAtLogin,
+    enabled: openAtLogin,
+    name: WINDOWS_STARTUP_NAME,
+    path: process.execPath,
+    args: [STARTUP_ARG]
+  };
+}
+
+function startupLoginItemQueryOptions() {
+  if (process.platform !== "win32") return {};
+  return {
+    path: process.execPath,
+    args: [STARTUP_ARG]
+  };
 }
 
 function clearLegacyWindowsStartupItems() {
@@ -189,10 +210,12 @@ function windowsStartupEnabled(settings) {
 function getStartupSettings() {
   if (!startupSettingsSupported()) return { supported: false, enabled: false, reason: startupUnsupportedReason() };
   try {
-    const settings = app.getLoginItemSettings();
+    const settings = app.getLoginItemSettings(startupLoginItemQueryOptions());
     return {
       supported: true,
       enabled: process.platform === "win32" ? windowsStartupEnabled(settings) : Boolean(settings.openAtLogin),
+      wasOpenedAtLogin: Boolean(settings.wasOpenedAtLogin || hasStartupArg()),
+      wasOpenedAsHidden: Boolean(settings.wasOpenedAsHidden),
       ...(typeof settings.status === "string" ? { status: settings.status } : {})
     };
   } catch (error) {
@@ -553,11 +576,13 @@ function createTray() {
 async function createWindow() {
   await ensureLibrary();
   Menu.setApplicationMenu(null);
+  const startHidden = getStartupSettings().wasOpenedAtLogin || hasStartupArg();
   mainWindow = new BrowserWindow({
     width: 1360,
     height: 860,
     minWidth: 1040,
     minHeight: 700,
+    show: !startHidden,
     backgroundColor: "#101114",
     title: "SoundDeck Studio",
     webPreferences: {
