@@ -1,6 +1,6 @@
 {
   "name": "sounddeck-studio",
-  "version": "0.1.14",
+  "version": "0.1.15",
   "description": "Desktop soundboard for Windows and macOS with boards, hotkeys, local media, and virtual audio routing.",
   "main": "electron/main.cjs",
   "type": "module",
