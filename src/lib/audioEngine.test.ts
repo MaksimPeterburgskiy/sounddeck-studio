@@ -497,6 +497,40 @@ describe("AudioEngine live effects", () => {
     }
   });
 
+  it("lets stop clear a pending reverb tail", async () => {
+    vi.useFakeTimers();
+    window.setTimeout = setTimeout;
+    window.clearTimeout = clearTimeout;
+    const engine = new AudioEngine(playbackSettings, vi.fn());
+
+    try {
+      await engine.play(makeSound({
+        effects: {
+          pitchEnabled: false,
+          pitchSemitones: 0,
+          eq: { enabled: false, lowGainDb: 0, midGainDb: 0, highGainDb: 0 },
+          compressor: { enabled: false, thresholdDb: -24, ratio: 3, attackMs: 3, releaseMs: 250 },
+          limiter: { enabled: false, ceilingDb: -1 },
+          reverb: { enabled: true, mix: 0.25, decaySec: 1.5 }
+        }
+      }));
+
+      const monitorContext = FakeAudioContext.instances[0];
+      monitorContext.bufferSources[0].onended?.();
+      expect(monitorContext.convolvers[0].disconnect).not.toHaveBeenCalled();
+
+      engine.stop("sound-1");
+
+      expect(engine.isPlaying("sound-1")).toBe(false);
+      expect(monitorContext.convolvers[0].disconnect).toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(monitorContext.convolvers[0].disconnect).toHaveBeenCalledTimes(1);
+    } finally {
+      await engine.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("includes pitch detune in active playback position", async () => {
     const now = vi.spyOn(performance, "now").mockReturnValue(1000);
     const engine = new AudioEngine(playbackSettings, vi.fn());

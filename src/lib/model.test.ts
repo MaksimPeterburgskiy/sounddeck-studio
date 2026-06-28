@@ -115,7 +115,7 @@ describe("model helpers", () => {
     expect(effects.compressor.thresholdDb).toBe(-60);
     expect(effects.compressor.ratio).toBe(20);
     expect(effects.compressor.attackMs).toBe(0);
-    expect(effects.compressor.releaseMs).toBe(3000);
+    expect(effects.compressor.releaseMs).toBe(1000);
     expect(effects.limiter.ceilingDb).toBe(0);
     expect(effects.reverb.mix).toBe(1);
     expect(effects.reverb.decaySec).toBe(6);

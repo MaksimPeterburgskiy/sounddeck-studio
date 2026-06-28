@@ -63,6 +63,7 @@ export class AudioEngine {
   private virtualBus: GainNode;
   private cache = new Map<string, AudioBuffer>();
   private active = new Map<string, ActiveVoice[]>();
+  private tails = new Map<string, ActiveVoice[]>();
   private previewVoice: PreviewVoice | null = null;
   private previewOffset = 0;
   private previewGeneration = 0;
@@ -190,6 +191,7 @@ export class AudioEngine {
     const voices = this.active.get(soundId) || [];
     for (const voice of voices) this.stopVoice(voice, voice.fadeOutMs / 1000);
     this.active.delete(soundId);
+    this.stopTails(soundId);
     this.emitStatus();
   }
 
@@ -199,6 +201,9 @@ export class AudioEngine {
       for (const voice of voices) this.stopVoice(voice, 0.03);
       this.active.delete(activeId);
     }
+    for (const tailId of [...this.tails.keys()]) {
+      if (tailId !== soundId) this.stopTails(tailId);
+    }
     this.emitStatus();
   }
 
@@ -207,6 +212,7 @@ export class AudioEngine {
       for (const voice of voices) this.stopVoice(voice, 0.03);
     }
     this.active.clear();
+    this.stopAllTails();
     this.emitStatus();
   }
 
@@ -638,9 +644,30 @@ export class AudioEngine {
   private finishVoice(soundId: string, voice: ActiveVoice) {
     if (voice.cleanupHandle !== undefined || voice.cleanedUp) return;
     this.removeVoice(soundId, voice.id);
+    this.addTail(soundId, voice);
     voice.cleanupHandle = window.setTimeout(() => {
       this.cleanupVoice(voice);
+      this.removeTail(soundId, voice.id);
     }, this.effectTailMs(voice.effects));
+  }
+
+  private addTail(soundId: string, voice: ActiveVoice) {
+    this.tails.set(soundId, [...(this.tails.get(soundId) || []), voice]);
+  }
+
+  private removeTail(soundId: string, voiceId: string) {
+    const remaining = (this.tails.get(soundId) || []).filter((voice) => voice.id !== voiceId);
+    if (remaining.length) this.tails.set(soundId, remaining);
+    else this.tails.delete(soundId);
+  }
+
+  private stopTails(soundId: string) {
+    for (const voice of this.tails.get(soundId) || []) this.cleanupVoice(voice);
+    this.tails.delete(soundId);
+  }
+
+  private stopAllTails() {
+    for (const tailId of [...this.tails.keys()]) this.stopTails(tailId);
   }
 
   private cleanupVoice(voice: ActiveVoice) {

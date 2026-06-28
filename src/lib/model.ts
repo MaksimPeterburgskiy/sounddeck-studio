@@ -101,7 +101,7 @@ export function normalizeSoundEffects(value: unknown): SoundEffects {
       thresholdDb: numberIn(compressor.thresholdDb, defaultEffects.compressor.thresholdDb, -60, 0),
       ratio: numberIn(compressor.ratio, defaultEffects.compressor.ratio, 1, 20),
       attackMs: numberIn(compressor.attackMs, defaultEffects.compressor.attackMs, 0, 1000),
-      releaseMs: numberIn(compressor.releaseMs, defaultEffects.compressor.releaseMs, 10, 3000)
+      releaseMs: numberIn(compressor.releaseMs, defaultEffects.compressor.releaseMs, 10, 1000)
     },
     limiter: {
       enabled: boolOr(limiter.enabled, defaultEffects.limiter.enabled),

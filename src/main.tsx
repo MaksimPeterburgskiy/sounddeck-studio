@@ -1645,7 +1645,7 @@ function LiveEffectsEditor({ effects, onChange }: { effects?: SoundEffects; onCh
           <EffectSlider label="Threshold" value={normalized.compressor.thresholdDb} min={-60} max={0} step={1} unit="dB" onChange={(thresholdDb) => updateCompressor({ thresholdDb })} />
           <EffectSlider label="Ratio" value={normalized.compressor.ratio} min={1} max={20} step={1} unit=":1" onChange={(ratio) => updateCompressor({ ratio })} />
           <EffectSlider label="Attack" value={normalized.compressor.attackMs} min={0} max={1000} step={1} unit="ms" onChange={(attackMs) => updateCompressor({ attackMs })} />
-          <EffectSlider label="Release" value={normalized.compressor.releaseMs} min={10} max={3000} step={10} unit="ms" onChange={(releaseMs) => updateCompressor({ releaseMs })} />
+          <EffectSlider label="Release" value={normalized.compressor.releaseMs} min={10} max={1000} step={10} unit="ms" onChange={(releaseMs) => updateCompressor({ releaseMs })} />
         </details>
         <details className="effectRow" open={openRows.limiter} onToggle={toggleRow("limiter")}>
           <summary>
