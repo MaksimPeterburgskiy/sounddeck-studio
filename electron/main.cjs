@@ -10,6 +10,7 @@ const { createCorsairBridge, isCorsairSupportedPlatform, isGKeyAccelerator } = r
 const { createHotkeyEngine } = require("./hotkeys.cjs");
 const { buildCropArgs } = require("./ffmpegArgs.cjs");
 const { createMacTrayTemplateImage, MAC_TRAY_ICON_FILENAME } = require("./trayIcon.cjs");
+const { getWindowsStartupState } = require("./startupSettings.cjs");
 
 const isDev = !app.isPackaged;
 const STARTUP_ARG = "--sounddeck-startup";
@@ -220,13 +221,11 @@ function clearWindowsStartupItems() {
   clearLegacyWindowsStartupItems();
 }
 
-function windowsStartupEnabled(settings) {
-  if (typeof settings.executableWillLaunchAtLogin === "boolean") return settings.executableWillLaunchAtLogin;
-  const launchItem = Array.isArray(settings.launchItems)
-    ? settings.launchItems.find((item) => item?.name === WINDOWS_STARTUP_NAME || item?.path === process.execPath)
-    : null;
-  if (typeof launchItem?.enabled === "boolean") return launchItem.enabled;
-  return Boolean(settings.openAtLogin);
+function windowsStartupState(settings) {
+  return getWindowsStartupState(settings, {
+    name: WINDOWS_STARTUP_NAME,
+    executablePath: process.execPath
+  });
 }
 
 async function readAppSettings() {
@@ -260,22 +259,25 @@ async function getStartupSettings(argv = process.argv) {
   try {
     const queryOptions = startupLoginItemQueryOptions();
     let settings = app.getLoginItemSettings(queryOptions);
-    if (process.platform === "win32" && preferences.runAtStartup !== false && !settings.openAtLogin && windowsStartupEnabled(settings)) {
+    let windowsState = process.platform === "win32" ? windowsStartupState(settings) : null;
+    if (process.platform === "win32" && preferences.runAtStartup !== false && !settings.openAtLogin && windowsState?.approved) {
       app.setLoginItemSettings(startupLoginItemOptions(true, preferences.hideOnStartup));
       clearLegacyWindowsStartupItems();
       settings = app.getLoginItemSettings(queryOptions);
+      windowsState = windowsStartupState(settings);
     }
     const isStartupLaunch = hasStartupArg(argv);
     const wasOpenedAtLogin = Boolean(settings.wasOpenedAtLogin || isStartupLaunch);
+    const status = process.platform === "win32" ? windowsState?.status : settings.status;
     return {
       supported: true,
       enabled: preferences.runAtStartup === false
         ? false
-        : process.platform === "win32" ? windowsStartupEnabled(settings) : Boolean(settings.openAtLogin),
+        : process.platform === "win32" ? Boolean(windowsState?.registered) : Boolean(settings.openAtLogin),
       hideOnStartup: preferences.hideOnStartup,
       wasOpenedAtLogin,
       wasOpenedAsHidden: Boolean(settings.wasOpenedAsHidden || (wasOpenedAtLogin && preferences.hideOnStartup)),
-      ...(typeof settings.status === "string" ? { status: settings.status } : {})
+      ...(typeof status === "string" ? { status } : {})
     };
   } catch (error) {
     return { supported: false, enabled: false, hideOnStartup: preferences.hideOnStartup, reason: error?.message || "startup-settings-unavailable" };
