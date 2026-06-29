@@ -1045,7 +1045,6 @@ ipcMain.handle("app:setRunAtStartup", async (_event, enabled, options = {}) => {
     const openAtLogin = Boolean(enabled);
     const currentPreferences = await readStartupPreferences();
     const hideOnStartup = typeof options?.hideOnStartup === "boolean" ? options.hideOnStartup : currentPreferences.hideOnStartup;
-    await writeStartupPreferences({ hideOnStartup, runAtStartup: openAtLogin });
     if (openAtLogin) {
       app.setLoginItemSettings(startupLoginItemOptions(true, hideOnStartup));
       clearLegacyWindowsStartupItems();
@@ -1053,6 +1052,7 @@ ipcMain.handle("app:setRunAtStartup", async (_event, enabled, options = {}) => {
       if (process.platform === "win32") clearWindowsStartupItems();
       else app.setLoginItemSettings(startupLoginItemOptions(false, hideOnStartup));
     }
+    await writeStartupPreferences({ hideOnStartup, runAtStartup: openAtLogin });
     return { ok: true, ...(await getStartupSettings()) };
   } catch (error) {
     return { ok: false, ...(await getStartupSettings()), reason: error?.message || "startup-settings-unavailable" };
