@@ -26,12 +26,15 @@ function getWindowsStartupState(settings = {}, options = {}) {
     ? settings.executableWillLaunchAtLogin
     : undefined;
   const registered = Boolean(exactEntryRegistered || launchItem || executableWillLaunch);
+  const launchItemEnabled = typeof launchItem?.enabled === "boolean"
+    ? launchItem.enabled
+    : undefined;
   const approved = !registered
     ? false
-    : typeof launchItem?.enabled === "boolean"
-      ? launchItem.enabled
-      : typeof executableWillLaunch === "boolean"
-        ? executableWillLaunch
+    : executableWillLaunch === true || launchItemEnabled === true
+      ? true
+      : executableWillLaunch === false || launchItemEnabled === false
+        ? false
         : exactEntryRegistered;
 
   return {

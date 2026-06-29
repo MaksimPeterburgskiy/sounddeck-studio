@@ -221,6 +221,13 @@ function clearWindowsStartupItems() {
   clearLegacyWindowsStartupItems();
 }
 
+function setWindowsStartupItem(openAtLogin, hideOnStartup = true, approved = openAtLogin) {
+  app.setLoginItemSettings({
+    ...startupLoginItemOptions(openAtLogin, hideOnStartup),
+    enabled: Boolean(approved)
+  });
+}
+
 function windowsStartupState(settings) {
   return getWindowsStartupState(settings, {
     name: WINDOWS_STARTUP_NAME,
@@ -1041,12 +1048,24 @@ ipcMain.handle("app:getStartupSettings", () => getStartupSettings());
 
 ipcMain.handle("app:setRunAtStartup", async (_event, enabled, options = {}) => {
   if (!startupSettingsSupported()) return { ok: false, ...(await getStartupSettings()) };
+  let rollbackStartupSettings = null;
   try {
     const openAtLogin = Boolean(enabled);
     const currentPreferences = await readStartupPreferences();
     const hideOnStartup = typeof options?.hideOnStartup === "boolean" ? options.hideOnStartup : currentPreferences.hideOnStartup;
+    const previousSettings = app.getLoginItemSettings(startupLoginItemQueryOptions());
+    if (process.platform === "win32") {
+      const previousWindowsState = windowsStartupState(previousSettings);
+      rollbackStartupSettings = () => {
+        if (previousWindowsState.registered) setWindowsStartupItem(true, currentPreferences.hideOnStartup, previousWindowsState.approved);
+        else clearWindowsStartupItems();
+      };
+    } else {
+      rollbackStartupSettings = () => app.setLoginItemSettings(startupLoginItemOptions(Boolean(previousSettings.openAtLogin), currentPreferences.hideOnStartup));
+    }
     if (openAtLogin) {
-      app.setLoginItemSettings(startupLoginItemOptions(true, hideOnStartup));
+      if (process.platform === "win32") setWindowsStartupItem(true, hideOnStartup);
+      else app.setLoginItemSettings(startupLoginItemOptions(true, hideOnStartup));
       clearLegacyWindowsStartupItems();
     } else {
       if (process.platform === "win32") clearWindowsStartupItems();
@@ -1055,6 +1074,11 @@ ipcMain.handle("app:setRunAtStartup", async (_event, enabled, options = {}) => {
     await writeStartupPreferences({ hideOnStartup, runAtStartup: openAtLogin });
     return { ok: true, ...(await getStartupSettings()) };
   } catch (error) {
+    try {
+      rollbackStartupSettings?.();
+    } catch {
+      // Keep reporting the original failure; the refreshed settings below reflect any rollback failure.
+    }
     return { ok: false, ...(await getStartupSettings()), reason: error?.message || "startup-settings-unavailable" };
   }
 });

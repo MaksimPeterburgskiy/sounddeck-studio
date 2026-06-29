@@ -1986,6 +1986,7 @@ function SettingsPanel({ startupSettings, startupUpdateStatus, capabilities, onC
   const disabled = !startupSupported || startupUpdateStatus === "saving";
   const hideOnStartup = startupSettings.hideOnStartup ?? true;
   const startupNeedsApproval = startupSettings.status === "requires-approval" || startupSettings.status === "not-approved";
+  const hiddenStartupDisabled = disabled || startupNeedsApproval;
   const startupCopy = !startupSupported
     ? startupSettings.reason === "portable-build"
       ? "Startup launch is disabled for portable Windows builds."
@@ -2024,11 +2025,11 @@ function SettingsPanel({ startupSettings, startupUpdateStatus, capabilities, onC
               <small>{startupCopy}</small>
             </span>
           </label>
-          <label className={disabled ? "settingsToggle disabled" : "settingsToggle"}>
+          <label className={hiddenStartupDisabled ? "settingsToggle disabled" : "settingsToggle"}>
             <input
               type="checkbox"
               checked={hideOnStartup}
-              disabled={disabled}
+              disabled={hiddenStartupDisabled}
               onChange={(event) => onChangeStartup(startupSettings.enabled, event.target.checked)}
             />
             {hideOnStartup ? <EyeOff size={17} /> : <Eye size={17} />}
