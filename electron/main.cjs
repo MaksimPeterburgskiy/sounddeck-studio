@@ -10,6 +10,7 @@ const { createCorsairBridge, isCorsairSupportedPlatform, isGKeyAccelerator } = r
 const { createHotkeyEngine } = require("./hotkeys.cjs");
 const { buildCropArgs } = require("./ffmpegArgs.cjs");
 const { createMacTrayTemplateImage, MAC_TRAY_ICON_FILENAME } = require("./trayIcon.cjs");
+const { getWindowsStartupState } = require("./startupSettings.cjs");
 
 const isDev = !app.isPackaged;
 const STARTUP_ARG = "--sounddeck-startup";
@@ -220,13 +221,18 @@ function clearWindowsStartupItems() {
   clearLegacyWindowsStartupItems();
 }
 
-function windowsStartupEnabled(settings) {
-  if (typeof settings.executableWillLaunchAtLogin === "boolean") return settings.executableWillLaunchAtLogin;
-  const launchItem = Array.isArray(settings.launchItems)
-    ? settings.launchItems.find((item) => item?.name === WINDOWS_STARTUP_NAME || item?.path === process.execPath)
-    : null;
-  if (typeof launchItem?.enabled === "boolean") return launchItem.enabled;
-  return Boolean(settings.openAtLogin);
+function setWindowsStartupItem(openAtLogin, hideOnStartup = true, approved = openAtLogin) {
+  app.setLoginItemSettings({
+    ...startupLoginItemOptions(openAtLogin, hideOnStartup),
+    enabled: Boolean(approved)
+  });
+}
+
+function windowsStartupState(settings) {
+  return getWindowsStartupState(settings, {
+    name: WINDOWS_STARTUP_NAME,
+    executablePath: process.execPath
+  });
 }
 
 async function readAppSettings() {
@@ -260,22 +266,25 @@ async function getStartupSettings(argv = process.argv) {
   try {
     const queryOptions = startupLoginItemQueryOptions();
     let settings = app.getLoginItemSettings(queryOptions);
-    if (process.platform === "win32" && preferences.runAtStartup !== false && !settings.openAtLogin && windowsStartupEnabled(settings)) {
+    let windowsState = process.platform === "win32" ? windowsStartupState(settings) : null;
+    if (process.platform === "win32" && preferences.runAtStartup !== false && !settings.openAtLogin && windowsState?.approved) {
       app.setLoginItemSettings(startupLoginItemOptions(true, preferences.hideOnStartup));
       clearLegacyWindowsStartupItems();
       settings = app.getLoginItemSettings(queryOptions);
+      windowsState = windowsStartupState(settings);
     }
     const isStartupLaunch = hasStartupArg(argv);
     const wasOpenedAtLogin = Boolean(settings.wasOpenedAtLogin || isStartupLaunch);
+    const status = process.platform === "win32" ? windowsState?.status : settings.status;
     return {
       supported: true,
       enabled: preferences.runAtStartup === false
         ? false
-        : process.platform === "win32" ? windowsStartupEnabled(settings) : Boolean(settings.openAtLogin),
+        : process.platform === "win32" ? Boolean(windowsState?.registered) : Boolean(settings.openAtLogin),
       hideOnStartup: preferences.hideOnStartup,
       wasOpenedAtLogin,
       wasOpenedAsHidden: Boolean(settings.wasOpenedAsHidden || (wasOpenedAtLogin && preferences.hideOnStartup)),
-      ...(typeof settings.status === "string" ? { status: settings.status } : {})
+      ...(typeof status === "string" ? { status } : {})
     };
   } catch (error) {
     return { supported: false, enabled: false, hideOnStartup: preferences.hideOnStartup, reason: error?.message || "startup-settings-unavailable" };
@@ -1039,20 +1048,37 @@ ipcMain.handle("app:getStartupSettings", () => getStartupSettings());
 
 ipcMain.handle("app:setRunAtStartup", async (_event, enabled, options = {}) => {
   if (!startupSettingsSupported()) return { ok: false, ...(await getStartupSettings()) };
+  let rollbackStartupSettings = null;
   try {
     const openAtLogin = Boolean(enabled);
     const currentPreferences = await readStartupPreferences();
     const hideOnStartup = typeof options?.hideOnStartup === "boolean" ? options.hideOnStartup : currentPreferences.hideOnStartup;
-    await writeStartupPreferences({ hideOnStartup, runAtStartup: openAtLogin });
+    const previousSettings = app.getLoginItemSettings(startupLoginItemQueryOptions());
+    if (process.platform === "win32") {
+      const previousWindowsState = windowsStartupState(previousSettings);
+      rollbackStartupSettings = () => {
+        if (previousWindowsState.registered) setWindowsStartupItem(true, currentPreferences.hideOnStartup, previousWindowsState.approved);
+        else clearWindowsStartupItems();
+      };
+    } else {
+      rollbackStartupSettings = () => app.setLoginItemSettings(startupLoginItemOptions(Boolean(previousSettings.openAtLogin), currentPreferences.hideOnStartup));
+    }
     if (openAtLogin) {
-      app.setLoginItemSettings(startupLoginItemOptions(true, hideOnStartup));
+      if (process.platform === "win32") setWindowsStartupItem(true, hideOnStartup);
+      else app.setLoginItemSettings(startupLoginItemOptions(true, hideOnStartup));
       clearLegacyWindowsStartupItems();
     } else {
       if (process.platform === "win32") clearWindowsStartupItems();
       else app.setLoginItemSettings(startupLoginItemOptions(false, hideOnStartup));
     }
+    await writeStartupPreferences({ hideOnStartup, runAtStartup: openAtLogin });
     return { ok: true, ...(await getStartupSettings()) };
   } catch (error) {
+    try {
+      rollbackStartupSettings?.();
+    } catch {
+      // Keep reporting the original failure; the refreshed settings below reflect any rollback failure.
+    }
     return { ok: false, ...(await getStartupSettings()), reason: error?.message || "startup-settings-unavailable" };
   }
 });
