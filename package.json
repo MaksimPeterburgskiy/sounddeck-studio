@@ -145,22 +145,22 @@
     "electron-updater": "^6.8.9",
     "ffmpeg-static": "^5.3.0",
     "uiohook-napi": "^1.5.5",
-    "youtube-dl-exec": "^3.1.7"
+    "youtube-dl-exec": "^3.1.8"
   },
   "devDependencies": {
     "@types/node": "^25.9.3",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^6.0.2",
+    "@vitejs/plugin-react": "^6.0.3",
     "concurrently": "^10.0.3",
-    "electron": "^42.4.1",
+    "electron": "^42.5.0",
     "electron-builder": "^26.15.3",
-    "lucide-react": "^1.18.0",
+    "lucide-react": "^1.21.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "typescript": "^6.0.3",
-    "vite": "^8.0.16",
-    "vitest": "^4.1.8",
+    "vite": "^8.1.0",
+    "vitest": "^4.1.9",
     "wait-on": "^9.0.10"
   }
 }
