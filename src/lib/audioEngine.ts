@@ -17,6 +17,8 @@ interface ActiveEffectChain {
     decaySec: number;
     mix: number;
   };
+  compressorWired: boolean;
+  limiterWired: boolean;
   nodes: AudioNode[];
 }
 
@@ -400,9 +402,9 @@ export class AudioEngine {
     high.type = "highshelf";
     high.frequency.value = 3200;
 
-    source.connect(low).connect(mid).connect(high).connect(compressor).connect(limiter);
-    limiter.connect(dry).connect(output);
-    limiter.connect(convolver).connect(wet).connect(output);
+    source.connect(low).connect(mid).connect(high);
+    dry.connect(output);
+    convolver.connect(wet).connect(output);
 
     const chain: ActiveEffectChain = {
       source,
@@ -413,10 +415,34 @@ export class AudioEngine {
       compressor,
       limiter,
       reverb: { convolver, wet, dry, decaySec: 0, mix: 0 },
+      compressorWired: false,
+      limiterWired: false,
       nodes: [low, mid, high, compressor, limiter, convolver, wet, dry]
     };
+    this.wireDynamics(chain, effects.compressor.enabled, effects.limiter.enabled);
     this.applyEffectsToChain(chain, effects, false);
     return chain;
+  }
+
+  /**
+   * Wire high → [compressor] → [limiter] → dry/convolver, including only the enabled nodes.
+   * Chromium's DynamicsCompressorNode adds ~5 ms of lookahead latency and fades in from
+   * silence while its internal envelope warms up — even at pass-through settings — so
+   * disabled dynamics nodes must stay out of the signal path entirely.
+   */
+  private wireDynamics(chain: ActiveEffectChain, compressorOn: boolean, limiterOn: boolean) {
+    const { high, compressor, limiter, reverb } = chain;
+    if (!high || !compressor || !limiter || !reverb) return;
+    high.disconnect();
+    compressor.disconnect();
+    limiter.disconnect();
+    let tail: AudioNode = high;
+    if (compressorOn) tail = tail.connect(compressor);
+    if (limiterOn) tail = tail.connect(limiter);
+    tail.connect(reverb.dry);
+    tail.connect(reverb.convolver);
+    chain.compressorWired = compressorOn;
+    chain.limiterWired = limiterOn;
   }
 
   private applyEffectsToChain(chain: ActiveEffectChain, effects: SoundEffects, smooth: boolean) {
@@ -437,20 +463,24 @@ export class AudioEngine {
       set(chain.high.gain, effects.eq.enabled ? effects.eq.highGainDb : 0);
     }
 
-    if (chain.compressor) {
-      set(chain.compressor.threshold, effects.compressor.enabled ? effects.compressor.thresholdDb : 0);
-      set(chain.compressor.knee, effects.compressor.enabled ? 18 : 0);
-      set(chain.compressor.ratio, effects.compressor.enabled ? effects.compressor.ratio : 1);
+    if (chain.compressor && effects.compressor.enabled) {
+      set(chain.compressor.threshold, effects.compressor.thresholdDb);
+      set(chain.compressor.knee, 18);
+      set(chain.compressor.ratio, effects.compressor.ratio);
       set(chain.compressor.attack, effects.compressor.attackMs / 1000);
       set(chain.compressor.release, effects.compressor.releaseMs / 1000);
     }
 
-    if (chain.limiter) {
-      set(chain.limiter.threshold, effects.limiter.enabled ? effects.limiter.ceilingDb : 0);
+    if (chain.limiter && effects.limiter.enabled) {
+      set(chain.limiter.threshold, effects.limiter.ceilingDb);
       set(chain.limiter.knee, 0);
-      set(chain.limiter.ratio, effects.limiter.enabled ? 20 : 1);
-      set(chain.limiter.attack, effects.limiter.enabled ? 0.001 : 0.003);
-      set(chain.limiter.release, effects.limiter.enabled ? 0.05 : 0.25);
+      set(chain.limiter.ratio, 20);
+      set(chain.limiter.attack, 0.001);
+      set(chain.limiter.release, 0.05);
+    }
+
+    if (chain.compressorWired !== effects.compressor.enabled || chain.limiterWired !== effects.limiter.enabled) {
+      this.wireDynamics(chain, effects.compressor.enabled, effects.limiter.enabled);
     }
 
     if (chain.reverb) {

@@ -401,6 +401,60 @@ describe("AudioEngine live effects", () => {
     expect(monitorContext.compressors[1].threshold.value).toBe(-2);
     expect(monitorContext.compressors[1].ratio.value).toBe(20);
     expect(monitorContext.convolvers[0].buffer).toBeTruthy();
+    expect(monitorContext.biquads[2].connections).toContain(monitorContext.compressors[0]);
+    expect(monitorContext.compressors[0].connections).toContain(monitorContext.compressors[1]);
+    expect(monitorContext.compressors[1].connections).toContain(monitorContext.convolvers[0]);
+
+    await engine.dispose();
+  });
+
+  it("keeps disabled compressor and limiter out of the signal path", async () => {
+    const engine = new AudioEngine(playbackSettings, vi.fn());
+
+    await engine.play(makeSound({
+      effects: {
+        pitchEnabled: false,
+        pitchSemitones: 0,
+        eq: { enabled: false, lowGainDb: 0, midGainDb: 0, highGainDb: 0 },
+        compressor: { enabled: false, thresholdDb: -24, ratio: 3, attackMs: 3, releaseMs: 250 },
+        limiter: { enabled: false, ceilingDb: -1 },
+        reverb: { enabled: false, mix: 0.18, decaySec: 1.4 }
+      }
+    }));
+
+    const monitorContext = FakeAudioContext.instances[0];
+    expect(monitorContext.compressors[0].connections).toHaveLength(0);
+    expect(monitorContext.compressors[1].connections).toHaveLength(0);
+    expect(monitorContext.biquads[2].connections).toContain(monitorContext.convolvers[0]);
+
+    await engine.dispose();
+  });
+
+  it("rewires dynamics into and out of the path on live effect updates", async () => {
+    const engine = new AudioEngine(playbackSettings, vi.fn());
+    const disabledEffects = {
+      pitchEnabled: false,
+      pitchSemitones: 0,
+      eq: { enabled: false, lowGainDb: 0, midGainDb: 0, highGainDb: 0 },
+      compressor: { enabled: false, thresholdDb: -24, ratio: 3, attackMs: 3, releaseMs: 250 },
+      limiter: { enabled: false, ceilingDb: -1 },
+      reverb: { enabled: false, mix: 0.18, decaySec: 1.4 }
+    };
+    await engine.play(makeSound({ effects: disabledEffects }));
+
+    const monitorContext = FakeAudioContext.instances[0];
+    const high = monitorContext.biquads[2];
+    const limiter = monitorContext.compressors[1];
+
+    engine.setSoundEffects("sound-1", { ...disabledEffects, limiter: { enabled: true, ceilingDb: -3 } });
+    expect(high.disconnect).toHaveBeenCalled();
+    expect(high.connections).toContain(limiter);
+    expect(limiter.connections).toContain(monitorContext.convolvers[0]);
+    expect(limiter.threshold.value).toBe(-3);
+
+    engine.setSoundEffects("sound-1", disabledEffects);
+    expect(limiter.disconnect).toHaveBeenCalled();
+    expect(high.connections.at(-1)).toBe(monitorContext.convolvers[0]);
 
     await engine.dispose();
   });
