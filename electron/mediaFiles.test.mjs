@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import mediaFiles from "./mediaFiles.cjs";
 
@@ -78,5 +80,55 @@ describe("isInsideMediaRoot", () => {
   it("rejects the root itself and empty input", () => {
     expect(isInsideMediaRoot(root, root)).toBe(false);
     expect(isInsideMediaRoot(root, "")).toBe(false);
+  });
+});
+
+describe("isInsideMediaRoot with symlinks on a real filesystem", () => {
+  let sandbox;
+  let mediaDir;
+  let outsideDir;
+
+  beforeEach(() => {
+    sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "sounddeck-media-test-"));
+    mediaDir = path.join(sandbox, "media");
+    outsideDir = path.join(sandbox, "outside");
+    fs.mkdirSync(mediaDir);
+    fs.mkdirSync(outsideDir);
+  });
+
+  afterEach(() => {
+    fs.rmSync(sandbox, { recursive: true, force: true });
+  });
+
+  it("accepts a real file inside the root", () => {
+    const file = path.join(mediaDir, "sound.mp3");
+    fs.writeFileSync(file, "data");
+    expect(isInsideMediaRoot(mediaDir, file)).toBe(true);
+  });
+
+  it("accepts a not-yet-existing destination inside the root", () => {
+    expect(isInsideMediaRoot(mediaDir, path.join(mediaDir, "future-crop.wav"))).toBe(true);
+  });
+
+  it("rejects a symlink inside the root that points to a file outside", () => {
+    const secret = path.join(outsideDir, "secret.txt");
+    fs.writeFileSync(secret, "secret");
+    const link = path.join(mediaDir, "innocent.mp3");
+    fs.symlinkSync(secret, link);
+    expect(isInsideMediaRoot(mediaDir, link)).toBe(false);
+  });
+
+  it("rejects a path under a symlinked directory that escapes the root", () => {
+    const linkDir = path.join(mediaDir, "sub");
+    fs.symlinkSync(outsideDir, linkDir, "dir");
+    expect(isInsideMediaRoot(mediaDir, path.join(linkDir, "sound.mp3"))).toBe(false);
+  });
+
+  it("accepts a symlink that stays inside the root", () => {
+    const target = path.join(mediaDir, "real.mp3");
+    fs.writeFileSync(target, "data");
+    const link = path.join(mediaDir, "alias.mp3");
+    fs.symlinkSync(target, link);
+    expect(isInsideMediaRoot(mediaDir, link)).toBe(true);
   });
 });
