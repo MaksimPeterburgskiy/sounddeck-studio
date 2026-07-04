@@ -1,6 +1,30 @@
 import { describe, expect, it } from "vitest";
 import { acceleratorLooksReserved, formatBytes, formatDuration, normalizeLibrary, normalizeSoundEffects, soundEffectsAreActive, soundEffectsAreDefault, soundFromImport } from "./model";
-import type { SoundLibrary } from "../types";
+import type { SoundLibrary, SoundSlot } from "../types";
+
+function soundWithVolume(id: string, volume: number): SoundSlot {
+  return {
+    id,
+    title: id,
+    mediaPath: "",
+    storedName: "",
+    mime: "",
+    ext: "",
+    size: 0,
+    color: "#fff",
+    icon: "zap",
+    volume,
+    fadeInMs: 0,
+    fadeOutMs: 0,
+    loop: false,
+    soloPlay: true,
+    retriggerMode: "restart",
+    hotkey: "",
+    outputTarget: "both",
+    createdAt: "",
+    updatedAt: ""
+  };
+}
 
 describe("model helpers", () => {
   it("normalizes missing settings and keeps a valid active board", () => {
@@ -23,6 +47,19 @@ describe("model helpers", () => {
     expect(library.settings.virtualBackend).toBe("windows-vbcable");
   });
 
+  it("creates a default board when a library has no boards", () => {
+    const library = normalizeLibrary({
+      version: 1,
+      activeBoardId: "missing",
+      settings: {} as SoundLibrary["settings"],
+      boards: []
+    });
+
+    expect(library.boards).toHaveLength(1);
+    expect(library.boards[0].name).toBe("Board 1");
+    expect(library.activeBoardId).toBe(library.boards[0].id);
+  });
+
   it("uses 100% defaults instead of migrating legacy shared volume settings", () => {
     const library = normalizeLibrary({
       version: 1,
@@ -39,6 +76,29 @@ describe("model helpers", () => {
     expect(library.settings.micMonitorVolume).toBe(1);
     expect(library.settings.soundboardVirtualVolume).toBe(1);
     expect(library.settings.soundboardMonitorVolume).toBe(1);
+  });
+
+  it("lifts only the legacy 90% sound volume default", () => {
+    const library = normalizeLibrary({
+      version: 1,
+      activeBoardId: "a",
+      settings: {} as SoundLibrary["settings"],
+      boards: [{
+        id: "a",
+        name: "A",
+        color: "#fff",
+        icon: "zap",
+        createdAt: "",
+        updatedAt: "",
+        sounds: [
+          soundWithVolume("lift", 0.9),
+          soundWithVolume("keep", 0.89)
+        ]
+      }]
+    });
+
+    expect(library.boards[0].sounds[0].volume).toBe(1);
+    expect(library.boards[0].sounds[1].volume).toBe(0.89);
   });
 
   it("normalizes browser audio role aliases back to system default", () => {
@@ -96,6 +156,30 @@ describe("model helpers", () => {
     expect(sound?.retriggerMode).toBe("restart");
     expect(sound?.soloPlay).toBe(true);
     expect(soundEffectsAreDefault(sound?.effects)).toBe(true);
+  });
+
+  it("rejects invalid media import results", () => {
+    expect(soundFromImport({ ok: false, sourcePath: "" }, 0, "both")).toBeNull();
+    expect(soundFromImport({
+      ok: true,
+      id: "sound-1",
+      sourcePath: "C:/tmp/airhorn.mp3",
+      storedName: "sound-1.mp3",
+      ext: ".mp3",
+      mime: "audio/mpeg",
+      size: 1234
+    }, 0, "both")).toBeNull();
+    // size 0 is treated as invalid because the import guard rejects falsy sizes.
+    expect(soundFromImport({
+      ok: true,
+      id: "sound-1",
+      sourcePath: "C:/tmp/airhorn.mp3",
+      mediaPath: "C:/app/media/sound-1.mp3",
+      storedName: "sound-1.mp3",
+      ext: ".mp3",
+      mime: "audio/mpeg",
+      size: 0
+    }, 0, "both")).toBeNull();
   });
 
   it("normalizes sound effect defaults and clamps invalid values", () => {
@@ -156,5 +240,23 @@ describe("model helpers", () => {
     expect(formatDuration(65.2)).toBe("1:05");
     expect(formatBytes(2048)).toBe("2 KB");
     expect(acceleratorLooksReserved("Alt+F4")).toBe(true);
+  });
+
+  it("formats duration edge cases", () => {
+    expect(formatDuration(undefined)).toBe("--:--");
+    expect(formatDuration(NaN)).toBe("--:--");
+    expect(formatDuration(-5)).toBe("0:00");
+    expect(formatDuration(59.6)).toBe("1:00");
+  });
+
+  it("formats byte counts with kilobyte minimums and megabyte precision", () => {
+    expect(formatBytes(1024 * 1024)).toBe("1.0 MB");
+    expect(formatBytes(500)).toBe("1 KB");
+    expect(formatBytes(1536)).toBe("2 KB");
+  });
+
+  it("detects reserved accelerators after normalization", () => {
+    expect(acceleratorLooksReserved("CommandOrControl+W")).toBe(true);
+    expect(acceleratorLooksReserved("Ctrl+Shift+W")).toBe(false);
   });
 });

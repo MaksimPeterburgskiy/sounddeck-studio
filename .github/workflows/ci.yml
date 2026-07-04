@@ -32,5 +32,5 @@ jobs:
       - name: Type-check and build renderer
         run: pnpm run build
 
-      - name: Run unit tests
-        run: pnpm test
+      - name: Run unit tests with coverage
+        run: pnpm run test:coverage

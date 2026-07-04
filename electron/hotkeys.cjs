@@ -24,18 +24,18 @@ try {
   globalShortcut = null;
 }
 
-function macOSPermissionReason() {
-  return process.platform === "darwin" ? "macos-input-monitoring-permission" : "hotkey-engine-start-failed";
+function macOSPermissionReason(platform) {
+  return platform === "darwin" ? "macos-input-monitoring-permission" : "hotkey-engine-start-failed";
 }
 
-function electronAcceleratorFromTokens(tokens) {
+function electronAcceleratorFromTokens(tokens, platform) {
   const modifiers = [];
   const keys = [];
   for (const token of [...new Set(tokens)]) {
     if (token === "Ctrl") modifiers.push("Control");
     else if (token === "Alt") modifiers.push("Alt");
     else if (token === "Shift") modifiers.push("Shift");
-    else if (token === "Meta") modifiers.push(process.platform === "darwin" ? "Command" : "Super");
+    else if (token === "Meta") modifiers.push(platform === "darwin" ? "Command" : "Super");
     else keys.push(token);
   }
   if (keys.length !== 1) return "";
@@ -64,29 +64,29 @@ function electronAcceleratorFromTokens(tokens) {
   return [...modifiers, mappedKey].join("+");
 }
 
-function createGlobalShortcutFallback(onTrigger) {
+function createGlobalShortcutFallback(onTrigger, shortcuts, platform) {
   let registered = [];
   let suspended = false;
 
   function unregisterAll() {
-    if (!globalShortcut) return;
-    for (const accelerator of registered) globalShortcut.unregister(accelerator);
+    if (!shortcuts) return;
+    for (const accelerator of registered) shortcuts.unregister(accelerator);
     registered = [];
   }
 
   function register(validResults) {
     unregisterAll();
-    if (!globalShortcut) {
+    if (!shortcuts) {
       return validResults.map((result) => ({ ...result, ok: false, reason: "global-shortcut-unavailable" }));
     }
     const accelerators = new Set();
     return validResults.map((result) => {
       const tokens = String(result.accelerator || "").split("+").map((token) => token.trim()).filter(Boolean);
-      const accelerator = electronAcceleratorFromTokens(tokens);
+      const accelerator = electronAcceleratorFromTokens(tokens, platform);
       if (!accelerator) return { ...result, ok: false, reason: "advanced-hook-required-on-this-platform" };
       if (accelerators.has(accelerator)) return { ...result, ok: false, reason: "duplicate" };
       accelerators.add(accelerator);
-      const ok = globalShortcut.register(accelerator, () => {
+      const ok = shortcuts.register(accelerator, () => {
         if (!suspended) onTrigger(result);
       });
       if (!ok) return { ...result, ok: false, reason: "global-shortcut-registration-failed" };
@@ -101,14 +101,14 @@ function createGlobalShortcutFallback(onTrigger) {
     setSuspended: (value) => {
       suspended = Boolean(value);
     },
-    isAvailable: () => Boolean(globalShortcut)
+    isAvailable: () => Boolean(shortcuts)
   };
 }
 
-function buildKeycodeMap() {
+function buildKeycodeMap(keys) {
   const map = new Map();
   const assign = (name, token) => {
-    const code = UiohookKey[name];
+    const code = keys[name];
     if (code !== undefined) map.set(code, token);
   };
   for (let i = 0; i < 26; i++) {
@@ -176,10 +176,20 @@ function buildKeycodeMap() {
   return map;
 }
 
-function createHotkeyEngine({ onTrigger }) {
-  const fallback = createGlobalShortcutFallback(onTrigger);
+// Dependencies default to the real modules; tests inject fakes (the native
+// uiohook cannot run inside a test worker, and `platform` selects the
+// failure-reason and accelerator-mapping branches).
+function createHotkeyEngine({
+  onTrigger,
+  hook = uIOhook,
+  keys = UiohookKey,
+  shortcuts = globalShortcut,
+  engineLoadError = loadError,
+  platform = process.platform
+}) {
+  const fallback = createGlobalShortcutFallback(onTrigger, shortcuts, platform);
 
-  if (!uIOhook) {
+  if (!hook) {
     return {
       register: (bindings) => {
         const seen = new Set();
@@ -201,12 +211,12 @@ function createHotkeyEngine({ onTrigger }) {
         advancedHookAvailable: false,
         globalShortcutFallbackAvailable: fallback.isAvailable(),
         started: false,
-        lastFailureReason: loadError ? "hotkey-engine-unavailable" : ""
+        lastFailureReason: engineLoadError ? "hotkey-engine-unavailable" : ""
       })
     };
   }
 
-  const keycodeToToken = buildKeycodeMap();
+  const keycodeToToken = buildKeycodeMap(keys);
   const validTokens = new Set(keycodeToToken.values());
   let bindings = new Map(); // signature -> { binding, tokens, hasSuperset }
   let pressed = new Map(); // keycode -> token
@@ -217,7 +227,7 @@ function createHotkeyEngine({ onTrigger }) {
 
   const signatureOf = (tokens) => [...new Set(tokens)].sort().join("+");
 
-  uIOhook.on("keydown", (event) => {
+  hook.on("keydown", (event) => {
     const token = keycodeToToken.get(event.keycode);
     if (!token) return;
     if (pressed.has(event.keycode)) return; // key repeat while held
@@ -236,7 +246,7 @@ function createHotkeyEngine({ onTrigger }) {
     onTrigger(entry.binding);
   });
 
-  uIOhook.on("keyup", (event) => {
+  hook.on("keyup", (event) => {
     if (!pressed.delete(event.keycode)) return;
     if (pending && !suspended) {
       const binding = pending;
@@ -248,13 +258,13 @@ function createHotkeyEngine({ onTrigger }) {
   function ensureStarted() {
     if (started) return true;
     try {
-      uIOhook.start();
+      hook.start();
       started = true;
       lastFailureReason = "";
       return true;
     } catch (error) {
       console.error("Failed to start keyboard hook:", error);
-      lastFailureReason = macOSPermissionReason();
+      lastFailureReason = macOSPermissionReason(platform);
       return false;
     }
   }
@@ -317,7 +327,7 @@ function createHotkeyEngine({ onTrigger }) {
       if (!started) return;
       started = false;
       try {
-        uIOhook.stop();
+        hook.stop();
       } catch (error) {
         console.error("Failed to stop keyboard hook:", error);
       }

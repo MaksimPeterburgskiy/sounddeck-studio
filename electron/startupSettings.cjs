@@ -1,5 +1,25 @@
 const path = require("node:path");
 
+const STARTUP_ARG = "--sounddeck-startup";
+const WINDOWS_STARTUP_NAME = "SoundDeck Studio";
+
+function hasStartupArg(argv = process.argv) {
+  return argv.includes(STARTUP_ARG);
+}
+
+// Login-item payload for app.setLoginItemSettings. `platform`/`execPath`
+// default to the real process; tests inject both.
+function startupLoginItemOptions(openAtLogin, hideOnStartup = true, { platform = process.platform, execPath = process.execPath } = {}) {
+  if (platform !== "win32") return { openAtLogin, openAsHidden: hideOnStartup };
+  return {
+    openAtLogin,
+    enabled: openAtLogin,
+    name: WINDOWS_STARTUP_NAME,
+    path: execPath,
+    args: [STARTUP_ARG]
+  };
+}
+
 function normalizeWindowsPath(input) {
   if (!input) return "";
   return path.normalize(String(input).replace(/^"+|"+$/g, "")).toLowerCase();
@@ -46,6 +66,10 @@ function getWindowsStartupState(settings = {}, options = {}) {
 }
 
 module.exports = {
+  STARTUP_ARG,
+  WINDOWS_STARTUP_NAME,
+  hasStartupArg,
+  startupLoginItemOptions,
   findWindowsStartupLaunchItem,
   getWindowsStartupState
 };
