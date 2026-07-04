@@ -1,9 +1,44 @@
 import { describe, expect, it } from "vitest";
 import startupSettings from "./startupSettings.cjs";
 
-const { findWindowsStartupLaunchItem, getWindowsStartupState } = startupSettings;
+const { STARTUP_ARG, WINDOWS_STARTUP_NAME, findWindowsStartupLaunchItem, getWindowsStartupState, hasStartupArg, startupLoginItemOptions } = startupSettings;
 
 const executablePath = "C:\\Program Files\\SoundDeck Studio\\SoundDeck Studio.exe";
+
+describe("hasStartupArg", () => {
+  it("detects the startup flag in an argv list", () => {
+    expect(hasStartupArg(["app.exe", STARTUP_ARG])).toBe(true);
+    expect(hasStartupArg(["app.exe", "--other"])).toBe(false);
+    expect(hasStartupArg([])).toBe(false);
+  });
+});
+
+describe("startupLoginItemOptions", () => {
+  it("builds a named Windows login item pointing at the executable with the startup flag", () => {
+    expect(startupLoginItemOptions(true, true, { platform: "win32", execPath: executablePath })).toEqual({
+      openAtLogin: true,
+      enabled: true,
+      name: WINDOWS_STARTUP_NAME,
+      path: executablePath,
+      args: [STARTUP_ARG]
+    });
+    expect(startupLoginItemOptions(false, true, { platform: "win32", execPath: executablePath })).toMatchObject({
+      openAtLogin: false,
+      enabled: false
+    });
+  });
+
+  it("uses openAsHidden on non-Windows platforms", () => {
+    expect(startupLoginItemOptions(true, true, { platform: "darwin", execPath: "/Applications/SoundDeck.app" })).toEqual({
+      openAtLogin: true,
+      openAsHidden: true
+    });
+    expect(startupLoginItemOptions(true, false, { platform: "darwin", execPath: "/Applications/SoundDeck.app" })).toEqual({
+      openAtLogin: true,
+      openAsHidden: false
+    });
+  });
+});
 
 describe("findWindowsStartupLaunchItem", () => {
   it("matches by startup item name", () => {

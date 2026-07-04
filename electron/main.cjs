@@ -10,10 +10,10 @@ const { createCorsairBridge, isCorsairSupportedPlatform, isGKeyAccelerator } = r
 const { createHotkeyEngine } = require("./hotkeys.cjs");
 const { buildCropArgs } = require("./ffmpegArgs.cjs");
 const { createMacTrayTemplateImage, MAC_TRAY_ICON_FILENAME } = require("./trayIcon.cjs");
-const { getWindowsStartupState } = require("./startupSettings.cjs");
+const { getWindowsStartupState, hasStartupArg, startupLoginItemOptions, STARTUP_ARG, WINDOWS_STARTUP_NAME } = require("./startupSettings.cjs");
+const { sanitizeName, inferMime, allowedAudioExtensions, isHttpUrl, isInsideMediaRoot } = require("./mediaFiles.cjs");
 
 const isDev = !app.isPackaged;
-const STARTUP_ARG = "--sounddeck-startup";
 if (isDev && process.env.SOUNDDECK_USER_DATA) app.setPath("userData", process.env.SOUNDDECK_USER_DATA);
 
 if (!app.requestSingleInstanceLock()) {
@@ -39,7 +39,6 @@ let pendingShowMainWindow = false;
 let corsairBindings = new Map();
 let hotkeyCaptureActive = false;
 
-const WINDOWS_STARTUP_NAME = "SoundDeck Studio";
 const WINDOWS_LEGACY_STARTUP_NAMES = ["com.sounddeck.studio", "sounddeck-studio"];
 
 const hotkeyEngine = createHotkeyEngine({
@@ -180,21 +179,6 @@ function startupSettingsSupported() {
 function startupUnsupportedReason() {
   if (process.platform === "win32" && process.env.PORTABLE_EXECUTABLE_DIR) return "portable-build";
   return "unsupported-platform";
-}
-
-function hasStartupArg(argv = process.argv) {
-  return argv.includes(STARTUP_ARG);
-}
-
-function startupLoginItemOptions(openAtLogin, hideOnStartup = true) {
-  if (process.platform !== "win32") return { openAtLogin, openAsHidden: hideOnStartup };
-  return {
-    openAtLogin,
-    enabled: openAtLogin,
-    name: WINDOWS_STARTUP_NAME,
-    path: process.execPath,
-    args: [STARTUP_ARG]
-  };
 }
 
 function startupLoginItemQueryOptions() {
@@ -354,31 +338,6 @@ async function ensureLibrary() {
   }
 }
 
-function sanitizeName(input) {
-  return String(input || "sound")
-    .replace(/[<>:"/\\|?*\x00-\x1f]/g, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 80) || "sound";
-}
-
-function inferMime(ext) {
-  const normalized = ext.toLowerCase();
-  return {
-    ".wav": "audio/wav",
-    ".mp3": "audio/mpeg",
-    ".ogg": "audio/ogg",
-    ".flac": "audio/flac",
-    ".m4a": "audio/mp4",
-    ".aac": "audio/aac",
-    ".webm": "audio/webm"
-  }[normalized] || "application/octet-stream";
-}
-
-function allowedAudioExtensions() {
-  return new Set([".wav", ".mp3", ".ogg", ".flac", ".m4a", ".aac", ".webm"]);
-}
-
 async function readJson(filePath) {
   return JSON.parse(await fs.readFile(filePath, "utf8"));
 }
@@ -426,15 +385,6 @@ async function importMediaPaths(filePaths) {
     }
   }
   return imported;
-}
-
-function isHttpUrl(value) {
-  try {
-    const parsed = new URL(value);
-    return parsed.protocol === "https:" || parsed.protocol === "http:";
-  } catch {
-    return false;
-  }
 }
 
 function runYtDlp(args, cwd) {
@@ -920,8 +870,7 @@ ipcMain.handle("media:download", async (_event, urls) => {
 
 ipcMain.handle("media:delete", async (_event, mediaPath) => {
   const resolved = path.resolve(String(mediaPath || ""));
-  const root = path.resolve(mediaRoot());
-  if (!resolved.startsWith(root + path.sep)) {
+  if (!isInsideMediaRoot(mediaRoot(), resolved)) {
     return { ok: false, reason: "outside-media-root" };
   }
   try {
@@ -933,7 +882,11 @@ ipcMain.handle("media:delete", async (_event, mediaPath) => {
 });
 
 ipcMain.handle("media:read", async (_event, mediaPath) => {
-  const data = await fs.readFile(mediaPath);
+  const resolved = path.resolve(String(mediaPath || ""));
+  if (!isInsideMediaRoot(mediaRoot(), resolved)) {
+    throw new Error("outside-media-root");
+  }
+  const data = await fs.readFile(resolved);
   return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
 });
 
@@ -960,8 +913,7 @@ ipcMain.handle("media:saveRecording", async (_event, payload) => {
 ipcMain.handle("media:crop", async (_event, payload) => {
   await ensureLibrary();
   const sourcePath = path.resolve(String(payload?.mediaPath || ""));
-  const root = path.resolve(mediaRoot());
-  if (!sourcePath.startsWith(root + path.sep)) {
+  if (!isInsideMediaRoot(mediaRoot(), sourcePath)) {
     return { ok: false, reason: "outside-media-root" };
   }
   const ffmpeg = bundledFfmpegPath();
@@ -977,7 +929,7 @@ ipcMain.handle("media:crop", async (_event, payload) => {
   const dest = path.join(mediaRoot(), storedName);
   // Defence in depth: the extension is allow-listed above, but make sure the resolved
   // destination still lands inside the media root before ffmpeg writes with -y.
-  if (!path.resolve(dest).startsWith(root + path.sep)) {
+  if (!isInsideMediaRoot(mediaRoot(), dest)) {
     return { ok: false, reason: "outside-media-root" };
   }
   const rate = Number(payload?.rate) || 1;

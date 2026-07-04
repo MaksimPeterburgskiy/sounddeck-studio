@@ -14,3 +14,4 @@ build/icon.icns
 build/icon.png
 build/installerSidebar.bmp
 build/installerHeader.bmp
+coverage/
