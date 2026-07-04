@@ -44,7 +44,10 @@ function isHttpUrl(value) {
 function realPathOrNearestAncestor(target) {
   const resolved = path.resolve(String(target || ""));
   try {
-    return fs.realpathSync(resolved);
+    // The native realpath also canonicalizes on-disk casing, which the JS
+    // implementation does not; case-insensitive volumes (default APFS,
+    // NTFS) need that for the containment comparison below.
+    return fs.realpathSync.native(resolved);
   } catch {
     const parent = path.dirname(resolved);
     if (parent === resolved) return resolved;
@@ -62,15 +65,28 @@ function isContained(root, candidate) {
   );
 }
 
+// Where the submitted path's own directory entry lives: symlinks (and
+// on-disk casing, on case-insensitive filesystems) are canonicalized in the
+// parent directories but not in the final component, because deletes remove
+// the entry itself rather than whatever it points at.
+function entryLocation(target) {
+  const resolved = path.resolve(String(target || ""));
+  const parent = path.dirname(resolved);
+  if (parent === resolved) return resolved;
+  return path.join(realPathOrNearestAncestor(parent), path.basename(resolved));
+}
+
 // Guard for renderer-supplied media paths: only paths strictly inside the
 // app-managed media directory may be read, deleted, or used as a crop source.
-// Containment must hold both textually (an external symlink aliasing in-root
-// media stays rejected — deletes operate on the submitted path) and after
-// resolving symlinks (an in-root symlink can't reach outside the root).
+// Containment must hold both for the directory entry itself (an external
+// symlink aliasing in-root media stays rejected — deletes operate on the
+// submitted path) and after fully resolving symlinks (an in-root symlink
+// can't reach outside the root).
 function isInsideMediaRoot(root, candidate) {
+  const realRoot = realPathOrNearestAncestor(root);
   return (
-    isContained(path.resolve(String(root || "")), path.resolve(String(candidate || ""))) &&
-    isContained(realPathOrNearestAncestor(root), realPathOrNearestAncestor(candidate))
+    isContained(realRoot, entryLocation(candidate)) &&
+    isContained(realRoot, realPathOrNearestAncestor(candidate))
   );
 }
 

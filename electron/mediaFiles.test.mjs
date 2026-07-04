@@ -140,12 +140,15 @@ describe("isInsideMediaRoot with symlinks on a real filesystem", () => {
     expect(isInsideMediaRoot(mediaDir, link)).toBe(true);
   });
 
-  // NTFS lookups are case-insensitive, so a root supplied with different
-  // casing must still match; runs in CI on windows-latest.
-  it.runIf(process.platform === "win32")("accepts paths differing only by casing on Windows", () => {
+  // NTFS and default APFS lookups are case-insensitive, so paths supplied
+  // with different casing must still match. Skips itself on case-sensitive
+  // volumes, where such paths genuinely name different files.
+  it("accepts paths differing only by casing on case-insensitive filesystems", () => {
     const file = path.join(mediaDir, "sound.mp3");
     fs.writeFileSync(file, "data");
-    expect(isInsideMediaRoot(mediaDir.toUpperCase(), file)).toBe(true);
-    expect(isInsideMediaRoot(mediaDir, file.toLowerCase())).toBe(true);
+    const upperMedia = path.join(sandbox, "MEDIA");
+    if (!fs.existsSync(upperMedia)) return;
+    expect(isInsideMediaRoot(upperMedia, file)).toBe(true);
+    expect(isInsideMediaRoot(mediaDir, path.join(upperMedia, "sound.mp3"))).toBe(true);
   });
 });
