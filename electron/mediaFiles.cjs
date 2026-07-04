@@ -52,17 +52,25 @@ function realPathOrNearestAncestor(target) {
   }
 }
 
-// Guard for renderer-supplied media paths: only paths strictly inside the
-// app-managed media directory may be read, deleted, or used as a crop source.
-function isInsideMediaRoot(root, candidate) {
-  const resolvedRoot = realPathOrNearestAncestor(root);
-  const resolvedCandidate = realPathOrNearestAncestor(candidate);
-  const relative = path.relative(resolvedRoot, resolvedCandidate);
+function isContained(root, candidate) {
+  const relative = path.relative(root, candidate);
   return (
     relative !== "" &&
     relative !== ".." &&
     !relative.startsWith(`..${path.sep}`) &&
     !path.isAbsolute(relative)
+  );
+}
+
+// Guard for renderer-supplied media paths: only paths strictly inside the
+// app-managed media directory may be read, deleted, or used as a crop source.
+// Containment must hold both textually (an external symlink aliasing in-root
+// media stays rejected — deletes operate on the submitted path) and after
+// resolving symlinks (an in-root symlink can't reach outside the root).
+function isInsideMediaRoot(root, candidate) {
+  return (
+    isContained(path.resolve(String(root || "")), path.resolve(String(candidate || ""))) &&
+    isContained(realPathOrNearestAncestor(root), realPathOrNearestAncestor(candidate))
   );
 }
 

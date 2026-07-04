@@ -124,6 +124,14 @@ describe("isInsideMediaRoot with symlinks on a real filesystem", () => {
     expect(isInsideMediaRoot(mediaDir, path.join(linkDir, "sound.mp3"))).toBe(false);
   });
 
+  it("rejects an external symlink that points at a file inside the root", () => {
+    const target = path.join(mediaDir, "real.mp3");
+    fs.writeFileSync(target, "data");
+    const externalLink = path.join(outsideDir, "alias.mp3");
+    fs.symlinkSync(target, externalLink);
+    expect(isInsideMediaRoot(mediaDir, externalLink)).toBe(false);
+  });
+
   it("accepts a symlink that stays inside the root", () => {
     const target = path.join(mediaDir, "real.mp3");
     fs.writeFileSync(target, "data");
