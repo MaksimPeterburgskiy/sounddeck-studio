@@ -131,4 +131,13 @@ describe("isInsideMediaRoot with symlinks on a real filesystem", () => {
     fs.symlinkSync(target, link);
     expect(isInsideMediaRoot(mediaDir, link)).toBe(true);
   });
+
+  // NTFS lookups are case-insensitive, so a root supplied with different
+  // casing must still match; runs in CI on windows-latest.
+  it.runIf(process.platform === "win32")("accepts paths differing only by casing on Windows", () => {
+    const file = path.join(mediaDir, "sound.mp3");
+    fs.writeFileSync(file, "data");
+    expect(isInsideMediaRoot(mediaDir.toUpperCase(), file)).toBe(true);
+    expect(isInsideMediaRoot(mediaDir, file.toLowerCase())).toBe(true);
+  });
 });
