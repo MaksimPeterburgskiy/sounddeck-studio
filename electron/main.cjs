@@ -10,6 +10,7 @@ const { createCorsairBridge, isCorsairSupportedPlatform, isGKeyAccelerator } = r
 const { createHotkeyEngine } = require("./hotkeys.cjs");
 const { buildCropArgs } = require("./ffmpegArgs.cjs");
 const { createMacTrayTemplateImage, MAC_TRAY_ICON_FILENAME } = require("./trayIcon.cjs");
+const { createShutdownLifecycle, registerWindowShutdown } = require("./shutdownLifecycle.cjs");
 const { getWindowsStartupState, hasStartupArg, startupLoginItemOptions, STARTUP_ARG, WINDOWS_STARTUP_NAME } = require("./startupSettings.cjs");
 const { sanitizeName, inferMime, allowedAudioExtensions, isHttpUrl, isInsideMediaRoot } = require("./mediaFiles.cjs");
 
@@ -38,25 +39,52 @@ let isQuitting = false;
 let pendingShowMainWindow = false;
 let corsairBindings = new Map();
 let hotkeyCaptureActive = false;
+let updateCheckTimer;
 
 const WINDOWS_LEGACY_STARTUP_NAMES = ["com.sounddeck.studio", "sounddeck-studio"];
 
+function sendToMainWindow(channel, payload) {
+  const window = mainWindow;
+  if (!window || window.isDestroyed()) return;
+  const webContents = window.webContents;
+  if (!webContents || webContents.isDestroyed()) return;
+  webContents.send(channel, payload);
+}
+
 const hotkeyEngine = createHotkeyEngine({
-  onTrigger: (binding) => mainWindow?.webContents.send("hotkey-trigger", binding)
+  onTrigger: (binding) => sendToMainWindow("hotkey-trigger", binding)
 });
 
 const corsair = createCorsairBridge({
   onKey: (key) => {
-    mainWindow?.webContents.send("corsair-gkey", key);
+    sendToMainWindow("corsair-gkey", key);
     // While capturing, the pressed G-key is being recorded as a new bind;
     // firing its existing binding here would play/stop/switch mid-capture.
     if (hotkeyCaptureActive) return;
     const binding = corsairBindings.get(key);
-    if (binding) mainWindow?.webContents.send("hotkey-trigger", binding);
+    if (binding) sendToMainWindow("hotkey-trigger", binding);
   },
   onStateChange: (state) => {
-    mainWindow?.webContents.send("corsair-status", state);
+    sendToMainWindow("corsair-status", state);
   }
+});
+
+const shutdownLifecycle = createShutdownLifecycle({
+  onShutdown: () => {
+    isQuitting = true;
+    hotkeyCaptureActive = false;
+    hotkeyEngine.stop();
+    corsair.stop();
+    if (updateCheckTimer) {
+      clearInterval(updateCheckTimer);
+      updateCheckTimer = undefined;
+    }
+    if (tray) {
+      tray.destroy();
+      tray = undefined;
+    }
+  },
+  onError: (error) => console.error("Shutdown cleanup failed:", error)
 });
 
 function appRoot() {
@@ -291,6 +319,7 @@ function probeAudioSampleRate(ffmpeg, input) {
       const match = stderr.match(/(\d{3,6})\s*Hz/);
       resolve(match ? Number(match[1]) : 0);
     });
+    shutdownLifecycle.trackChild(child);
   });
 }
 
@@ -410,6 +439,10 @@ function runYtDlp(args, cwd) {
     const failures = [];
 
     const tryNext = () => {
+      if (shutdownLifecycle.isShuttingDown()) {
+        reject(new Error("Download cancelled because SoundDeck Studio is shutting down."));
+        return;
+      }
       const candidate = candidates[index++];
       if (!candidate) {
         reject(new Error(`yt-dlp could not be started. Reinstall dependencies or make sure yt-dlp is on PATH, then try again. Tried: ${failures.join("; ")}`));
@@ -442,6 +475,10 @@ function runYtDlp(args, cwd) {
       child.on("error", (error) => {
         if (candidateFinished) return;
         candidateFinished = true;
+        if (shutdownLifecycle.isShuttingDown()) {
+          reject(new Error("Download cancelled because SoundDeck Studio is shutting down."));
+          return;
+        }
         failures.push(`${candidate.command}: ${error.message}`);
         if (["ENOENT", "ENOTDIR", "EACCES"].includes(error.code)) {
           tryNext();
@@ -452,6 +489,10 @@ function runYtDlp(args, cwd) {
       child.on("close", (code) => {
         if (candidateFinished) return;
         candidateFinished = true;
+        if (shutdownLifecycle.isShuttingDown()) {
+          reject(new Error("Download cancelled because SoundDeck Studio is shutting down."));
+          return;
+        }
         if (code === 0) resolve({ stdout, stderr });
         else {
           const output = (stderr || stdout).trim();
@@ -461,6 +502,7 @@ function runYtDlp(args, cwd) {
           else reject(new Error(`${candidate.command} ${reason}`));
         }
       });
+      shutdownLifecycle.trackChild(child);
     };
 
     tryNext();
@@ -564,6 +606,8 @@ function createTrayIcon() {
 }
 
 function showMainWindow() {
+  if (shutdownLifecycle.isShuttingDown()) return;
+  if (mainWindow?.isDestroyed()) mainWindow = undefined;
   if (!mainWindow) {
     pendingShowMainWindow = true;
     return;
@@ -575,6 +619,7 @@ function showMainWindow() {
 }
 
 function createTray() {
+  if (shutdownLifecycle.isShuttingDown()) return;
   const icon = createTrayIcon();
   tray = new Tray(icon);
   tray.setToolTip("SoundDeck Studio");
@@ -587,7 +632,7 @@ function createTray() {
     {
       label: "Quit",
       click: () => {
-        isQuitting = true;
+        shutdownLifecycle.beginShutdown();
         app.quit();
       }
     }
@@ -597,10 +642,12 @@ function createTray() {
 
 async function createWindow() {
   await ensureLibrary();
+  if (shutdownLifecycle.isShuttingDown()) return;
   Menu.setApplicationMenu(null);
   const startupSettings = await getStartupSettings();
+  if (shutdownLifecycle.isShuttingDown()) return;
   const startHidden = Boolean(startupSettings.enabled && startupSettings.wasOpenedAtLogin && startupSettings.hideOnStartup && !pendingShowMainWindow);
-  mainWindow = new BrowserWindow({
+  const window = new BrowserWindow({
     width: 1360,
     height: 860,
     minWidth: 1040,
@@ -615,28 +662,36 @@ async function createWindow() {
       sandbox: false
     }
   });
+  mainWindow = window;
 
   if (isDev) {
-    mainWindow.webContents.on("before-input-event", (event, input) => {
+    window.webContents.on("before-input-event", (event, input) => {
       if (input.type !== "keyDown") return;
       if (input.key === "F12" || (input.control && input.shift && input.key.toUpperCase() === "I")) {
-        mainWindow.webContents.toggleDevTools();
+        window.webContents.toggleDevTools();
         event.preventDefault();
       }
       if (input.control && input.key.toUpperCase() === "R") {
-        mainWindow.webContents.reload();
+        window.webContents.reload();
         event.preventDefault();
       }
     });
   }
 
-  mainWindow.on("close", (event) => {
+  // Electron skips app-level quit events during Windows shutdown and logout.
+  // session-end is irreversible, so cleanup here without delaying the OS query.
+  registerWindowShutdown(window, shutdownLifecycle);
+  window.on("close", (event) => {
     if (isQuitting) return;
     event.preventDefault();
-    mainWindow.hide();
+    window.hide();
+  });
+  window.on("closed", () => {
+    if (mainWindow === window) mainWindow = undefined;
   });
 
-  await loadRenderer(mainWindow);
+  await loadRenderer(window);
+  if (shutdownLifecycle.isShuttingDown()) return;
   if (pendingShowMainWindow) showMainWindow();
 }
 
@@ -674,7 +729,7 @@ function setupAutoUpdates() {
     // report "up-to-date" so the UI doesn't surface an error for something
     // that simply isn't wired up here.
     ipcMain.handle("update:check", () => {
-      mainWindow?.webContents.send("update-status", { state: "up-to-date" });
+      sendToMainWindow("update-status", { state: "up-to-date" });
     });
     ipcMain.handle("update:install", () => undefined);
   };
@@ -692,7 +747,7 @@ function setupAutoUpdates() {
     registerUnsupportedUpdateHandlers();
     return;
   }
-  const sendStatus = (status) => mainWindow?.webContents.send("update-status", status);
+  const sendStatus = (status) => sendToMainWindow("update-status", status);
   autoUpdater.on("error", (error) => {
     console.error("Auto-update error:", error);
     sendStatus({ state: "error", message: error?.message || "Update check failed." });
@@ -703,11 +758,12 @@ function setupAutoUpdates() {
   autoUpdater.on("download-progress", (progress) => sendStatus({ state: "downloading", percent: progress.percent }));
   autoUpdater.on("update-downloaded", (info) => sendStatus({ state: "ready", version: info.version }));
   ipcMain.handle("update:install", () => {
-    isQuitting = true;
+    shutdownLifecycle.beginShutdown();
     // Silent install with auto-relaunch: no installer pages, no "run app?" prompt.
     autoUpdater.quitAndInstall(true, true);
   });
   ipcMain.handle("update:check", async () => {
+    if (shutdownLifecycle.isShuttingDown()) return;
     try {
       const result = await autoUpdater.checkForUpdates();
       await result?.downloadPromise;
@@ -716,18 +772,23 @@ function setupAutoUpdates() {
       throw error;
     }
   });
-  const check = () => autoUpdater.checkForUpdates().catch((error) => {
-    console.error("Auto-update check failed:", error);
-  });
+  const check = () => {
+    if (shutdownLifecycle.isShuttingDown()) return Promise.resolve();
+    return autoUpdater.checkForUpdates().catch((error) => {
+      console.error("Auto-update check failed:", error);
+    });
+  };
   check();
   // Long-running sessions (app lives in the tray) should still pick up new
   // releases without a restart.
-  setInterval(check, UPDATE_CHECK_INTERVAL_MS);
+  updateCheckTimer = setInterval(check, UPDATE_CHECK_INTERVAL_MS);
 }
 
 app.whenReady().then(async () => {
   await createWindow();
+  if (shutdownLifecycle.isShuttingDown() || !mainWindow) return;
   app.on("activate", () => {
+    if (shutdownLifecycle.isShuttingDown()) return;
     if (mainWindow) {
       showMainWindow();
       return;
@@ -735,17 +796,17 @@ app.whenReady().then(async () => {
     void createWindow();
   });
   createTray();
+  if (shutdownLifecycle.isShuttingDown()) return;
   corsair.start();
   setupAutoUpdates();
 });
 
 app.on("before-quit", () => {
-  isQuitting = true;
+  shutdownLifecycle.beginShutdown();
 });
 
 app.on("will-quit", () => {
-  hotkeyEngine.stop();
-  corsair.stop();
+  shutdownLifecycle.beginShutdown();
 });
 
 app.on("window-all-closed", () => {
@@ -911,7 +972,9 @@ ipcMain.handle("media:saveRecording", async (_event, payload) => {
 });
 
 ipcMain.handle("media:crop", async (_event, payload) => {
+  if (shutdownLifecycle.isShuttingDown()) return { ok: false, reason: "app-is-shutting-down" };
   await ensureLibrary();
+  if (shutdownLifecycle.isShuttingDown()) return { ok: false, reason: "app-is-shutting-down" };
   const sourcePath = path.resolve(String(payload?.mediaPath || ""));
   if (!isInsideMediaRoot(mediaRoot(), sourcePath)) {
     return { ok: false, reason: "outside-media-root" };
@@ -937,6 +1000,7 @@ ipcMain.handle("media:crop", async (_event, payload) => {
   const sampleRate = Math.abs(rate - 1) > 1e-6
     ? (await probeAudioSampleRate(ffmpeg, sourcePath)) || Number(payload?.sampleRate) || 0
     : 0;
+  if (shutdownLifecycle.isShuttingDown()) return { ok: false, reason: "app-is-shutting-down" };
   const args = buildCropArgs({
     input: sourcePath,
     output: dest,
@@ -959,6 +1023,7 @@ ipcMain.handle("media:crop", async (_event, payload) => {
         if (code === 0) resolve();
         else reject(new Error(`ffmpeg exited with code ${code}: ${stderr.trim().split("\n").pop() || ""}`));
       });
+      shutdownLifecycle.trackChild(child);
     });
     const stat = await fs.stat(dest);
     return {

@@ -204,6 +204,19 @@ function App() {
   const { virtualOutputMode, virtualOutputDeviceId, virtualBackend } = library?.settings || {};
 
   useEffect(() => {
+    const disposeAudio = () => {
+      const engine = engineRef.current;
+      engineRef.current = null;
+      void engine?.dispose();
+    };
+    window.addEventListener("beforeunload", disposeAudio, { once: true });
+    return () => {
+      window.removeEventListener("beforeunload", disposeAudio);
+      disposeAudio();
+    };
+  }, []);
+
+  useEffect(() => {
     if (!library) return;
     if (!engineRef.current) engineRef.current = new AudioEngine(library.settings, (status, activeIds) => {
       setEngineStatus(status);
