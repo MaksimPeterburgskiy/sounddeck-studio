@@ -9,8 +9,10 @@ const { spawn } = require("node:child_process");
 const { createCorsairBridge, isCorsairSupportedPlatform, isGKeyAccelerator } = require("./corsair.cjs");
 const { createHotkeyEngine } = require("./hotkeys.cjs");
 const { buildCropArgs } = require("./ffmpegArgs.cjs");
+const { shouldDetachProcessTree, terminateProcessTree } = require("./processTree.cjs");
 const { createMacTrayTemplateImage, MAC_TRAY_ICON_FILENAME } = require("./trayIcon.cjs");
 const { createShutdownLifecycle, registerWindowShutdown } = require("./shutdownLifecycle.cjs");
+const { createUpdateInstallLifecycle } = require("./updateInstallLifecycle.cjs");
 const { getWindowsStartupState, hasStartupArg, startupLoginItemOptions, STARTUP_ARG, WINDOWS_STARTUP_NAME } = require("./startupSettings.cjs");
 const { sanitizeName, inferMime, allowedAudioExtensions, isHttpUrl, isInsideMediaRoot } = require("./mediaFiles.cjs");
 
@@ -36,6 +38,7 @@ if (!app.requestSingleInstanceLock()) {
 let mainWindow;
 let tray;
 let isQuitting = false;
+let allowWindowCloseForUpdate = false;
 let pendingShowMainWindow = false;
 let corsairBindings = new Map();
 let hotkeyCaptureActive = false;
@@ -85,6 +88,11 @@ const shutdownLifecycle = createShutdownLifecycle({
     }
   },
   onError: (error) => console.error("Shutdown cleanup failed:", error)
+});
+
+const updateInstallLifecycle = createUpdateInstallLifecycle({
+  setWindowCloseAllowed: (value) => { allowWindowCloseForUpdate = value; },
+  isShuttingDown: () => shutdownLifecycle.isShuttingDown()
 });
 
 function appRoot() {
@@ -455,7 +463,8 @@ function runYtDlp(args, cwd) {
           cwd,
           env: ytDlpSpawnEnv(),
           windowsHide: true,
-          shell: false
+          shell: false,
+          detached: shouldDetachProcessTree()
         });
       } catch (error) {
         failures.push(`${candidate.command}: ${error?.message || error}`);
@@ -502,7 +511,7 @@ function runYtDlp(args, cwd) {
           else reject(new Error(`${candidate.command} ${reason}`));
         }
       });
-      shutdownLifecycle.trackChild(child);
+      shutdownLifecycle.trackChild(child, { terminate: terminateProcessTree });
     };
 
     tryNext();
@@ -682,7 +691,7 @@ async function createWindow() {
   // session-end is irreversible, so cleanup here without delaying the OS query.
   registerWindowShutdown(window, shutdownLifecycle);
   window.on("close", (event) => {
-    if (isQuitting) return;
+    if (isQuitting || allowWindowCloseForUpdate) return;
     event.preventDefault();
     window.hide();
   });
@@ -749,6 +758,7 @@ function setupAutoUpdates() {
   }
   const sendStatus = (status) => sendToMainWindow("update-status", status);
   autoUpdater.on("error", (error) => {
+    updateInstallLifecycle.resetAfterFailure();
     console.error("Auto-update error:", error);
     sendStatus({ state: "error", message: error?.message || "Update check failed." });
   });
@@ -758,9 +768,8 @@ function setupAutoUpdates() {
   autoUpdater.on("download-progress", (progress) => sendStatus({ state: "downloading", percent: progress.percent }));
   autoUpdater.on("update-downloaded", (info) => sendStatus({ state: "ready", version: info.version }));
   ipcMain.handle("update:install", () => {
-    shutdownLifecycle.beginShutdown();
     // Silent install with auto-relaunch: no installer pages, no "run app?" prompt.
-    autoUpdater.quitAndInstall(true, true);
+    updateInstallLifecycle.requestInstall(() => autoUpdater.quitAndInstall(true, true));
   });
   ipcMain.handle("update:check", async () => {
     if (shutdownLifecycle.isShuttingDown()) return;

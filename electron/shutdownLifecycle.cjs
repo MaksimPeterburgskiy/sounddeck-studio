@@ -1,5 +1,5 @@
 function createShutdownLifecycle({ onShutdown, killChild, onError } = {}) {
-  const children = new Set();
+  const children = new Map();
   const terminatedChildren = new WeakSet();
   let shuttingDown = false;
   let cleanupRan = false;
@@ -14,11 +14,12 @@ function createShutdownLifecycle({ onShutdown, killChild, onError } = {}) {
   }
 
   function terminateChild(child) {
+    const childTerminator = children.get(child) || terminate;
     children.delete(child);
     if (!isLive(child) || terminatedChildren.has(child)) return;
 
     terminatedChildren.add(child);
-    terminate(child);
+    childTerminator(child);
   }
 
   function beginShutdown() {
@@ -35,7 +36,7 @@ function createShutdownLifecycle({ onShutdown, killChild, onError } = {}) {
       }
     }
 
-    for (const child of [...children]) {
+    for (const child of [...children.keys()]) {
       try {
         terminateChild(child);
       } catch (caught) {
@@ -48,10 +49,13 @@ function createShutdownLifecycle({ onShutdown, killChild, onError } = {}) {
     return shuttingDown;
   }
 
-  function trackChild(child) {
+  function trackChild(child, { terminate: childTerminator } = {}) {
     if (!child || typeof child !== "object") return child;
 
+    const resolvedTerminator = typeof childTerminator === "function" ? childTerminator : terminate;
+
     if (shuttingDown) {
+      children.set(child, resolvedTerminator);
       try {
         terminateChild(child);
       } catch (error) {
@@ -61,7 +65,7 @@ function createShutdownLifecycle({ onShutdown, killChild, onError } = {}) {
     }
 
     if (children.has(child)) return child;
-    children.add(child);
+    children.set(child, resolvedTerminator);
 
     const removeChild = () => children.delete(child);
     child.once?.("close", removeChild);

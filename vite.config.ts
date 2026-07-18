@@ -21,7 +21,9 @@ export default defineConfig({
         "electron/startupSettings.cjs",
         "electron/hotkeys.cjs",
         "electron/mediaFiles.cjs",
-        "electron/shutdownLifecycle.cjs"
+        "electron/processTree.cjs",
+        "electron/shutdownLifecycle.cjs",
+        "electron/updateInstallLifecycle.cjs"
       ],
       // devBridge is the browser-only stub bridge; its API surface is pinned
       // by the preload contract test, but its placeholder bodies never run.

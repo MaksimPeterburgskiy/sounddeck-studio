@@ -64,6 +64,19 @@ describe("createShutdownLifecycle", () => {
     expect(killChild).toHaveBeenCalledWith(child);
   });
 
+  it("uses a child-specific process-tree terminator", () => {
+    const killChild = vi.fn();
+    const terminateTree = vi.fn();
+    const child = createChild();
+    const lifecycle = createShutdownLifecycle({ killChild });
+
+    lifecycle.trackChild(child, { terminate: terminateTree });
+    lifecycle.beginShutdown();
+
+    expect(terminateTree).toHaveBeenCalledWith(child);
+    expect(killChild).not.toHaveBeenCalled();
+  });
+
   it("reports cleanup failures without interrupting the remaining shutdown work", () => {
     const error = new Error("cleanup failed");
     const onError = vi.fn();
