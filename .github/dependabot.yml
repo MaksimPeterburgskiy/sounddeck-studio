@@ -6,7 +6,7 @@ updates:
     schedule:
       interval: weekly
     # Wait 7 days after a release before proposing it (security updates bypass
-    # this) — mitigates supply-chain attacks since minor/patch PRs auto-merge.
+    # this) so maintainers can review ecosystem reports before merging.
     cooldown:
       default-days: 7
     groups:

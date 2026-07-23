@@ -12,14 +12,15 @@
     "build": "tsc && vite build",
     "clean:release": "node scripts/clean-release.mjs",
     "dist": "pnpm run dist:win",
-    "dist:win": "pnpm run clean:release && node scripts/fetch-vbcable.mjs && node scripts/make-installer-art.mjs && pnpm run build && electron-builder --win",
+    "dist:win": "node scripts/dist-win.mjs",
     "dist:mac": "node scripts/dist-mac.mjs",
     "dist:mac:unsigned": "node scripts/dist-mac.mjs --unsigned",
-    "fetch:yt-dlp:mac": "node scripts/fetch-ytdlp-mac.mjs",
+    "fetch:native-tools": "node scripts/fetch-native-tools.mjs",
     "build:blackhole": "node scripts/build-blackhole.mjs",
     "fix:macos-dev-signatures": "node scripts/codesign-macos-dev-deps.mjs",
-    "test": "vitest run",
-    "test:coverage": "vitest run --coverage"
+    "test": "vitest run && node --test scripts/*.test.mjs",
+    "test:coverage": "vitest run --coverage && node --test scripts/*.test.mjs",
+    "validate:security": "node scripts/validate-security.mjs"
   },
   "build": {
     "appId": "com.sounddeck.studio",
@@ -32,10 +33,6 @@
       "dist/**",
       "electron/**",
       "package.json"
-    ],
-    "asarUnpack": [
-      "node_modules/youtube-dl-exec/bin/**",
-      "node_modules/ffmpeg-static/**"
     ],
     "win": {
       "icon": "build/icon.ico",
@@ -63,7 +60,7 @@
       "notarize": true,
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
-      "x64ArchFiles": "**/node_modules/{cue-sdk,uiohook-napi}/prebuilds/**/*.node",
+      "x64ArchFiles": "{**/node_modules/{cue-sdk,uiohook-napi}/prebuilds/**/*.node,Contents/Resources/native-tools/**}",
       "target": [
         "pkg",
         "zip"
@@ -84,14 +81,12 @@
         {
           "from": "build/blackhole/NOTICE.txt",
           "to": "blackhole/NOTICE.txt"
-        },
-        {
-          "from": "build/yt-dlp",
-          "to": "yt-dlp"
         }
       ],
       "binaries": [
-        "Contents/Resources/yt-dlp/yt-dlp_macos"
+        "Contents/Resources/native-tools/ffmpeg-x64",
+        "Contents/Resources/native-tools/ffmpeg-arm64",
+        "Contents/Resources/native-tools/yt-dlp"
       ],
       "extendInfo": {
         "NSMicrophoneUsageDescription": "SoundDeck Studio uses your microphone only when mic passthrough or recording is enabled.",
@@ -120,7 +115,7 @@
       "provider": "github",
       "owner": "MaksimPeterburgskiy",
       "repo": "sounddeck-studio",
-      "releaseType": "release"
+      "releaseType": "draft"
     }
   },
   "keywords": [
@@ -144,9 +139,7 @@
   "dependencies": {
     "cue-sdk": "^4.0.84",
     "electron-updater": "^6.8.9",
-    "ffmpeg-static": "^5.3.0",
-    "uiohook-napi": "^1.5.5",
-    "youtube-dl-exec": "^3.1.9"
+    "uiohook-napi": "^1.5.5"
   },
   "devDependencies": {
     "@types/node": "^25.9.3",

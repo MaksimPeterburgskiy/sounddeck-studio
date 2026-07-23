@@ -120,7 +120,9 @@ for (const file of uiohookFiles) {
 }
 
 const extraDevBinaries = [
-  join(repoRoot, "build", "yt-dlp", "yt-dlp_macos")
+  join(repoRoot, "tmp", "native-tools", "darwin", "ffmpeg-x64"),
+  join(repoRoot, "tmp", "native-tools", "darwin", "ffmpeg-arm64"),
+  join(repoRoot, "tmp", "native-tools", "darwin", "yt-dlp")
 ].filter(existsSync);
 
 for (const file of extraDevBinaries) {

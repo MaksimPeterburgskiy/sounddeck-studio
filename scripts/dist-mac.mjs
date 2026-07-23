@@ -39,6 +39,9 @@ const env = {
   CSC_INSTALLER_NAME: unsigned ? "" : signingEnv.CSC_INSTALLER_NAME,
   MACOS_INSTALLER_IDENTITY: unsigned ? "" : signingEnv.MACOS_INSTALLER_IDENTITY
 };
+for (const tokenName of ["GITHUB_TOKEN", "GH_TOKEN", "GITHUB_RELEASE_TOKEN", "RELEASE_TOKEN"]) {
+  env[tokenName] = "";
+}
 
 const electronBuilderArgs = unsigned
   ? ["exec", "electron-builder", "--mac", "dir", "--universal", "--publish", "never", "-c.mac.identity=null", "-c.mac.notarize=false"]
@@ -51,11 +54,11 @@ const electronBuilderArgs = unsigned
 const steps = [
   ["pnpm", ["run", "clean:release"]],
   ["node", ["scripts/prepare-mac-assets.mjs"]],
-  ["node", ["scripts/fetch-ytdlp-mac.mjs"]],
+  ["node", ["scripts/fetch-native-tools.mjs", "--platform", "darwin", "--arch", "universal"]],
   ["node", ["scripts/build-blackhole.mjs"]],
   ...(unsigned ? [] : [["node", ["scripts/build-mac-hal-driver-pkg.mjs"]]]),
   ["pnpm", ["run", "build"]],
-  ["pnpm", electronBuilderArgs],
+  ["pnpm", electronBuilderArgs, { SOUNDDECK_NATIVE_TOOLS_OFFLINE: "1" }],
   ...(unsigned ? [] : [["node", ["scripts/fix-mac-pkg-destination.mjs"]]])
 ];
 
@@ -67,8 +70,8 @@ if (unsigned) {
   console.log(`Using keychain notarization profile "${notarizationEnv.APPLE_KEYCHAIN_PROFILE}".`);
 }
 
-for (const [command, stepArgs] of steps) {
-  await run(command, stepArgs);
+for (const [command, stepArgs, envOverrides] of steps) {
+  await run(command, stepArgs, envOverrides);
 }
 
 function readEnvFile(filePath) {
@@ -162,11 +165,11 @@ function selectNotarizationEnv(values, skip) {
   ].join(" "));
 }
 
-function run(command, stepArgs) {
+function run(command, stepArgs, envOverrides = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, stepArgs, {
       cwd: process.cwd(),
-      env,
+      env: { ...env, ...envOverrides },
       stdio: "inherit"
     });
     child.on("error", reject);

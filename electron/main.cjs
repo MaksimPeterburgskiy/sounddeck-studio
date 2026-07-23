@@ -9,6 +9,10 @@ const { spawn } = require("node:child_process");
 const { createCorsairBridge, isCorsairSupportedPlatform, isGKeyAccelerator } = require("./corsair.cjs");
 const { createHotkeyEngine } = require("./hotkeys.cjs");
 const { buildCropArgs } = require("./ffmpegArgs.cjs");
+const {
+  packagedNativeToolPath,
+  developmentNativeToolCandidates
+} = require("./nativeTools.cjs");
 const { shouldDetachProcessTree, terminateProcessTree } = require("./processTree.cjs");
 const { createMacTrayTemplateImage, MAC_TRAY_ICON_FILENAME } = require("./trayIcon.cjs");
 const { createShutdownLifecycle, registerWindowShutdown } = require("./shutdownLifecycle.cjs");
@@ -112,32 +116,20 @@ function mediaRoot() {
 }
 
 function bundledYtDlpCandidates() {
-  const fileName = process.platform === "win32" ? "yt-dlp.exe" : "yt-dlp";
-  const macStandaloneCandidates = process.platform === "darwin"
-    ? [
-        path.join(process.resourcesPath || "", "yt-dlp", "yt-dlp_macos"),
-        path.join(__dirname, "..", "build", "yt-dlp", "yt-dlp_macos")
-      ]
-    : [];
-  const packagedCandidates = [
-    path.join(process.resourcesPath || "", "app.asar.unpacked", "node_modules", "youtube-dl-exec", "bin", fileName),
-    path.join(process.resourcesPath || "", "app", "node_modules", "youtube-dl-exec", "bin", fileName),
-    path.join(process.resourcesPath || "", "node_modules", "youtube-dl-exec", "bin", fileName)
-  ];
-  const devCandidates = [
-    path.join(__dirname, "..", "node_modules", "youtube-dl-exec", "bin", fileName)
-  ];
-  const candidates = app.isPackaged
-    ? [...macStandaloneCandidates, ...packagedCandidates, ...devCandidates]
-    : [...macStandaloneCandidates, ...devCandidates, ...packagedCandidates];
-
-  try {
-    candidates.push(require("youtube-dl-exec").constants.YOUTUBE_DL_PATH);
-  } catch {
-    // Fallback candidates below cover normal dev and packaged layouts.
+  if (app.isPackaged) {
+    return [packagedNativeToolPath({
+      resourcesPath: process.resourcesPath,
+      platform: process.platform,
+      arch: process.arch,
+      tool: "yt-dlp"
+    })];
   }
-
-  return [...new Set(candidates.filter(Boolean))];
+  return developmentNativeToolCandidates({
+    repoRoot: path.join(__dirname, ".."),
+    platform: process.platform,
+    arch: process.arch,
+    tool: "yt-dlp"
+  });
 }
 
 function ytDlpJsRuntimeArgs() {
@@ -153,18 +145,20 @@ function ytDlpSpawnEnv() {
 }
 
 function bundledFfmpegPath() {
-  let resolved = "";
-  try {
-    resolved = require("ffmpeg-static") || "";
-  } catch {
-    resolved = "";
+  if (app.isPackaged) {
+    return packagedNativeToolPath({
+      resourcesPath: process.resourcesPath,
+      platform: process.platform,
+      arch: process.arch,
+      tool: "ffmpeg"
+    });
   }
-  // ffmpeg-static returns a path inside app.asar when packaged; the binary itself is
-  // unpacked via asarUnpack, so point at the unpacked copy.
-  if (resolved && app.isPackaged) {
-    resolved = resolved.replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`);
-  }
-  return resolved;
+  return developmentNativeToolCandidates({
+    repoRoot: path.join(__dirname, ".."),
+    platform: process.platform,
+    arch: process.arch,
+    tool: "ffmpeg"
+  })[0] || "ffmpeg";
 }
 
 function sounddeckPlatform() {
@@ -427,20 +421,21 @@ async function importMediaPaths(filePaths) {
 function runYtDlp(args, cwd) {
   const ytDlpArgs = [...ytDlpJsRuntimeArgs(), ...args];
   const bundledCandidates = bundledYtDlpCandidates().map((command) => ({ command, args: ytDlpArgs }));
-  const candidates = process.platform === "win32"
+  const developmentCandidates = process.platform === "win32"
     ? [
-        ...bundledCandidates,
         { command: "yt-dlp.exe", args: ytDlpArgs },
         { command: "yt-dlp", args: ytDlpArgs },
         { command: "py", args: ["-m", "yt_dlp", ...ytDlpArgs] },
         { command: "python", args: ["-m", "yt_dlp", ...ytDlpArgs] }
       ]
     : [
-        ...bundledCandidates,
         { command: "yt-dlp", args: ytDlpArgs },
         { command: "python3", args: ["-m", "yt_dlp", ...ytDlpArgs] },
         { command: "python", args: ["-m", "yt_dlp", ...ytDlpArgs] }
       ];
+  const candidates = app.isPackaged
+    ? bundledCandidates
+    : [...bundledCandidates, ...developmentCandidates];
 
   return new Promise((resolve, reject) => {
     let index = 0;
@@ -453,7 +448,10 @@ function runYtDlp(args, cwd) {
       }
       const candidate = candidates[index++];
       if (!candidate) {
-        reject(new Error(`yt-dlp could not be started. Reinstall dependencies or make sure yt-dlp is on PATH, then try again. Tried: ${failures.join("; ")}`));
+        const guidance = app.isPackaged
+          ? "Reinstall SoundDeck Studio and try again."
+          : "Set SOUNDDECK_YT_DLP_PATH or make sure yt-dlp is on PATH, then try again.";
+        reject(new Error(`yt-dlp could not be started. ${guidance} Tried: ${failures.join("; ")}`));
         return;
       }
 
