@@ -40,6 +40,7 @@ if ($manifest.setup.file -cne "VBCABLE_Setup_x64.exe") {
   throw "The VB-CABLE setup filename is not approved."
 }
 $payloadDirectory = Split-Path -Parent $FilePath
+$expectedFileNames = @()
 
 foreach ($fileProperty in $manifest.files.PSObject.Properties) {
   $fileName = $fileProperty.Name
@@ -47,6 +48,26 @@ foreach ($fileProperty in $manifest.files.PSObject.Properties) {
   if ([System.IO.Path]::GetFileName($fileName) -cne $fileName -or $expectedSha256 -notmatch "^[a-f0-9]{64}$") {
     throw "The VB-CABLE provenance manifest contains an unsafe file entry."
   }
+  $expectedFileNames += $fileName
+}
+
+$actualFiles = @(Get-ChildItem -LiteralPath $payloadDirectory -Force)
+if ($actualFiles.Count -ne $expectedFileNames.Count) {
+  throw "The staged VB-CABLE package file inventory is not approved."
+}
+foreach ($actualFile in $actualFiles) {
+  if (
+    $actualFile.PSIsContainer -or
+    (($actualFile.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) -or
+    ($expectedFileNames -notcontains $actualFile.Name)
+  ) {
+    throw "The staged VB-CABLE package file inventory is not approved."
+  }
+}
+
+foreach ($fileProperty in $manifest.files.PSObject.Properties) {
+  $fileName = $fileProperty.Name
+  $expectedSha256 = [string] $fileProperty.Value
   $payloadFile = Join-Path $payloadDirectory $fileName
   if (-not (Test-Path -LiteralPath $payloadFile -PathType Leaf)) {
     throw "A reviewed VB-CABLE package file is missing: $fileName"

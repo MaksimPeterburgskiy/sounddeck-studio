@@ -44,32 +44,29 @@
     ${Else}
       DetailPrint "Preparing the reviewed VB-CABLE driver package..."
       InitPluginsDir
-      CreateDirectory "$PLUGINSDIR\vbcable"
 
-      ; Lock the private directory before extracting any executable content.
-      ; Numeric SIDs avoid localized account names:
-      ; S-1-5-18 = SYSTEM, S-1-5-32-544 = built-in Administrators.
-      nsExec::ExecToStack '"$SYSDIR\icacls.exe" "$PLUGINSDIR\vbcable" /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F"'
-      Pop $0
+      ; Create the private root atomically with its final protected DACL. This
+      ; rejects a path won by another process instead of adopting its explicit
+      ; ACEs. SY = SYSTEM, BA = built-in Administrators, D:P = protected DACL.
+      System::Call 'advapi32::ConvertStringSecurityDescriptorToSecurityDescriptorW(w "O:BAG:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)", i 1, *p .r2, p 0) i.r0 ?e'
       Pop $1
-      ${If} $0 != 0
-        DetailPrint "Could not grant protected VB-CABLE staging permissions: $1"
+      ${If} $0 == 0
+        DetailPrint "Could not build protected VB-CABLE staging permissions (Windows error $1)."
         Abort
       ${EndIf}
-      nsExec::ExecToStack '"$SYSDIR\icacls.exe" "$PLUGINSDIR\vbcable" /setowner "*S-1-5-32-544"'
-      Pop $0
-      Pop $1
-      ${If} $0 != 0
-        DetailPrint "Could not protect VB-CABLE staging ownership: $1"
+
+      ; electron-builder's NSIS executable is 32-bit, so SECURITY_ATTRIBUTES is
+      ; 12 bytes: DWORD, pointer, BOOL.
+      System::Call '*(i 12, p r2, i 0) p.r3'
+      System::Call 'kernel32::CreateDirectoryW(w "$PLUGINSDIR\vbcable", p r3) i.r4 ?e'
+      Pop $5
+      System::Free $3
+      System::Call 'kernel32::LocalFree(p r2)'
+      ${If} $4 == 0
+        DetailPrint "Could not create a fresh protected VB-CABLE staging directory (Windows error $5). A pre-existing directory is rejected."
         Abort
       ${EndIf}
-      nsExec::ExecToStack '"$SYSDIR\icacls.exe" "$PLUGINSDIR\vbcable" /inheritance:r'
-      Pop $0
-      Pop $1
-      ${If} $0 != 0
-        DetailPrint "Could not finalize protected VB-CABLE staging permissions: $1"
-        Abort
-      ${EndIf}
+
       nsExec::ExecToStack '"$SYSDIR\icacls.exe" "$PLUGINSDIR\vbcable" /setintegritylevel "(OI)(CI)H"'
       Pop $0
       Pop $1
@@ -78,13 +75,16 @@
         Abort
       ${EndIf}
 
+      ; Keep vendor files alone in payload so the verifier can require an exact
+      ; inventory. PROVENANCE.json is build audit metadata, not vendor content.
+      SetOutPath "$PLUGINSDIR\vbcable\payload"
+      File /r /x "PROVENANCE.json" "${BUILD_RESOURCES_DIR}\vbcable\*"
       SetOutPath "$PLUGINSDIR\vbcable"
-      File /r "${BUILD_RESOURCES_DIR}\vbcable\*"
       File /oname=verify-vbcable.ps1 "${BUILD_RESOURCES_DIR}\verify-vbcable.ps1"
       File /oname=vbcable-provenance.json "${BUILD_RESOURCES_DIR}\vbcable-provenance.json"
 
       DetailPrint "Reverifying VB-CABLE immediately before elevated execution..."
-      nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\vbcable\verify-vbcable.ps1" -FilePath "$PLUGINSDIR\vbcable\VBCABLE_Setup_x64.exe" -ManifestPath "$PLUGINSDIR\vbcable\vbcable-provenance.json"'
+      nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\vbcable\verify-vbcable.ps1" -FilePath "$PLUGINSDIR\vbcable\payload\VBCABLE_Setup_x64.exe" -ManifestPath "$PLUGINSDIR\vbcable\vbcable-provenance.json"'
       Pop $0
       Pop $1
       ${If} $0 != 0
@@ -95,7 +95,7 @@
 
       DetailPrint "Running the verified VB-CABLE setup in hidden install mode."
       ClearErrors
-      ExecWait '"$PLUGINSDIR\vbcable\VBCABLE_Setup_x64.exe" -i -h' $0
+      ExecWait '"$PLUGINSDIR\vbcable\payload\VBCABLE_Setup_x64.exe" -i -h' $0
       ${If} ${Errors}
         DetailPrint "VB-CABLE setup could not be started."
         MessageBox MB_ICONSTOP|MB_OK "SoundDeck Studio could not start the verified VB-CABLE driver setup. Installation will stop."

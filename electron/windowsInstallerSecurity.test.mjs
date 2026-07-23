@@ -187,16 +187,22 @@ describe("Windows installer trust boundary", () => {
 
   it("extracts to private NSIS storage and rechecks trust immediately before execution", async () => {
     const installer = await readFile(path.join(repoRoot, "build", "installer.nsh"), "utf8");
+    const protectedCreate = installer.indexOf("kernel32::CreateDirectoryW");
+    const payloadExtraction = installer.indexOf('File /r /x "PROVENANCE.json"');
 
-    expect(installer).toContain('SetOutPath "$PLUGINSDIR\\vbcable"');
-    expect(installer).toContain('File /r "${BUILD_RESOURCES_DIR}\\vbcable\\*"');
+    expect(installer).toContain('SetOutPath "$PLUGINSDIR\\vbcable\\payload"');
+    expect(installer).toContain('File /r /x "PROVENANCE.json" "${BUILD_RESOURCES_DIR}\\vbcable\\*"');
     expect(installer).toContain("verify-vbcable.ps1");
     expect(installer).toContain("vbcable-provenance.json");
+    expect(installer).toContain("ConvertStringSecurityDescriptorToSecurityDescriptorW");
+    expect(installer).toContain("O:BAG:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)");
+    expect(installer).toContain("A pre-existing directory is rejected");
+    expect(installer).not.toContain('CreateDirectory "$PLUGINSDIR\\vbcable"');
+    expect(protectedCreate).toBeGreaterThan(-1);
+    expect(payloadExtraction).toBeGreaterThan(protectedCreate);
     expect(installer).toContain('"$SYSDIR\\icacls.exe"');
-    expect(installer).toContain("/setowner");
-    expect(installer).toContain("/inheritance:r");
     expect(installer).toContain('/setintegritylevel "(OI)(CI)H"');
-    expect(installer).toContain('ExecWait \'"$PLUGINSDIR\\vbcable\\VBCABLE_Setup_x64.exe" -i -h\'');
+    expect(installer).toContain('ExecWait \'"$PLUGINSDIR\\vbcable\\payload\\VBCABLE_Setup_x64.exe" -i -h\'');
     expect(installer).not.toContain("$INSTDIR\\resources\\vbcable");
     expect(installer).toContain("${IfNot} ${isUpdated}");
     expect(installer).toContain("Abort");
@@ -209,6 +215,9 @@ describe("Windows installer trust boundary", () => {
     const manifestSha256 = sha256(Buffer.from(manifestText.replace(/\r\n?/g, "\n"), "utf8"));
 
     expect(runtimeVerifier).toContain("$manifest.files.PSObject.Properties");
+    expect(runtimeVerifier).toContain("Get-ChildItem -LiteralPath $payloadDirectory -Force");
+    expect(runtimeVerifier).toContain("$actualFiles.Count -ne $expectedFileNames.Count");
+    expect(runtimeVerifier).toContain("[System.IO.FileAttributes]::ReparsePoint");
     expect(runtimeVerifier).toContain(manifestSha256);
     expect(runtimeVerifier).toContain(manifest.setup.authenticodeSimpleName);
     expect(runtimeVerifier).toContain(manifest.setup.authenticodeBusinessId);

@@ -58,6 +58,10 @@ Export-ModuleMember -Function Get-AuthenticodeSignature
   Invoke-ExpectedFailure -Scenario "a tampered provenance manifest"
 
   Copy-Item -LiteralPath $sourceManifest -Destination $testManifest -Force
+  Set-Content -LiteralPath (Join-Path $testPayload "unexpected.dll") -Value "unreviewed companion"
+  Invoke-ExpectedFailure -Scenario "an unlisted package companion"
+
+  Remove-Item -LiteralPath (Join-Path $testPayload "unexpected.dll") -Force
   Add-Content -LiteralPath (Join-Path $testPayload "readme.txt") -Value "tampered"
   Invoke-ExpectedFailure -Scenario "a tampered package companion"
 } finally {
@@ -65,4 +69,4 @@ Export-ModuleMember -Function Get-AuthenticodeSignature
   Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-Write-Output "VB-CABLE runtime verifier rejected module, manifest, and payload tampering."
+Write-Output "VB-CABLE runtime verifier rejected module, manifest, inventory, and payload tampering."
