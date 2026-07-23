@@ -20,12 +20,10 @@ if (-not (Test-Path -LiteralPath $ManifestPath -PathType Leaf)) {
 
 $sha256 = [System.Security.Cryptography.SHA256]::Create()
 try {
-  $manifestStream = [System.IO.File]::OpenRead($ManifestPath)
-  try {
-    $manifestHashBytes = $sha256.ComputeHash($manifestStream)
-  } finally {
-    $manifestStream.Dispose()
-  }
+  $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+  $manifestText = [System.IO.File]::ReadAllText($ManifestPath, $utf8NoBom)
+  $normalizedManifestText = $manifestText.Replace("`r`n", "`n").Replace("`r", "`n")
+  $manifestHashBytes = $sha256.ComputeHash($utf8NoBom.GetBytes($normalizedManifestText))
 } finally {
   $sha256.Dispose()
 }
