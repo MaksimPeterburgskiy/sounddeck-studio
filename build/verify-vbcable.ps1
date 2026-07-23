@@ -7,12 +7,31 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$approvedManifestSha256 = "b9f2c0a55f8580933db455ce377c574a72e3f67a43c332b0437441af57b6ba07"
+$approvedSimpleName = "BUREL VINCENT Entrepreneur individuel"
+$approvedBusinessId = "423 734 177"
 
 if (-not (Test-Path -LiteralPath $FilePath -PathType Leaf)) {
   throw "The verified VB-CABLE setup helper is missing."
 }
 if (-not (Test-Path -LiteralPath $ManifestPath -PathType Leaf)) {
   throw "The VB-CABLE provenance manifest is missing."
+}
+
+$sha256 = [System.Security.Cryptography.SHA256]::Create()
+try {
+  $manifestStream = [System.IO.File]::OpenRead($ManifestPath)
+  try {
+    $manifestHashBytes = $sha256.ComputeHash($manifestStream)
+  } finally {
+    $manifestStream.Dispose()
+  }
+} finally {
+  $sha256.Dispose()
+}
+$actualManifestSha256 = ([System.BitConverter]::ToString($manifestHashBytes) -replace "-", "").ToLowerInvariant()
+if ($actualManifestSha256 -cne $approvedManifestSha256) {
+  throw "The VB-CABLE provenance manifest hash is not approved."
 }
 
 $manifest = Get-Content -LiteralPath $ManifestPath -Raw | ConvertFrom-Json
@@ -52,7 +71,14 @@ foreach ($fileProperty in $manifest.files.PSObject.Properties) {
   }
 }
 
-$signature = Get-AuthenticodeSignature -LiteralPath $FilePath
+$systemSecurityModule = Join-Path $PSHOME "Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1"
+if (-not (Test-Path -LiteralPath $systemSecurityModule -PathType Leaf)) {
+  throw "The system Authenticode verification module is missing."
+}
+$env:PSModulePath = Join-Path $PSHOME "Modules"
+$PSModuleAutoLoadingPreference = "None"
+Import-Module -Name $systemSecurityModule -Force -ErrorAction Stop
+$signature = Microsoft.PowerShell.Security\Get-AuthenticodeSignature -LiteralPath $FilePath
 if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
   throw "VB-CABLE Authenticode verification failed: $($signature.Status)."
 }
@@ -63,10 +89,10 @@ $simpleName = $signature.SignerCertificate.GetNameInfo(
   [System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName,
   $false
 )
-if ($simpleName -cne $manifest.setup.authenticodeSimpleName) {
+if ($simpleName -cne $approvedSimpleName) {
   throw "VB-CABLE Authenticode signer is not approved."
 }
-$escapedBusinessId = [Regex]::Escape($manifest.setup.authenticodeBusinessId)
+$escapedBusinessId = [Regex]::Escape($approvedBusinessId)
 if ($signature.SignerCertificate.Subject -notmatch "(^|,\s*)SERIALNUMBER=$escapedBusinessId(,|$)") {
   throw "VB-CABLE Authenticode signer identity is not approved."
 }

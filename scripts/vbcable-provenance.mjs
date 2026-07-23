@@ -73,7 +73,14 @@ export async function verifyAuthenticode(filePath, setup) {
 
   const script = String.raw`
 $ErrorActionPreference = "Stop"
-$signature = Get-AuthenticodeSignature -LiteralPath $env:SOUNDDECK_VBCABLE_FILE
+$systemSecurityModule = Join-Path $PSHOME "Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1"
+if (-not (Test-Path -LiteralPath $systemSecurityModule -PathType Leaf)) {
+  throw "The system Authenticode verification module is missing."
+}
+$env:PSModulePath = Join-Path $PSHOME "Modules"
+$PSModuleAutoLoadingPreference = "None"
+Import-Module -Name $systemSecurityModule -Force -ErrorAction Stop
+$signature = Microsoft.PowerShell.Security\Get-AuthenticodeSignature -LiteralPath $env:SOUNDDECK_VBCABLE_FILE
 if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
   throw "Authenticode status is $($signature.Status): $($signature.StatusMessage)"
 }

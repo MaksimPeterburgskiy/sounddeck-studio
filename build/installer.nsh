@@ -44,6 +44,40 @@
     ${Else}
       DetailPrint "Preparing the reviewed VB-CABLE driver package..."
       InitPluginsDir
+      CreateDirectory "$PLUGINSDIR\vbcable"
+
+      ; Lock the private directory before extracting any executable content.
+      ; Numeric SIDs avoid localized account names:
+      ; S-1-5-18 = SYSTEM, S-1-5-32-544 = built-in Administrators.
+      nsExec::ExecToStack '"$SYSDIR\icacls.exe" "$PLUGINSDIR\vbcable" /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F"'
+      Pop $0
+      Pop $1
+      ${If} $0 != 0
+        DetailPrint "Could not grant protected VB-CABLE staging permissions: $1"
+        Abort
+      ${EndIf}
+      nsExec::ExecToStack '"$SYSDIR\icacls.exe" "$PLUGINSDIR\vbcable" /setowner "*S-1-5-32-544"'
+      Pop $0
+      Pop $1
+      ${If} $0 != 0
+        DetailPrint "Could not protect VB-CABLE staging ownership: $1"
+        Abort
+      ${EndIf}
+      nsExec::ExecToStack '"$SYSDIR\icacls.exe" "$PLUGINSDIR\vbcable" /inheritance:r'
+      Pop $0
+      Pop $1
+      ${If} $0 != 0
+        DetailPrint "Could not finalize protected VB-CABLE staging permissions: $1"
+        Abort
+      ${EndIf}
+      nsExec::ExecToStack '"$SYSDIR\icacls.exe" "$PLUGINSDIR\vbcable" /setintegritylevel "(OI)(CI)H"'
+      Pop $0
+      Pop $1
+      ${If} $0 != 0
+        DetailPrint "Could not set high-integrity VB-CABLE staging permissions: $1"
+        Abort
+      ${EndIf}
+
       SetOutPath "$PLUGINSDIR\vbcable"
       File /r "${BUILD_RESOURCES_DIR}\vbcable\*"
       File /oname=verify-vbcable.ps1 "${BUILD_RESOURCES_DIR}\verify-vbcable.ps1"

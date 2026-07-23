@@ -26,8 +26,8 @@ The reviewed input is recorded in `build/vbcable-provenance.json`. The current p
    signtool verify /kp /c .\vbaudio_cable64_win10.cat .\vbaudio_cable64_win10.sys
    ```
 
-6. Update `build/vbcable-provenance.json`. Record the SHA-256 of every extracted file; package-time and installer-time re-verification use these values to catch changes to the setup helper or any companion INF, catalog, or driver.
+6. Update `build/vbcable-provenance.json`. Record the SHA-256 of every extracted file; package-time and installer-time re-verification use these values to catch changes to the setup helper or any companion INF, catalog, or driver. Update the approved manifest digest in `build/verify-vbcable.ps1`. Keep the signer name and business identifier pinned in the verifier rather than loading them from the adjacent manifest.
 7. On Windows, run `node scripts/fetch-vbcable.mjs`, `node scripts/verify-vbcable.mjs`, the test suite, and an unpublished NSIS build. These steps verify and package the driver but do not install it.
-8. Test actual driver installation only in a disposable Windows VM. Confirm the missing-driver, already-installed, helper-failure, signature-failure, non-default-path, update, and reboot flows.
+8. Test actual driver installation only in a disposable Windows VM. Confirm the missing-driver, already-installed, helper-failure, signature-failure, `/D` non-default-path, update, and reboot flows. The UI hides custom install paths, but NSIS can still accept `/D`; the security boundary must remain independent of `$INSTDIR`.
 
 Do not commit the driver archive or extracted binaries. `build/vbcable/` remains ignored and is rebuilt from a fresh download every time; a pre-existing directory is deleted without being read. Confirm that the project's VB-Audio redistribution permission still covers the new release before publishing it.

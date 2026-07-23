@@ -173,7 +173,7 @@ describe("VB-CABLE provenance", () => {
 });
 
 describe("Windows installer trust boundary", () => {
-  it("keeps VB-CABLE out of installed app resources and fixes the per-machine destination", async () => {
+  it("keeps VB-CABLE out of installed app resources and hides custom paths for per-machine installs", async () => {
     const packageJson = JSON.parse(await readFile(path.join(repoRoot, "package.json"), "utf8"));
     const extraResources = packageJson.build.win.extraResources;
 
@@ -192,19 +192,27 @@ describe("Windows installer trust boundary", () => {
     expect(installer).toContain('File /r "${BUILD_RESOURCES_DIR}\\vbcable\\*"');
     expect(installer).toContain("verify-vbcable.ps1");
     expect(installer).toContain("vbcable-provenance.json");
+    expect(installer).toContain('"$SYSDIR\\icacls.exe"');
+    expect(installer).toContain("/setowner");
+    expect(installer).toContain("/inheritance:r");
+    expect(installer).toContain('/setintegritylevel "(OI)(CI)H"');
     expect(installer).toContain('ExecWait \'"$PLUGINSDIR\\vbcable\\VBCABLE_Setup_x64.exe" -i -h\'');
     expect(installer).not.toContain("$INSTDIR\\resources\\vbcable");
     expect(installer).toContain("${IfNot} ${isUpdated}");
     expect(installer).toContain("Abort");
   });
 
-  it("uses the reviewed manifest for runtime package and signer verification", async () => {
+  it("anchors runtime verification outside the adjacent manifest and system-loads Authenticode", async () => {
+    const manifest = await loadManifest(manifestPath);
     const runtimeVerifier = await readFile(path.join(repoRoot, "build", "verify-vbcable.ps1"), "utf8");
+    const manifestSha256 = sha256(await readFile(manifestPath));
 
     expect(runtimeVerifier).toContain("$manifest.files.PSObject.Properties");
-    expect(runtimeVerifier).toContain("$manifest.setup.authenticodeSimpleName");
-    expect(runtimeVerifier).toContain("$manifest.setup.authenticodeBusinessId");
+    expect(runtimeVerifier).toContain(manifestSha256);
+    expect(runtimeVerifier).toContain(manifest.setup.authenticodeSimpleName);
+    expect(runtimeVerifier).toContain(manifest.setup.authenticodeBusinessId);
     expect(runtimeVerifier).toContain("TimeStamperCertificate");
-    expect(runtimeVerifier).toContain("Get-AuthenticodeSignature");
+    expect(runtimeVerifier).toContain("Microsoft.PowerShell.Security\\Get-AuthenticodeSignature");
+    expect(runtimeVerifier).toContain('$env:PSModulePath = Join-Path $PSHOME "Modules"');
   });
 });

@@ -57,6 +57,10 @@ jobs:
       - name: Fetch and verify reviewed VB-CABLE payload
         run: node scripts/fetch-vbcable.mjs
 
+      - name: Exercise runtime verifier against hostile inputs
+        shell: powershell
+        run: .\scripts\test-vbcable-runtime-verifier.ps1 -PayloadDirectory .\build\vbcable
+
       - name: Generate installer artwork
         run: node scripts/make-installer-art.mjs
 
