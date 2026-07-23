@@ -36,7 +36,9 @@ function Invoke-ExpectedFailure {
 try {
   New-Item -ItemType Directory -Path $testPayload | Out-Null
   New-Item -ItemType Directory -Path $hostileModule | Out-Null
-  Copy-Item -Path (Join-Path $PayloadDirectory "*") -Destination $testPayload -Recurse
+  Get-ChildItem -LiteralPath $PayloadDirectory -Force |
+    Where-Object { $_.Name -cne "PROVENANCE.json" } |
+    Copy-Item -Destination $testPayload -Recurse
   Copy-Item -LiteralPath $sourceManifest -Destination $testManifest
   Copy-Item -LiteralPath $sourceVerifier -Destination $testVerifier
 
