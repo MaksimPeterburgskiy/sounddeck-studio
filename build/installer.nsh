@@ -23,27 +23,61 @@
   !define MUI_INSTFILESPAGE_COLORS "C6F12E 0A0B0D"
 !macroend
 
-; Install the bundled VB-Audio Virtual Cable driver if it is not present yet.
-; VBCABLE_Setup_x64.exe flags: -i = install, -h = hidden (no UI).
+; Install the reviewed VB-Audio Virtual Cable driver on a first install only.
+; electron-builder embeds the verified payload directly into NSIS. It is
+; extracted to NSIS's restricted private directory, reverified there, and
+; never copied to the user-selected application tree or portable build.
+; VBCABLE_Setup_x64.exe flags: -i = install, -h = hidden (no app UI).
 !macro customInstall
   SetDetailsPrint both
   DetailPrint "Checking bundled driver prerequisites..."
-  ${DisableX64FSRedirection}
-  ; The driver service key exists whenever VB-Cable is installed, even when the
-  ; .sys file lives only in the DriverStore rather than System32\drivers.
-  ClearErrors
-  ReadRegStr $0 HKLM "SYSTEM\CurrentControlSet\Services\VBAudioVACMME" "ImagePath"
-  ${IfNot} ${Errors}
-  ${OrIf} ${FileExists} "$SYSDIR\drivers\vbaudio_cable64_win10.sys"
-  ${OrIf} ${FileExists} "$SYSDIR\drivers\vbaudio_cable64_win7.sys"
-    DetailPrint "VB-Audio Virtual Cable already installed, skipping."
+  ${IfNot} ${isUpdated}
+    ${DisableX64FSRedirection}
+    ; The driver service key exists whenever VB-Cable is installed, even when the
+    ; .sys file lives only in the DriverStore rather than System32\drivers.
+    ClearErrors
+    ReadRegStr $0 HKLM "SYSTEM\CurrentControlSet\Services\VBAudioVACMME" "ImagePath"
+    ${IfNot} ${Errors}
+    ${OrIf} ${FileExists} "$SYSDIR\drivers\vbaudio_cable64_win10.sys"
+    ${OrIf} ${FileExists} "$SYSDIR\drivers\vbaudio_cable64_win7.sys"
+      DetailPrint "VB-Audio Virtual Cable already installed, skipping."
+    ${Else}
+      DetailPrint "Preparing the reviewed VB-CABLE driver package..."
+      InitPluginsDir
+      SetOutPath "$PLUGINSDIR\vbcable"
+      File /r "${BUILD_RESOURCES_DIR}\vbcable\*"
+      File /oname=verify-vbcable.ps1 "${BUILD_RESOURCES_DIR}\verify-vbcable.ps1"
+      File /oname=vbcable-provenance.json "${BUILD_RESOURCES_DIR}\vbcable-provenance.json"
+
+      DetailPrint "Reverifying VB-CABLE immediately before elevated execution..."
+      nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\vbcable\verify-vbcable.ps1" -FilePath "$PLUGINSDIR\vbcable\VBCABLE_Setup_x64.exe" -ManifestPath "$PLUGINSDIR\vbcable\vbcable-provenance.json"'
+      Pop $0
+      Pop $1
+      ${If} $0 != 0
+        DetailPrint "VB-CABLE verification failed (exit code $0): $1"
+        MessageBox MB_ICONSTOP|MB_OK "SoundDeck Studio refused to run the bundled audio driver because its integrity or publisher could not be verified. Installation will stop without running the driver."
+        Abort
+      ${EndIf}
+
+      DetailPrint "Running the verified VB-CABLE setup in hidden install mode."
+      ClearErrors
+      ExecWait '"$PLUGINSDIR\vbcable\VBCABLE_Setup_x64.exe" -i -h' $0
+      ${If} ${Errors}
+        DetailPrint "VB-CABLE setup could not be started."
+        MessageBox MB_ICONSTOP|MB_OK "SoundDeck Studio could not start the verified VB-CABLE driver setup. Installation will stop."
+        Abort
+      ${ElseIf} $0 != 0
+        DetailPrint "VB-CABLE setup failed with exit code $0."
+        MessageBox MB_ICONSTOP|MB_OK "The verified VB-CABLE driver setup failed with exit code $0. Installation will stop."
+        Abort
+      ${Else}
+        DetailPrint "VB-CABLE setup finished successfully."
+      ${EndIf}
+    ${EndIf}
+    ${EnableX64FSRedirection}
   ${Else}
-    DetailPrint "Installing VB-Audio Virtual Cable driver..."
-    DetailPrint "Running bundled VB-CABLE setup in hidden install mode."
-    ExecWait '"$INSTDIR\resources\vbcable\VBCABLE_Setup_x64.exe" -i -h' $0
-    DetailPrint "VB-Cable setup finished (exit code $0)."
+    DetailPrint "Application update detected; bundled driver setup is not run during updates."
   ${EndIf}
-  ${EnableX64FSRedirection}
   DetailPrint "Installer tasks finished."
 !macroend
 

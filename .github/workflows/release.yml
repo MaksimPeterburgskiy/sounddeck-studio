@@ -102,6 +102,9 @@ jobs:
       - name: Build renderer
         run: pnpm run build
 
+      - name: Reverify VB-CABLE packaging input
+        run: node scripts/verify-vbcable.mjs
+
       - name: Build and publish Windows installers
         run: pnpm exec electron-builder --win --publish always
         env:

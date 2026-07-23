@@ -12,7 +12,7 @@
     "build": "tsc && vite build",
     "clean:release": "node scripts/clean-release.mjs",
     "dist": "pnpm run dist:win",
-    "dist:win": "pnpm run clean:release && node scripts/fetch-vbcable.mjs && node scripts/make-installer-art.mjs && pnpm run build && electron-builder --win",
+    "dist:win": "pnpm run clean:release && node scripts/fetch-vbcable.mjs && node scripts/make-installer-art.mjs && pnpm run build && node scripts/verify-vbcable.mjs && electron-builder --win",
     "dist:mac": "node scripts/dist-mac.mjs",
     "dist:mac:unsigned": "node scripts/dist-mac.mjs --unsigned",
     "fetch:yt-dlp:mac": "node scripts/fetch-ytdlp-mac.mjs",
@@ -40,10 +40,6 @@
     "win": {
       "icon": "build/icon.ico",
       "extraResources": [
-        {
-          "from": "build/vbcable",
-          "to": "vbcable"
-        },
         {
           "from": "build/icon.ico",
           "to": "icon.ico"
@@ -111,7 +107,7 @@
     "nsis": {
       "oneClick": false,
       "perMachine": true,
-      "allowToChangeInstallationDirectory": true,
+      "allowToChangeInstallationDirectory": false,
       "include": "build/installer.nsh",
       "installerHeader": "build/installerHeader.bmp",
       "installerSidebar": "build/installerSidebar.bmp"
