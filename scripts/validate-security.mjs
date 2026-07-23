@@ -7,7 +7,7 @@ const workflowNames = (await readdir(workflowsDir)).filter((name) => name.endsWi
 const workflows = new Map(
   await Promise.all(workflowNames.map(async (name) => [
     name,
-    await readFile(path.join(workflowsDir, name), "utf8")
+    (await readFile(path.join(workflowsDir, name), "utf8")).replace(/\r\n?/g, "\n")
   ]))
 );
 
