@@ -205,7 +205,8 @@ describe("Windows installer trust boundary", () => {
   it("anchors runtime verification outside the adjacent manifest and system-loads Authenticode", async () => {
     const manifest = await loadManifest(manifestPath);
     const runtimeVerifier = await readFile(path.join(repoRoot, "build", "verify-vbcable.ps1"), "utf8");
-    const manifestSha256 = sha256(await readFile(manifestPath));
+    const manifestText = await readFile(manifestPath, "utf8");
+    const manifestSha256 = sha256(Buffer.from(manifestText.replace(/\r\n?/g, "\n"), "utf8"));
 
     expect(runtimeVerifier).toContain("$manifest.files.PSObject.Properties");
     expect(runtimeVerifier).toContain(manifestSha256);
