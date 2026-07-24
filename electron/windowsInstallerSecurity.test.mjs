@@ -187,19 +187,31 @@ describe("Windows installer trust boundary", () => {
 
   it("extracts to private NSIS storage and rechecks trust immediately before execution", async () => {
     const installer = await readFile(path.join(repoRoot, "build", "installer.nsh"), "utf8");
+    const parentLock = installer.indexOf('CreateFileW(w "$PLUGINSDIR"');
+    const parentProtection = installer.indexOf("advapi32::SetSecurityInfo");
     const protectedCreate = installer.indexOf("kernel32::CreateDirectoryW");
     const payloadExtraction = installer.indexOf('File /r /x "PROVENANCE.json"');
+    const helperExecution = installer.indexOf("ExecWait");
+    const lastHandleClose = installer.lastIndexOf("kernel32::CloseHandle");
 
     expect(installer).toContain('SetOutPath "$PLUGINSDIR\\vbcable\\payload"');
     expect(installer).toContain('File /r /x "PROVENANCE.json" "${BUILD_RESOURCES_DIR}\\vbcable\\*"');
     expect(installer).toContain("verify-vbcable.ps1");
     expect(installer).toContain("vbcable-provenance.json");
     expect(installer).toContain("ConvertStringSecurityDescriptorToSecurityDescriptorW");
+    expect(installer).toContain("SOUNDDECK_DIRECTORY_OPEN_FLAGS 0x02200000");
+    expect(installer).toContain("SOUNDDECK_PROTECTED_SECURITY_INFORMATION 0x80000007");
     expect(installer).toContain("O:BAG:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)");
+    expect(installer).toContain("GetFileInformationByHandle");
+    expect(installer).toContain("advapi32::SetSecurityInfo");
     expect(installer).toContain("A pre-existing directory is rejected");
     expect(installer).not.toContain('CreateDirectory "$PLUGINSDIR\\vbcable"');
+    expect(parentLock).toBeGreaterThan(-1);
+    expect(parentProtection).toBeGreaterThan(parentLock);
     expect(protectedCreate).toBeGreaterThan(-1);
+    expect(protectedCreate).toBeGreaterThan(parentProtection);
     expect(payloadExtraction).toBeGreaterThan(protectedCreate);
+    expect(lastHandleClose).toBeGreaterThan(helperExecution);
     expect(installer).toContain('"$SYSDIR\\icacls.exe"');
     expect(installer).toContain('/setintegritylevel "(OI)(CI)H"');
     expect(installer).toContain('ExecWait \'"$PLUGINSDIR\\vbcable\\payload\\VBCABLE_Setup_x64.exe" -i -h\'');

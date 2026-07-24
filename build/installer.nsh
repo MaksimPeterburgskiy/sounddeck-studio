@@ -3,6 +3,9 @@
 
 !define SOUNDDECK_RUN_KEY "Software\Microsoft\Windows\CurrentVersion\Run"
 !define SOUNDDECK_PROFILE_LIST_KEY "SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList"
+!define SOUNDDECK_DIRECTORY_LOCK_ACCESS 0x000C0080
+!define SOUNDDECK_DIRECTORY_OPEN_FLAGS 0x02200000
+!define SOUNDDECK_PROTECTED_SECURITY_INFORMATION 0x80000007
 
 !macro DeleteSoundDeckStartupValues ROOT_KEY RUN_KEY
   DeleteRegValue ${ROOT_KEY} "${RUN_KEY}" "SoundDeck Studio"
@@ -45,6 +48,34 @@
       DetailPrint "Preparing the reviewed VB-CABLE driver package..."
       InitPluginsDir
 
+      ; Lock and validate NSIS's private directory before changing its security.
+      ; Share-read only makes this fail if another process already holds a
+      ; write/delete handle. OPEN_REPARSE_POINT lets us reject redirected paths.
+      System::Call 'kernel32::CreateFileW(w "$PLUGINSDIR", i ${SOUNDDECK_DIRECTORY_LOCK_ACCESS}, i 1, p 0, i 3, i ${SOUNDDECK_DIRECTORY_OPEN_FLAGS}, p 0) p.r6 ?e'
+      Pop $5
+      ${If} $6 == -1
+        DetailPrint "Could not lock the NSIS private directory (Windows error $5)."
+        Abort
+      ${EndIf}
+      System::Alloc 52
+      Pop $8
+      System::Call 'kernel32::GetFileInformationByHandle(p r6, p r8) i.r0 ?e'
+      Pop $5
+      ${If} $0 == 0
+        System::Free $8
+        DetailPrint "Could not validate the NSIS private directory (Windows error $5)."
+        Abort
+      ${EndIf}
+      System::Call '*$8(i.r9)'
+      System::Free $8
+      IntOp $0 $9 & 0x10
+      IntOp $1 $9 & 0x400
+      ${If} $0 == 0
+      ${OrIf} $1 != 0
+        DetailPrint "The NSIS private path is not a real directory."
+        Abort
+      ${EndIf}
+
       ; Create the private root atomically with its final protected DACL. This
       ; rejects a path won by another process instead of adopting its explicit
       ; ACEs. SY = SYSTEM, BA = built-in Administrators, D:P = protected DACL.
@@ -55,6 +86,41 @@
         Abort
       ${EndIf}
 
+      ; Replace the NSIS parent owner, group, and entire DACL through the held
+      ; handle. The protected flag prevents user-temp inheritance.
+      System::Call 'advapi32::GetSecurityDescriptorOwner(p r2, *p .R0, *i .R1) i.r0'
+      ${If} $0 == 0
+        DetailPrint "Could not read the protected VB-CABLE staging owner."
+        Abort
+      ${EndIf}
+      System::Call 'advapi32::GetSecurityDescriptorGroup(p r2, *p .R2, *i .R3) i.r0'
+      ${If} $0 == 0
+        DetailPrint "Could not read the protected VB-CABLE staging group."
+        Abort
+      ${EndIf}
+      System::Call 'advapi32::GetSecurityDescriptorDacl(p r2, *i .R4, *p .R5, *i .R6) i.r0'
+      ${If} $0 == 0
+      ${OrIf} $R4 == 0
+        DetailPrint "Could not read the protected VB-CABLE staging DACL."
+        Abort
+      ${EndIf}
+      System::Call 'advapi32::SetSecurityInfo(p r6, i 1, i ${SOUNDDECK_PROTECTED_SECURITY_INFORMATION}, p R0, p R2, p R5, p 0) i.r0'
+      ${If} $0 != 0
+        DetailPrint "Could not protect the NSIS private directory (Windows error $0)."
+        Abort
+      ${EndIf}
+
+      ; Replace the initial lock with a no-delete-share handle that still lets
+      ; the elevated installer create children. Keep it through driver exit.
+      System::Call 'kernel32::CreateFileW(w "$PLUGINSDIR", i 0, i 3, p 0, i 3, i ${SOUNDDECK_DIRECTORY_OPEN_FLAGS}, p 0) p.r7 ?e'
+      Pop $5
+      ${If} $7 == -1
+        DetailPrint "Could not retain the protected NSIS private directory (Windows error $5)."
+        Abort
+      ${EndIf}
+      System::Call 'kernel32::CloseHandle(p r6)'
+      StrCpy $6 $7
+
       ; electron-builder's NSIS executable is 32-bit, so SECURITY_ATTRIBUTES is
       ; 12 bytes: DWORD, pointer, BOOL.
       System::Call '*(i 12, p r2, i 0) p.r3'
@@ -64,6 +130,33 @@
       System::Call 'kernel32::LocalFree(p r2)'
       ${If} $4 == 0
         DetailPrint "Could not create a fresh protected VB-CABLE staging directory (Windows error $5). A pre-existing directory is rejected."
+        Abort
+      ${EndIf}
+
+      ; Hold the newly created root without delete sharing as a second guard
+      ; against rename or replacement until the setup process has exited.
+      System::Call 'kernel32::CreateFileW(w "$PLUGINSDIR\vbcable", i 0, i 3, p 0, i 3, i ${SOUNDDECK_DIRECTORY_OPEN_FLAGS}, p 0) p.r7 ?e'
+      Pop $5
+      ${If} $7 == -1
+        DetailPrint "Could not retain the protected VB-CABLE staging directory (Windows error $5)."
+        Abort
+      ${EndIf}
+      System::Alloc 52
+      Pop $8
+      System::Call 'kernel32::GetFileInformationByHandle(p r7, p r8) i.r0 ?e'
+      Pop $5
+      ${If} $0 == 0
+        System::Free $8
+        DetailPrint "Could not validate the protected VB-CABLE staging directory (Windows error $5)."
+        Abort
+      ${EndIf}
+      System::Call '*$8(i.r9)'
+      System::Free $8
+      IntOp $0 $9 & 0x10
+      IntOp $1 $9 & 0x400
+      ${If} $0 == 0
+      ${OrIf} $1 != 0
+        DetailPrint "The protected VB-CABLE staging path is not a real directory."
         Abort
       ${EndIf}
 
@@ -97,6 +190,14 @@
       ClearErrors
       ExecWait '"$PLUGINSDIR\vbcable\payload\VBCABLE_Setup_x64.exe" -i -h' $0
       ${If} ${Errors}
+        StrCpy $1 1
+      ${Else}
+        StrCpy $1 0
+      ${EndIf}
+      ; The helper has exited, so replacement can no longer change what ran.
+      System::Call 'kernel32::CloseHandle(p r7)'
+      System::Call 'kernel32::CloseHandle(p r6)'
+      ${If} $1 == 1
         DetailPrint "VB-CABLE setup could not be started."
         MessageBox MB_ICONSTOP|MB_OK "SoundDeck Studio could not start the verified VB-CABLE driver setup. Installation will stop."
         Abort
