@@ -2,7 +2,7 @@ import { access, readFile } from "node:fs/promises";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { readNativeToolsManifest, sha256File } from "./native-tools.mjs";
+import { readNativeToolsManifest, verifyNativeToolHashes } from "./native-tools.mjs";
 
 const execFileAsync = promisify(execFile);
 const appOutDir = process.argv[2] || path.join("release", "win-unpacked");
@@ -14,13 +14,10 @@ if (provenance.target !== "win32-x64" || JSON.stringify(provenance.assets) !== J
   throw new Error("Packaged native-tool provenance does not match config/native-tools.json.");
 }
 
+await verifyNativeToolHashes(toolsDir, assets);
 for (const [name, asset] of Object.entries(assets)) {
   const filePath = path.join(toolsDir, asset.fileName);
   await access(filePath);
-  const digest = await sha256File(filePath);
-  if (digest !== asset.sha256) {
-    throw new Error(`${name} packaged checksum mismatch: expected ${asset.sha256}, got ${digest}.`);
-  }
   const args = name === "ffmpeg" ? ["-version"] : ["--version"];
   await execFileAsync(filePath, args, { timeout: 30_000, windowsHide: true });
 }

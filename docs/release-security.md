@@ -21,7 +21,7 @@ To update a native tool:
 2. Download the exact assets independently. For yt-dlp, verify `SHA2-256SUMS.sig` with the upstream signing key fingerprint `AC0C BBE6 848D 6A87 3464 AF4E 57CF 6593 3B5A 7581`, then verify the selected entry in `SHA2-256SUMS`.
 3. Record the compressed asset digest and executable digest in `config/native-tools.json`.
 4. Run `pnpm test`, `pnpm run validate:security`, and a platform package build.
-5. On macOS, confirm the PKG verification checks both ffmpeg architectures, the universal yt-dlp binary, code signing, Gatekeeper, and notarization. On Windows, confirm the unpacked package hashes and executes both tools.
+5. On macOS, confirm the PKG verification hashes all three packaged executables, checks both ffmpeg architectures and the universal yt-dlp binary, and verifies code signing, Gatekeeper, and notarization. On Windows, confirm the unpacked package hashes and executes both tools.
 
 Relevant upstream guidance:
 
@@ -66,7 +66,7 @@ Valid. `ffmpeg-static` ran an allowed lifecycle downloader, was ASAR-unpacked, a
 
 ### Badge workflow exposes release PAT to mutable actions
 
-Valid. The badge job passed `RELEASE_TOKEN` to checkout and its API script, while action tags were mutable and checkout persisted credentials. The calculation job is read-only, all actions use full commit SHAs, and a separate action-free write job uses `github.token` only for its final Contents API update.
+Valid. The badge job passed `RELEASE_TOKEN` to checkout and its API script, while action tags were mutable and checkout persisted credentials. The calculation job is read-only, all actions use full commit SHAs, and a separate action-free write job uses `github.token` to update a dedicated automation branch and open or refresh a pull request. The badge reaches `main` only after the repository's required review and `build-and-test` check. GitHub may hold checks on a pull request created by `github.token` until a maintainer approves the workflow run.
 
 ### Release workflow trusts mutable third-party pnpm action
 

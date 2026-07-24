@@ -67,11 +67,33 @@ for (const match of credentialedReleaseSteps) {
 const badge = requiredWorkflow("download-badge.yml");
 assert(!badge.includes("RELEASE_TOKEN"), "Badge workflow must never use the release PAT.");
 assert(/^permissions:\s*\n\s+contents:\s*read/m.test(badge), "Badge workflow must default to contents: read.");
-assert(/GH_TOKEN:\s+\$\{\{\s*github\.token\s*\}\}/.test(badge), "Badge push must use github.token.");
+assert(/GH_TOKEN:\s+\$\{\{\s*github\.token\s*\}\}/.test(badge), "Badge PR update must use github.token.");
 const badgeWriteJob = badge.match(/\n  write:\n([\s\S]+)$/)?.[1] || "";
 assert(/permissions:\s*\n\s+contents:\s*write/.test(badgeWriteJob), "Badge write job must declare contents: write.");
+assert(/pull-requests:\s*write/.test(badgeWriteJob), "Badge write job must declare pull-requests: write.");
 assert(!/\buses:/.test(badgeWriteJob), "Badge write job must not expose its token to action steps.");
 assert((badgeWriteJob.match(/\n\s+-\s+name:/g) || []).length === 1, "Badge write job must contain one credentialed step.");
+assert(
+  /BADGE_BRANCH:\s*automation\/update-download-badge/.test(badgeWriteJob),
+  "Badge updates must use the dedicated automation branch."
+);
+assert(
+  /--method POST "[^"]*\/pulls"/.test(badgeWriteJob),
+  "Badge write job must open a pull request."
+);
+assert(
+  /--raw-field head="\$BADGE_BRANCH"/.test(badgeWriteJob) &&
+    /--raw-field base="main"/.test(badgeWriteJob),
+  "Badge pull requests must carry the dedicated branch into main."
+);
+assert(
+  !/--raw-field branch=["']?main\b/.test(badgeWriteJob),
+  "Badge write job must not update main directly."
+);
+assert(
+  !/--method\s+(?:PATCH|PUT)[^\n]*git\/refs?\/heads\/main/.test(badgeWriteJob),
+  "Badge write job must not update the main Git reference."
+);
 
 await assertMissing(path.join(workflowsDir, "dependabot-auto-merge.yml"));
 

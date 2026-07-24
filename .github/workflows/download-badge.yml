@@ -10,6 +10,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: download-badge
+  cancel-in-progress: false
+
 jobs:
   calculate:
     runs-on: ubuntu-latest
@@ -39,21 +43,51 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      pull-requests: write
     steps:
-      - name: Write badge data
+      - name: Open or update badge pull request
         env:
           GH_TOKEN: ${{ github.token }}
           BADGE_DATA: ${{ needs.calculate.outputs.badge_data }}
+          BADGE_BRANCH: automation/update-download-badge
         run: |
           current_data="$(gh api "repos/${{ github.repository }}/contents/docs/downloads-badge.json?ref=main" --jq '.content' | tr -d '\n')"
           if [[ "$current_data" == "$BADGE_DATA" ]]; then
             echo "Download badge is already up to date."
+            exit 0
+          fi
+
+          base_sha="$(gh api "repos/${{ github.repository }}/git/ref/heads/main" --jq '.object.sha')"
+          existing_pr="$(gh api "repos/${{ github.repository }}/pulls?state=open&head=${{ github.repository_owner }}:$BADGE_BRANCH&base=main" --jq '.[0].html_url // empty')"
+          if gh api "repos/${{ github.repository }}/git/ref/heads/$BADGE_BRANCH" >/dev/null 2>&1; then
+            if [[ -z "$existing_pr" ]]; then
+              gh api --method PATCH "repos/${{ github.repository }}/git/refs/heads/$BADGE_BRANCH" \
+                --raw-field sha="$base_sha" \
+                --field force=true \
+                >/dev/null
+            fi
           else
-            current_sha="$(gh api "repos/${{ github.repository }}/contents/docs/downloads-badge.json?ref=main" --jq '.sha')"
-            gh api --method PUT "repos/${{ github.repository }}/contents/docs/downloads-badge.json" \
-              --raw-field message="Update download badge" \
-              --raw-field content="$BADGE_DATA" \
-              --raw-field sha="$current_sha" \
-              --raw-field branch="main" \
+            gh api --method POST "repos/${{ github.repository }}/git/refs" \
+              --raw-field ref="refs/heads/$BADGE_BRANCH" \
+              --raw-field sha="$base_sha" \
               >/dev/null
+          fi
+
+          current_sha="$(gh api "repos/${{ github.repository }}/contents/docs/downloads-badge.json?ref=$BADGE_BRANCH" --jq '.sha')"
+          gh api --method PUT "repos/${{ github.repository }}/contents/docs/downloads-badge.json" \
+            --raw-field message="Update download badge" \
+            --raw-field content="$BADGE_DATA" \
+            --raw-field sha="$current_sha" \
+            --raw-field branch="$BADGE_BRANCH" \
+            >/dev/null
+
+          if [[ -n "$existing_pr" ]]; then
+            echo "Updated $existing_pr"
+          else
+            gh api --method POST "repos/${{ github.repository }}/pulls" \
+              --raw-field title="Update download badge" \
+              --raw-field head="$BADGE_BRANCH" \
+              --raw-field base="main" \
+              --raw-field body="Automated download-count refresh. Merge after the required review and build-and-test check pass." \
+              --jq '.html_url'
           fi

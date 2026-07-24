@@ -158,6 +158,16 @@ export async function sha256File(filePath) {
   return createHash("sha256").update(await readFile(filePath)).digest("hex");
 }
 
+export async function verifyNativeToolHashes(directory, assets) {
+  for (const [name, asset] of Object.entries(assets)) {
+    const filePath = path.join(directory, asset.fileName);
+    const digest = await sha256File(filePath);
+    if (digest !== asset.sha256) {
+      throw new Error(`${name} packaged checksum mismatch: expected ${asset.sha256}, got ${digest}.`);
+    }
+  }
+}
+
 function assertDigest(label, content, expected) {
   const actual = createHash("sha256").update(content).digest("hex");
   if (actual !== expected) {

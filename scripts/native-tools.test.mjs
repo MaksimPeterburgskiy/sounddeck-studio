@@ -8,7 +8,8 @@ import { gzipSync } from "node:zlib";
 import {
   prepareNativeTools,
   readNativeToolsManifest,
-  validateManifest
+  validateManifest,
+  verifyNativeToolHashes
 } from "./native-tools.mjs";
 
 test("the committed manifest uses immutable URLs and valid SHA-256 values", async () => {
@@ -142,6 +143,35 @@ test("a verified cached executable is accepted without network access", async ()
     });
     assert.equal(second.files.tool, first.files.tool);
     assert.deepEqual(await readFile(second.files.tool), content);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("final package verification hashes every native executable and rejects replacement", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "sounddeck-native-test-"));
+  const contents = {
+    "ffmpeg-x64": Buffer.from("x64 ffmpeg"),
+    "ffmpeg-arm64": Buffer.from("arm64 ffmpeg"),
+    "yt-dlp": Buffer.from("universal yt-dlp")
+  };
+  const assets = Object.fromEntries(
+    Object.entries(contents).map(([name, content]) => [
+      name,
+      { fileName: name, sha256: sha256(content) }
+    ])
+  );
+  try {
+    await Promise.all(
+      Object.entries(contents).map(([name, content]) => writeFile(path.join(root, name), content))
+    );
+    await assert.doesNotReject(verifyNativeToolHashes(root, assets));
+
+    await writeFile(path.join(root, "yt-dlp"), "replacement");
+    await assert.rejects(
+      verifyNativeToolHashes(root, assets),
+      /yt-dlp packaged checksum mismatch/
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }
