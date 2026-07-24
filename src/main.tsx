@@ -38,6 +38,7 @@ import { acceleratorLooksReserved, formatBytes, formatDuration, getDefaultSoundE
 import { claimCaptureSlot, eventToToken, formatAccelerator, MODIFIER_TOKENS, normalizeAccelerator, orderTokens } from "./lib/hotkeys";
 import { makeWaveform } from "./lib/waveform";
 import { installDevBridge } from "./lib/devBridge";
+import { cancelTopLevelDrag } from "./lib/drop";
 import type { AppCapabilities, CorsairState, HotkeyBinding, HotkeyResult, MediaImportResult, SoundBoard, SoundDeckPlatform, SoundEffects, SoundLibrary, SoundSlot, StartupSettings, UpdateStatus, VirtualBackend } from "./types";
 import "./styles.css";
 
@@ -808,14 +809,12 @@ function App() {
     <main
       className="app"
       onDragOver={(event) => {
-        if (!event.dataTransfer?.types?.includes("Files")) return;
-        event.preventDefault();
+        if (!cancelTopLevelDrag(event)) return;
         setDropActive(true);
       }}
       onDragLeave={() => setDropActive(false)}
       onDrop={(event) => {
-        if (!event.dataTransfer?.types?.includes("Files")) return;
-        event.preventDefault();
+        if (!cancelTopLevelDrag(event)) return;
         setDropActive(false);
         void importFiles(Array.from(event.dataTransfer.files));
       }}

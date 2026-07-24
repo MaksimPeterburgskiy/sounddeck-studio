@@ -4,7 +4,15 @@ import os from "node:os";
 import path from "node:path";
 import mediaFiles from "./mediaFiles.cjs";
 
-const { sanitizeName, inferMime, allowedAudioExtensions, isHttpUrl, isInsideMediaRoot } = mediaFiles;
+const {
+  sanitizeName,
+  inferMime,
+  allowedAudioExtensions,
+  safeAudioExtension,
+  storedAudioExtension,
+  isHttpUrl,
+  isInsideMediaRoot
+} = mediaFiles;
 
 describe("sanitizeName", () => {
   it("strips filesystem-reserved and control characters", () => {
@@ -44,6 +52,38 @@ describe("inferMime and allowedAudioExtensions", () => {
   it("does not allow non-audio extensions", () => {
     expect(allowedAudioExtensions().has(".txt")).toBe(false);
     expect(allowedAudioExtensions().has(".exe")).toBe(false);
+  });
+});
+
+describe("safe audio extensions", () => {
+  it("normalizes allowlisted extension values", () => {
+    for (const extension of allowedAudioExtensions()) {
+      expect(safeAudioExtension(extension.toUpperCase())).toBe(extension);
+    }
+    expect(safeAudioExtension(" .webm ")).toBe(".webm");
+  });
+
+  it("rejects unsupported, separator-bearing, and traversal values", () => {
+    expect(safeAudioExtension(".txt")).toBe("");
+    expect(safeAudioExtension("../library.json")).toBe("");
+    expect(safeAudioExtension(".webm/../../library.json")).toBe("");
+    expect(safeAudioExtension(".webm\\..\\..\\library.json")).toBe("");
+    expect(safeAudioExtension("webm")).toBe("");
+    expect(safeAudioExtension(".mp3\u0000.exe")).toBe("");
+    expect(safeAudioExtension(null)).toBe("");
+    expect(safeAudioExtension({})).toBe("");
+  });
+
+  it("uses a safe stored-name extension or an allowlisted fallback", () => {
+    expect(storedAudioExtension("sound.MP3", ".wav")).toBe(".mp3");
+    expect(storedAudioExtension("sound", ".WEBM")).toBe(".webm");
+  });
+
+  it("rejects path-like stored names and unsafe fallbacks", () => {
+    expect(storedAudioExtension("../../sound.mp3", ".wav")).toBe("");
+    expect(storedAudioExtension("..\\..\\sound.mp3", ".wav")).toBe("");
+    expect(storedAudioExtension("sound", "../../library.json")).toBe("");
+    expect(storedAudioExtension("", ".mp3")).toBe("");
   });
 });
 
