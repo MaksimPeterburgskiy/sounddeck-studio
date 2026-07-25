@@ -41,7 +41,12 @@ const env = {
 };
 
 const electronBuilderArgs = unsigned
-  ? ["exec", "electron-builder", "--mac", "dir", "--universal", "--publish", "never", "-c.mac.identity=null", "-c.mac.notarize=false"]
+  ? [
+      "exec", "electron-builder", "--mac", "dir", "--universal", "--publish", "never",
+      "-c.mac.identity=null",
+      "-c.mac.notarize=false",
+      "-c.mac.hardenedRuntime=false"
+    ]
   : [
       "exec", "electron-builder", "--mac", "--universal", "--publish", "never",
       `-c.mac.identity=${electronBuilderIdentity(signingEnv.CSC_NAME)}`,
