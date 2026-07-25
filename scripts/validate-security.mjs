@@ -27,6 +27,11 @@ for (const [name, source] of workflows) {
   }
 }
 
+const ci = requiredWorkflow("ci.yml");
+assert(/release-build:/.test(ci), "CI must exercise unsigned release builds.");
+assert(/pnpm run dist:win:no-publish/.test(ci), "CI must build Windows artifacts without publishing.");
+assert(/pnpm run dist:mac:unsigned/.test(ci), "CI must build an unsigned macOS artifact.");
+
 const release = requiredWorkflow("release.yml");
 assert(/^permissions:\s*\n\s+contents:\s*read/m.test(release), "Release workflow must default to contents: read.");
 assert(!/--publish\s+always/.test(release), "Release builds must not publish directly.");

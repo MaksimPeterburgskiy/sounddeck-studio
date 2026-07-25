@@ -26,6 +26,7 @@ Useful commands:
 | `pnpm test` | Run the Vitest unit tests |
 | `pnpm run build` | Type-check (tsc) and bundle the renderer |
 | `pnpm run dist:win` | Build the Windows installer + portable exe into `release/` (downloads VB-CABLE on first run) |
+| `pnpm run dist:win:no-publish` | Same as `dist:win`, but never publishes (used by CI) |
 | `pnpm run dist:mac` | Build the signed/notarized macOS package and updater artifacts into `release/` |
 | `pnpm run dist:mac:unsigned` | Build an unsigned macOS smoke-test app artifact |
 
