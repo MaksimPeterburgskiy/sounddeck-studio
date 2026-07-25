@@ -113,6 +113,17 @@ assert(
   packageJson.scripts?.prestart === "pnpm run fetch:native-tools",
   "Development startup must fetch and verify project-managed native tools."
 );
+const macX64ArchFiles = packageJson.build?.mac?.x64ArchFiles || "";
+assert(
+  macX64ArchFiles.includes("Contents/Resources/native-tools/"),
+  "Universal macOS packaging must allow identical managed native tools."
+);
+for (const toolName of ["ffmpeg-x64", "ffmpeg-arm64", "yt-dlp"]) {
+  assert(
+    macX64ArchFiles.includes(toolName),
+    `Universal macOS packaging must allow identical managed tools (${toolName}).`
+  );
+}
 for (const dependency of ["ffmpeg-static", "youtube-dl-exec"]) {
   assert(!packageJson.dependencies?.[dependency], `${dependency} must not be a production dependency.`);
   assert(!packageJson.build?.asarUnpack?.some((entry) => entry.includes(dependency)), `${dependency} must not be unpacked.`);

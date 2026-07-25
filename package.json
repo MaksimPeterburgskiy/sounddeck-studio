@@ -62,7 +62,7 @@
       "notarize": true,
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
-      "x64ArchFiles": "**/node_modules/{cue-sdk,uiohook-napi}/prebuilds/**/*.node",
+      "x64ArchFiles": "{**/node_modules/{cue-sdk,uiohook-napi}/prebuilds/**/*.node,Contents/Resources/native-tools/{ffmpeg-x64,ffmpeg-arm64,yt-dlp}}",
       "target": [
         "pkg",
         "zip"
