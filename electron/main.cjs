@@ -14,9 +14,26 @@ const { createMacTrayTemplateImage, MAC_TRAY_ICON_FILENAME } = require("./trayIc
 const { createShutdownLifecycle, registerWindowShutdown } = require("./shutdownLifecycle.cjs");
 const { createUpdateInstallLifecycle } = require("./updateInstallLifecycle.cjs");
 const { getWindowsStartupState, hasStartupArg, startupLoginItemOptions, STARTUP_ARG, WINDOWS_STARTUP_NAME } = require("./startupSettings.cjs");
-const { sanitizeName, inferMime, allowedAudioExtensions, isHttpUrl, isInsideMediaRoot } = require("./mediaFiles.cjs");
+const {
+  sanitizeName,
+  inferMime,
+  allowedAudioExtensions,
+  safeAudioExtension,
+  storedAudioExtension,
+  isHttpUrl,
+  isInsideMediaRoot
+} = require("./mediaFiles.cjs");
+const {
+  rendererPolicy,
+  isTrustedIpcSender,
+  installNavigationGuards,
+  isAllowedExternalUrl
+} = require("./security.cjs");
 
 const isDev = !app.isPackaged;
+const builtIndex = path.join(__dirname, "../dist/index.html");
+const devServerUrl = process.env.VITE_DEV_SERVER_URL || "http://127.0.0.1:5173";
+let trustedRendererPolicy;
 if (isDev && process.env.SOUNDDECK_USER_DATA) app.setPath("userData", process.env.SOUNDDECK_USER_DATA);
 
 if (!app.requestSingleInstanceLock()) {
@@ -43,6 +60,7 @@ let pendingShowMainWindow = false;
 let corsairBindings = new Map();
 let hotkeyCaptureActive = false;
 let updateCheckTimer;
+const registerIpcHandler = ipcMain.handle.bind(ipcMain);
 
 const WINDOWS_LEGACY_STARTUP_NAMES = ["com.sounddeck.studio", "sounddeck-studio"];
 
@@ -52,6 +70,16 @@ function sendToMainWindow(channel, payload) {
   const webContents = window.webContents;
   if (!webContents || webContents.isDestroyed()) return;
   webContents.send(channel, payload);
+}
+
+function handleTrustedIpc(channel, handler) {
+  registerIpcHandler(channel, (event, ...args) => {
+    const trustedWebContents = mainWindow?.isDestroyed() ? null : mainWindow?.webContents;
+    if (!isTrustedIpcSender(event, trustedWebContents, trustedRendererPolicy)) {
+      throw new Error("Untrusted IPC sender");
+    }
+    return handler(event, ...args);
+  });
 }
 
 const hotkeyEngine = createHotkeyEngine({
@@ -563,23 +591,35 @@ function canReachUrl(url, timeoutMs = 350) {
   });
 }
 
-async function loadRenderer(window) {
-  const devUrl = process.env.VITE_DEV_SERVER_URL || "http://127.0.0.1:5173";
-  const builtIndex = path.join(__dirname, "../dist/index.html");
-
+async function selectRendererTarget() {
   if (isDev) {
-    if (await canReachUrl(devUrl)) {
-      await window.loadURL(devUrl);
-      return;
+    if (await canReachUrl(devServerUrl)) {
+      return {
+        type: "url",
+        value: devServerUrl,
+        policy: rendererPolicy({ isPackaged: false, builtIndex, devServerUrl })
+      };
     }
     if (await fileExists(builtIndex)) {
-      await window.loadFile(builtIndex);
-      return;
+      return {
+        type: "file",
+        value: builtIndex,
+        policy: rendererPolicy({ isPackaged: true, builtIndex, devServerUrl })
+      };
     }
-    throw new Error(`Renderer not available. Start Vite with "pnpm run dev" or build first with "pnpm run build". Tried ${devUrl} and ${builtIndex}.`);
+    throw new Error(`Renderer not available. Start Vite with "pnpm run dev" or build first with "pnpm run build". Tried ${devServerUrl} and ${builtIndex}.`);
   }
 
-  await window.loadFile(builtIndex);
+  return {
+    type: "file",
+    value: builtIndex,
+    policy: rendererPolicy({ isPackaged: true, builtIndex, devServerUrl })
+  };
+}
+
+async function loadRenderer(window, target) {
+  if (target.type === "url") await window.loadURL(target.value);
+  else await window.loadFile(target.value);
 }
 
 function trayIconPath() {
@@ -652,6 +692,8 @@ function createTray() {
 async function createWindow() {
   await ensureLibrary();
   if (shutdownLifecycle.isShuttingDown()) return;
+  const rendererTarget = await selectRendererTarget();
+  trustedRendererPolicy = rendererTarget.policy;
   Menu.setApplicationMenu(null);
   const startupSettings = await getStartupSettings();
   if (shutdownLifecycle.isShuttingDown()) return;
@@ -668,10 +710,12 @@ async function createWindow() {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false
+      sandbox: false,
+      navigateOnDragDrop: false
     }
   });
   mainWindow = window;
+  installNavigationGuards(window.webContents, rendererTarget.policy);
 
   if (isDev) {
     window.webContents.on("before-input-event", (event, input) => {
@@ -699,7 +743,7 @@ async function createWindow() {
     if (mainWindow === window) mainWindow = undefined;
   });
 
-  await loadRenderer(window);
+  await loadRenderer(window, rendererTarget);
   if (shutdownLifecycle.isShuttingDown()) return;
   if (pendingShowMainWindow) showMainWindow();
 }
@@ -737,10 +781,10 @@ function setupAutoUpdates() {
     // check-for-updates button stays responsive instead of hanging; quietly
     // report "up-to-date" so the UI doesn't surface an error for something
     // that simply isn't wired up here.
-    ipcMain.handle("update:check", () => {
+    handleTrustedIpc("update:check", () => {
       sendToMainWindow("update-status", { state: "up-to-date" });
     });
-    ipcMain.handle("update:install", () => undefined);
+    handleTrustedIpc("update:install", () => undefined);
   };
   // Portable Windows builds have no installer to hand updates to. Installed
   // Windows and signed/notarized macOS packages can use electron-updater.
@@ -767,11 +811,11 @@ function setupAutoUpdates() {
   autoUpdater.on("update-not-available", () => sendStatus({ state: "up-to-date" }));
   autoUpdater.on("download-progress", (progress) => sendStatus({ state: "downloading", percent: progress.percent }));
   autoUpdater.on("update-downloaded", (info) => sendStatus({ state: "ready", version: info.version }));
-  ipcMain.handle("update:install", () => {
+  handleTrustedIpc("update:install", () => {
     // Silent install with auto-relaunch: no installer pages, no "run app?" prompt.
     updateInstallLifecycle.requestInstall(() => autoUpdater.quitAndInstall(true, true));
   });
-  ipcMain.handle("update:check", async () => {
+  handleTrustedIpc("update:check", async () => {
     if (shutdownLifecycle.isShuttingDown()) return;
     try {
       const result = await autoUpdater.checkForUpdates();
@@ -822,24 +866,24 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
 
-ipcMain.handle("library:load", async () => {
+handleTrustedIpc("library:load", async () => {
   await ensureLibrary();
   return readJson(libraryFile());
 });
 
-ipcMain.handle("library:save", async (_event, library) => {
+handleTrustedIpc("library:save", async (_event, library) => {
   await ensureLibrary();
   await fs.writeFile(libraryFile(), JSON.stringify(library, null, 2));
   return { ok: true };
 });
 
-ipcMain.handle("library:reveal", async () => {
+handleTrustedIpc("library:reveal", async () => {
   await ensureLibrary();
   await shell.openPath(appRoot());
   return { ok: true };
 });
 
-ipcMain.handle("board:export", async (_event, board) => {
+handleTrustedIpc("board:export", async (_event, board) => {
   const target = await dialog.showSaveDialog(mainWindow, {
     title: `Export board "${board?.name || "board"}"`,
     defaultPath: `${sanitizeName(board?.name)}.sdboard`,
@@ -860,7 +904,7 @@ ipcMain.handle("board:export", async (_event, board) => {
   return { ok: true, filePath: target.filePath };
 });
 
-ipcMain.handle("board:import", async () => {
+handleTrustedIpc("board:import", async () => {
   const picked = await dialog.showOpenDialog(mainWindow, {
     title: "Import a board file",
     properties: ["openFile"],
@@ -881,13 +925,17 @@ ipcMain.handle("board:import", async () => {
   const restoredPaths = new Map();
   const sounds = [];
   for (const sound of payload.board.sounds) {
+    if (!sound || typeof sound !== "object") continue;
     const data = payload.media?.[sound.storedName];
     if (typeof data !== "string") continue;
     let mediaPath = restoredPaths.get(sound.storedName);
     if (!mediaPath) {
-      const ext = path.extname(sound.storedName) || sound.ext || "";
-      mediaPath = path.join(mediaRoot(), `${crypto.randomUUID()}${ext}`);
-      await fs.writeFile(mediaPath, Buffer.from(data, "base64"));
+      const ext = storedAudioExtension(sound.storedName, sound.ext);
+      if (!ext) continue;
+      const storedName = `${crypto.randomUUID()}${ext}`;
+      mediaPath = path.join(mediaRoot(), storedName);
+      if (!isInsideMediaRoot(mediaRoot(), mediaPath)) continue;
+      await fs.writeFile(mediaPath, Buffer.from(data, "base64"), { flag: "wx" });
       restoredPaths.set(sound.storedName, mediaPath);
     }
     sounds.push({ ...sound, id: crypto.randomUUID(), mediaPath, storedName: path.basename(mediaPath) });
@@ -895,11 +943,11 @@ ipcMain.handle("board:import", async () => {
   return { ok: true, board: { ...payload.board, sounds } };
 });
 
-ipcMain.handle("media:import", async (_event, filePaths) => {
+handleTrustedIpc("media:import", async (_event, filePaths) => {
   return importMediaPaths(Array.isArray(filePaths) ? filePaths : []);
 });
 
-ipcMain.handle("media:download", async (_event, urls) => {
+handleTrustedIpc("media:download", async (_event, urls) => {
   await ensureLibrary();
   const requestedUrls = Array.isArray(urls) ? urls.map((url) => String(url).trim()).filter(Boolean) : [];
   const allowed = allowedAudioExtensions();
@@ -938,7 +986,7 @@ ipcMain.handle("media:download", async (_event, urls) => {
   return results;
 });
 
-ipcMain.handle("media:delete", async (_event, mediaPath) => {
+handleTrustedIpc("media:delete", async (_event, mediaPath) => {
   const resolved = path.resolve(String(mediaPath || ""));
   if (!isInsideMediaRoot(mediaRoot(), resolved)) {
     return { ok: false, reason: "outside-media-root" };
@@ -951,7 +999,7 @@ ipcMain.handle("media:delete", async (_event, mediaPath) => {
   }
 });
 
-ipcMain.handle("media:read", async (_event, mediaPath) => {
+handleTrustedIpc("media:read", async (_event, mediaPath) => {
   const resolved = path.resolve(String(mediaPath || ""));
   if (!isInsideMediaRoot(mediaRoot(), resolved)) {
     throw new Error("outside-media-root");
@@ -960,27 +1008,32 @@ ipcMain.handle("media:read", async (_event, mediaPath) => {
   return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
 });
 
-ipcMain.handle("media:saveRecording", async (_event, payload) => {
+handleTrustedIpc("media:saveRecording", async (_event, payload) => {
   await ensureLibrary();
   const id = crypto.randomUUID();
-  const ext = payload.ext || ".webm";
-  const title = sanitizeName(payload.title || "Recording");
-  const dest = path.join(mediaRoot(), `${id}${ext}`);
-  await fs.writeFile(dest, Buffer.from(payload.bytes));
+  const ext = safeAudioExtension(payload?.ext || ".webm");
+  if (!ext) return { ok: false, reason: "unsupported-extension" };
+  const title = sanitizeName(payload?.title || "Recording");
+  const storedName = `${id}${ext}`;
+  const dest = path.join(mediaRoot(), storedName);
+  if (!isInsideMediaRoot(mediaRoot(), dest)) {
+    return { ok: false, reason: "outside-media-root" };
+  }
+  await fs.writeFile(dest, Buffer.from(payload?.bytes || []), { flag: "wx" });
   const stat = await fs.stat(dest);
   return {
     ok: true,
     id,
     title,
     mediaPath: dest,
-    storedName: `${id}${ext}`,
+    storedName,
     ext,
     mime: inferMime(ext),
     size: stat.size
   };
 });
 
-ipcMain.handle("media:crop", async (_event, payload) => {
+handleTrustedIpc("media:crop", async (_event, payload) => {
   if (shutdownLifecycle.isShuttingDown()) return { ok: false, reason: "app-is-shutting-down" };
   await ensureLibrary();
   if (shutdownLifecycle.isShuttingDown()) return { ok: false, reason: "app-is-shutting-down" };
@@ -1049,30 +1102,31 @@ ipcMain.handle("media:crop", async (_event, payload) => {
   }
 });
 
-ipcMain.handle("hotkeys:register", async (_event, bindings) => registerHotkeys(bindings));
+handleTrustedIpc("hotkeys:register", async (_event, bindings) => registerHotkeys(bindings));
 
-ipcMain.handle("hotkeys:capture", (_event, active) => {
+handleTrustedIpc("hotkeys:capture", (_event, active) => {
   hotkeyCaptureActive = Boolean(active);
   hotkeyEngine.setSuspended(hotkeyCaptureActive);
   return { ok: true };
 });
 
-ipcMain.handle("corsair:status", async () => corsair.getState());
+handleTrustedIpc("corsair:status", async () => corsair.getState());
 
-ipcMain.handle("app:openExternal", async (_event, url) => {
+handleTrustedIpc("app:openExternal", async (_event, url) => {
+  if (!isAllowedExternalUrl(url)) return { ok: false, reason: "unsupported-url" };
   await shell.openExternal(url);
   return { ok: true };
 });
 
-ipcMain.handle("app:getVersion", () => app.getVersion());
+handleTrustedIpc("app:getVersion", () => app.getVersion());
 
-ipcMain.handle("app:getPlatform", () => sounddeckPlatform());
+handleTrustedIpc("app:getPlatform", () => sounddeckPlatform());
 
-ipcMain.handle("app:getCapabilities", () => appCapabilities());
+handleTrustedIpc("app:getCapabilities", () => appCapabilities());
 
-ipcMain.handle("app:getStartupSettings", () => getStartupSettings());
+handleTrustedIpc("app:getStartupSettings", () => getStartupSettings());
 
-ipcMain.handle("app:setRunAtStartup", async (_event, enabled, options = {}) => {
+handleTrustedIpc("app:setRunAtStartup", async (_event, enabled, options = {}) => {
   if (!startupSettingsSupported()) return { ok: false, ...(await getStartupSettings()) };
   let rollbackStartupSettings = null;
   try {

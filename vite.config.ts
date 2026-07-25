@@ -22,6 +22,7 @@ export default defineConfig({
         "electron/hotkeys.cjs",
         "electron/mediaFiles.cjs",
         "electron/processTree.cjs",
+        "electron/security.cjs",
         "electron/shutdownLifecycle.cjs",
         "electron/updateInstallLifecycle.cjs"
       ],

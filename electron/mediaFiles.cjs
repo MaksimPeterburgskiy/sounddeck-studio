@@ -28,6 +28,18 @@ function allowedAudioExtensions() {
   return new Set([".wav", ".mp3", ".ogg", ".flac", ".m4a", ".aac", ".webm"]);
 }
 
+function safeAudioExtension(value) {
+  const extension = String(value || "").trim().toLowerCase();
+  if (!/^\.[a-z0-9]+$/.test(extension)) return "";
+  return allowedAudioExtensions().has(extension) ? extension : "";
+}
+
+function storedAudioExtension(storedName, fallbackExtension) {
+  const name = String(storedName || "");
+  if (!name || name.includes("/") || name.includes("\\")) return "";
+  return safeAudioExtension(path.extname(name) || fallbackExtension);
+}
+
 function isHttpUrl(value) {
   try {
     const parsed = new URL(value);
@@ -94,6 +106,8 @@ module.exports = {
   sanitizeName,
   inferMime,
   allowedAudioExtensions,
+  safeAudioExtension,
+  storedAudioExtension,
   isHttpUrl,
   isInsideMediaRoot
 };

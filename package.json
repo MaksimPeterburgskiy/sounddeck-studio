@@ -12,7 +12,9 @@
     "build": "tsc && vite build",
     "clean:release": "node scripts/clean-release.mjs",
     "dist": "pnpm run dist:win",
-    "dist:win": "pnpm run clean:release && node scripts/fetch-vbcable.mjs && node scripts/make-installer-art.mjs && pnpm run build && node scripts/verify-vbcable.mjs && electron-builder --win",
+    "dist:win:prepare": "pnpm run clean:release && node scripts/fetch-vbcable.mjs && node scripts/make-installer-art.mjs && pnpm run build && node scripts/verify-vbcable.mjs",
+    "dist:win": "pnpm run dist:win:prepare && electron-builder --win",
+    "dist:win:no-publish": "pnpm run dist:win:prepare && electron-builder --win --publish never",
     "dist:mac": "node scripts/dist-mac.mjs",
     "dist:mac:unsigned": "node scripts/dist-mac.mjs --unsigned",
     "fetch:yt-dlp:mac": "node scripts/fetch-ytdlp-mac.mjs",
@@ -145,7 +147,7 @@
     "youtube-dl-exec": "^3.1.9"
   },
   "devDependencies": {
-    "@types/node": "^25.9.3",
+    "@types/node": "^26.1.1",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.3",
@@ -153,11 +155,11 @@
     "concurrently": "^10.0.3",
     "electron": "^42.5.0",
     "electron-builder": "^26.15.3",
-    "lucide-react": "^1.24.0",
+    "lucide-react": "^1.25.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
-    "typescript": "^6.0.3",
-    "vite": "^8.1.4",
+    "typescript": "^7.0.2",
+    "vite": "^8.1.5",
     "vitest": "^4.1.10",
     "wait-on": "^9.0.10"
   }
