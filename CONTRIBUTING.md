@@ -22,6 +22,7 @@ Useful commands:
 
 | Command | What it does |
 | --- | --- |
+| `pnpm start` | Fetch verified native tools, then run the app in development (Vite + Electron) |
 | `pnpm test` | Run the Vitest unit tests |
 | `pnpm run build` | Type-check (tsc) and bundle the renderer |
 | `pnpm run dist:win` | Build the Windows installer + portable exe into `release/` (downloads VB-CABLE on first run) |

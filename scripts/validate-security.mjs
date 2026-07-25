@@ -99,6 +99,10 @@ await assertMissing(path.join(workflowsDir, "dependabot-auto-merge.yml"));
 
 const packageJson = JSON.parse(await readFile(path.join(repoRoot, "package.json"), "utf8"));
 assert(packageJson.build?.publish?.releaseType === "draft", "Electron Builder releases must remain drafts.");
+assert(
+  packageJson.scripts?.prestart === "pnpm run fetch:native-tools",
+  "Development startup must fetch and verify project-managed native tools."
+);
 for (const dependency of ["ffmpeg-static", "youtube-dl-exec"]) {
   assert(!packageJson.dependencies?.[dependency], `${dependency} must not be a production dependency.`);
   assert(!packageJson.build?.asarUnpack?.some((entry) => entry.includes(dependency)), `${dependency} must not be unpacked.`);
