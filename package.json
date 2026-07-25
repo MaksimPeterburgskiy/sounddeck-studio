@@ -14,6 +14,7 @@
     "clean:release": "node scripts/clean-release.mjs",
     "dist": "pnpm run dist:win",
     "dist:win": "node scripts/dist-win.mjs",
+    "dist:win:no-publish": "node scripts/dist-win.mjs",
     "dist:mac": "node scripts/dist-mac.mjs",
     "dist:mac:unsigned": "node scripts/dist-mac.mjs --unsigned",
     "fetch:native-tools": "node scripts/fetch-native-tools.mjs",
