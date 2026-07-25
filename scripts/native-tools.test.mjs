@@ -8,6 +8,7 @@ import test from "node:test";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
+import { canUseDevelopmentHostTools } from "./development-native-tools.mjs";
 import {
   hasNativeToolsManifestTarget,
   prepareNativeTools,
@@ -62,6 +63,21 @@ test("the fetch CLI honors offline mode from the environment", () => {
   );
 });
 
+test("the fetch CLI recognizes the development host-tool fallback", () => {
+  assert.deepEqual(
+    parseFetchNativeToolsOptions(["--allow-host-tools"], {
+      platform: "win32",
+      arch: "x64",
+      env: {}
+    }),
+    {
+      platform: "win32",
+      arch: "x64",
+      allowHostTools: true
+    }
+  );
+});
+
 test("native-tool manifest target support is explicit", () => {
   for (const [platform, arch] of [
     ["darwin", "x64"],
@@ -87,6 +103,101 @@ test("the fetch CLI skips development targets without a native-tool manifest", a
   ]);
   assert.match(stdout, /No project-managed native tools for linux-x64/);
   assert.equal(stderr, "");
+});
+
+test("development host-tool fallback accepts explicit executable overrides", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "sounddeck-native-host-"));
+  const ffmpeg = path.join(root, process.platform === "win32" ? "custom-ffmpeg.exe" : "custom-ffmpeg");
+  const ytDlp = path.join(root, process.platform === "win32" ? "custom-yt-dlp.exe" : "custom-yt-dlp");
+  try {
+    await writeFile(ffmpeg, "ffmpeg", { mode: 0o755 });
+    await writeFile(ytDlp, "yt-dlp", { mode: 0o755 });
+    assert.equal(await canUseDevelopmentHostTools({
+      platform: process.platform,
+      env: {
+        SOUNDDECK_FFMPEG_PATH: ffmpeg,
+        SOUNDDECK_YT_DLP_PATH: ytDlp
+      }
+    }), true);
+    assert.equal(await canUseDevelopmentHostTools({
+      platform: process.platform,
+      env: { SOUNDDECK_FFMPEG_PATH: ffmpeg }
+    }), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("development host-tool fallback accepts an empty cache plus tools on PATH", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "sounddeck-native-path-"));
+  const ffmpegName = "ffmpeg.exe";
+  const ytDlpName = "yt-dlp.exe";
+  try {
+    await writeFile(path.join(root, ffmpegName), "ffmpeg", { mode: 0o755 });
+    await writeFile(path.join(root, ytDlpName), "yt-dlp", { mode: 0o755 });
+    assert.equal(await canUseDevelopmentHostTools({
+      platform: "win32",
+      arch: "x64",
+      cacheRoot: path.join(root, "empty-cache"),
+      env: { PATH: root }
+    }), true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("development host-tool fallback validates an existing managed cache first", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "sounddeck-native-cache-check-"));
+  const pathRoot = path.join(root, "path");
+  const cacheRoot = path.join(root, "cache");
+  const ffmpegName = "ffmpeg.exe";
+  const ytDlpName = "yt-dlp.exe";
+  const target = "win32-x64";
+  const cachedName = "ffmpeg.exe";
+  try {
+    await mkdir(pathRoot, { recursive: true });
+    await mkdir(path.join(cacheRoot, target), { recursive: true });
+    await writeFile(path.join(pathRoot, ffmpegName), "ffmpeg", { mode: 0o755 });
+    await writeFile(path.join(pathRoot, ytDlpName), "yt-dlp", { mode: 0o755 });
+    await writeFile(path.join(cacheRoot, target, cachedName), "unverified cache");
+    assert.equal(await canUseDevelopmentHostTools({
+      platform: "win32",
+      arch: "x64",
+      cacheRoot,
+      env: { PATH: pathRoot }
+    }), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("the development prefetch skips verified host overrides while offline", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "sounddeck-native-cli-host-"));
+  const ffmpeg = path.join(root, "ffmpeg.exe");
+  const ytDlp = path.join(root, "yt-dlp.exe");
+  try {
+    await writeFile(ffmpeg, "ffmpeg", { mode: 0o755 });
+    await writeFile(ytDlp, "yt-dlp", { mode: 0o755 });
+    const { stdout, stderr } = await execFileAsync(process.execPath, [
+      fileURLToPath(new URL("./fetch-native-tools.mjs", import.meta.url)),
+      "--allow-host-tools",
+      "--platform",
+      "win32",
+      "--arch",
+      "x64"
+    ], {
+      env: {
+        ...process.env,
+        SOUNDDECK_FFMPEG_PATH: ffmpeg,
+        SOUNDDECK_YT_DLP_PATH: ytDlp,
+        SOUNDDECK_NATIVE_TOOLS_OFFLINE: "1"
+      }
+    });
+    assert.match(stdout, /already available; skipping managed downloads/);
+    assert.equal(stderr, "");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("environment-only CLI offline mode fails without network access", async () => {

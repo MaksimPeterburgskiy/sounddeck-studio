@@ -8,7 +8,7 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "electron": "electron .",
-    "prestart": "pnpm run fetch:native-tools",
+    "prestart": "pnpm run fetch:native-tools --allow-host-tools",
     "start": "pnpm run build && concurrently -k \"pnpm run dev\" \"wait-on tcp:5173 && electron .\"",
     "build": "tsc && vite build",
     "clean:release": "node scripts/clean-release.mjs",

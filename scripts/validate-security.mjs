@@ -110,8 +110,8 @@ await assertMissing(path.join(workflowsDir, "dependabot-auto-merge.yml"));
 const packageJson = JSON.parse(await readFile(path.join(repoRoot, "package.json"), "utf8"));
 assert(packageJson.build?.publish?.releaseType === "draft", "Electron Builder releases must remain drafts.");
 assert(
-  packageJson.scripts?.prestart === "pnpm run fetch:native-tools",
-  "Development startup must fetch and verify project-managed native tools."
+  packageJson.scripts?.prestart === "pnpm run fetch:native-tools --allow-host-tools",
+  "Development startup must fetch verified native tools unless host tools are available."
 );
 const macX64ArchFiles = packageJson.build?.mac?.x64ArchFiles || "";
 assert(
