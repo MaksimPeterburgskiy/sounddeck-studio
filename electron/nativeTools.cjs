@@ -16,11 +16,14 @@ function packagedNativeToolPath({ resourcesPath, platform, arch, tool }) {
     const fileName = tool === "ffmpeg" ? "ffmpeg.exe" : tool === "yt-dlp" ? "yt-dlp.exe" : "";
     if (fileName) return path.join(resourcesPath, "native-tools", fileName);
   }
-  throw new Error(`No packaged ${tool} is defined for ${platform}-${arch}.`);
+  return "";
 }
 
 function developmentNativeToolCandidates({ repoRoot, platform, arch, tool, env = process.env }) {
   const configured = tool === "ffmpeg" ? env.SOUNDDECK_FFMPEG_PATH : env.SOUNDDECK_YT_DLP_PATH;
+  const supported = (platform === "darwin" && (arch === "x64" || arch === "arm64")) ||
+    (platform === "win32" && arch === "x64");
+  if (!supported) return [configured].filter(Boolean);
   const target = platform === "darwin" ? "darwin" : `${platform}-${arch}`;
   const cacheName = platform === "darwin"
     ? (tool === "ffmpeg" ? `ffmpeg-${arch}` : "yt-dlp")

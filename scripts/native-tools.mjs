@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { chmod, copyFile, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { gunzipSync } from "node:zlib";
 
@@ -34,7 +35,10 @@ export async function prepareNativeTools({
   offline = process.env.SOUNDDECK_NATIVE_TOOLS_OFFLINE === "1",
   manifest,
   destinationRoot = cacheRoot,
-  fetchImpl = globalThis.fetch
+  fetchImpl = globalThis.fetch,
+  downloadAttempts = 3,
+  downloadTimeoutMs = 30_000,
+  downloadRetryDelayMs = 250
 } = {}) {
   rejectUnpinnedOverrides();
   manifest ||= await readNativeToolsManifest();
@@ -59,13 +63,12 @@ export async function prepareNativeTools({
       throw new Error(`${name} is missing from the verified native-tool cache (${destination}).`);
     }
 
-    const response = await fetchImpl(asset.url, {
-      redirect: "follow",
-      headers: { "User-Agent": "sounddeck-studio-build" }
+    const response = await fetchWithRetry(asset.url, {
+      fetchImpl,
+      attempts: downloadAttempts,
+      timeoutMs: downloadTimeoutMs,
+      retryDelayMs: downloadRetryDelayMs
     });
-    if (!response.ok) {
-      throw new Error(`Failed to download ${asset.url}: HTTP ${response.status} ${response.statusText}`);
-    }
     const downloaded = Buffer.from(await response.arrayBuffer());
     assertDigest(`${name} download`, downloaded, asset.downloadSha256);
     const executable = asset.compression === "gzip" ? gunzipSync(downloaded) : downloaded;
@@ -166,6 +169,38 @@ export async function verifyNativeToolHashes(directory, assets) {
       throw new Error(`${name} packaged checksum mismatch: expected ${asset.sha256}, got ${digest}.`);
     }
   }
+}
+
+async function fetchWithRetry(url, {
+  fetchImpl,
+  attempts,
+  timeoutMs,
+  retryDelayMs
+}) {
+  if (!Number.isInteger(attempts) || attempts < 1) {
+    throw new Error("Native-tool download attempts must be a positive integer.");
+  }
+
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      const response = await fetchImpl(url, {
+        redirect: "follow",
+        headers: { "User-Agent": "sounddeck-studio-build" },
+        signal: AbortSignal.timeout(timeoutMs)
+      });
+      if (response.ok) return response;
+
+      const error = new Error(`Failed to download ${url}: HTTP ${response.status} ${response.statusText}`);
+      error.retryable = response.status === 408 || response.status === 429 || response.status >= 500;
+      throw error;
+    } catch (error) {
+      lastError = error;
+      if (attempt === attempts || error.retryable === false) throw error;
+    }
+    if (retryDelayMs > 0) await delay(retryDelayMs * attempt);
+  }
+  throw lastError;
 }
 
 function assertDigest(label, content, expected) {

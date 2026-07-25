@@ -1,4 +1,6 @@
 import { createRequire } from "node:module";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -28,13 +30,13 @@ describe("packaged native tool discovery", () => {
     })).toBe(path.join("C:\\SoundDeck\\resources", "native-tools", "yt-dlp.exe"));
   });
 
-  it("fails closed for an architecture without a manifest entry", () => {
-    expect(() => packagedNativeToolPath({
+  it("returns no packaged candidate for an architecture without a manifest entry", () => {
+    expect(packagedNativeToolPath({
       resourcesPath: "/resources",
       platform: "win32",
       arch: "arm64",
       tool: "ffmpeg"
-    })).toThrow(/No packaged ffmpeg/);
+    })).toBe("");
   });
 });
 
@@ -48,5 +50,23 @@ describe("development native tool discovery", () => {
       env: { SOUNDDECK_FFMPEG_PATH: "/opt/local/bin/ffmpeg" }
     });
     expect(candidates).toEqual(["/opt/local/bin/ffmpeg"]);
+  });
+
+  it("does not invent Windows executable cache paths on unsupported platforms", () => {
+    const repoRoot = mkdtempSync(path.join(os.tmpdir(), "sounddeck-native-candidates-"));
+    const fakeLinuxCache = path.join(repoRoot, "tmp", "native-tools", "linux-x64", "ffmpeg.exe");
+    try {
+      mkdirSync(path.dirname(fakeLinuxCache), { recursive: true });
+      writeFileSync(fakeLinuxCache, "not a Linux executable");
+      expect(developmentNativeToolCandidates({
+        repoRoot,
+        platform: "linux",
+        arch: "x64",
+        tool: "ffmpeg",
+        env: {}
+      })).toEqual([]);
+    } finally {
+      rmSync(repoRoot, { recursive: true, force: true });
+    }
   });
 });

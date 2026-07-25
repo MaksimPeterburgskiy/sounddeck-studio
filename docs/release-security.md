@@ -21,7 +21,7 @@ To update a native tool:
 2. Download the exact assets independently. For yt-dlp, verify `SHA2-256SUMS.sig` with the upstream signing key fingerprint `AC0C BBE6 848D 6A87 3464 AF4E 57CF 6593 3B5A 7581`, then verify the selected entry in `SHA2-256SUMS`.
 3. Record the compressed asset digest and executable digest in `config/native-tools.json`.
 4. Run `pnpm test`, `pnpm run validate:security`, and a platform package build.
-5. On macOS, confirm the PKG verification hashes all three packaged executables, checks both ffmpeg architectures and the universal yt-dlp binary, and verifies code signing, Gatekeeper, and notarization. On Windows, confirm the unpacked package hashes and executes both tools.
+5. On macOS, confirm the pre-signing cache verifies all three executable hashes, then confirm the signed PKG checks both ffmpeg architectures, the universal yt-dlp binary, executable smoke tests, code signing, Gatekeeper, and notarization. On Windows, confirm the unpacked package hashes and executes both tools.
 
 Relevant upstream guidance:
 
@@ -37,7 +37,7 @@ The `Release` workflow:
 2. runs the security policy, renderer build, and tests;
 3. creates the version commit and tag, fast-forwards `prod`, and creates a draft release in one final credentialed step;
 4. fetches and verifies native tools before packaging, then forces offline cache verification during Electron Builder;
-5. builds without publishing, verifies package contents, and uploads artifacts to the draft in dedicated credentialed steps;
+5. builds without publishing, verifies Windows executable hashes and the signed macOS payload's provenance, architectures, smoke checks, and code signatures, then uploads artifacts to the draft in dedicated credentialed steps;
 6. writes release notes but leaves the release as a draft.
 
 Before publishing, a maintainer checks that the draft contains both Windows executables, `latest.yml`, the signed and notarized macOS PKG, the macOS ZIP and blockmap, and `latest-mac.yml`. The maintainer then uses GitHub's **Publish release** control. There is no workflow step that promotes the release automatically.

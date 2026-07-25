@@ -32,6 +32,11 @@ assert(/^permissions:\s*\n\s+contents:\s*read/m.test(release), "Release workflow
 assert(!/--publish\s+always/.test(release), "Release builds must not publish directly.");
 assert(/--publish\s+never/.test(release), "Release builds must explicitly disable builder publishing.");
 assert(/gh release create[\s\S]{0,200}--draft/.test(release), "Release workflow must create a draft release.");
+const releaseNotesJob = release.match(/\n  release-notes:\n([\s\S]+)$/)?.[1] || "";
+assert(
+  /permissions:\s*\n\s+contents:\s*write/.test(releaseNotesJob),
+  "Release notes need job-scoped contents: write to inspect the draft release."
+);
 assert(!/releaseType["']?\s*:\s*["']?release/.test(release), "Release workflow must not force public releases.");
 
 for (const block of release.matchAll(/-\s+name:\s+Install dependencies[\s\S]*?(?=\n\s+-\s+(?:name:|uses:)|$)/g)) {

@@ -11,6 +11,7 @@ import {
   validateManifest,
   verifyNativeToolHashes
 } from "./native-tools.mjs";
+import { parseFetchNativeToolsOptions } from "./fetch-native-tools-options.mjs";
 
 test("the committed manifest uses immutable URLs and valid SHA-256 values", async () => {
   const manifest = await readNativeToolsManifest();
@@ -36,6 +37,52 @@ test("legacy URL and version overrides fail closed", async () => {
   } finally {
     if (previous === undefined) delete process.env.YT_DLP_VERSION;
     else process.env.YT_DLP_VERSION = previous;
+  }
+});
+
+test("the fetch CLI honors offline mode from the environment", () => {
+  assert.deepEqual(
+    parseFetchNativeToolsOptions(["--platform", "win32", "--arch", "x64"], {
+      platform: "darwin",
+      arch: "arm64",
+      env: { SOUNDDECK_NATIVE_TOOLS_OFFLINE: "1" }
+    }),
+    {
+      platform: "win32",
+      arch: "x64",
+      offline: true
+    }
+  );
+});
+
+test("environment-only CLI offline mode fails without network access", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "sounddeck-native-test-"));
+  let attempts = 0;
+  try {
+    const options = parseFetchNativeToolsOptions([], {
+      platform: "win32",
+      arch: "x64",
+      env: { SOUNDDECK_NATIVE_TOOLS_OFFLINE: "1" }
+    });
+    await assert.rejects(
+      prepareNativeTools({
+        ...options,
+        destinationRoot: root,
+        manifest: fixtureManifest({
+          compression: "none",
+          downloadSha256: "0".repeat(64),
+          sha256: "0".repeat(64)
+        }),
+        fetchImpl: async () => {
+          attempts += 1;
+          return response(Buffer.from("network must not be used"));
+        }
+      }),
+      /missing from the verified native-tool cache/
+    );
+    assert.equal(attempts, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
   }
 });
 
@@ -110,6 +157,96 @@ test("online mode replaces a poisoned cache only after verifying the new asset",
       fetchImpl: async () => response(content)
     });
     assert.deepEqual(await readFile(result.files.tool), content);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("transient native-tool download failures are retried with a timeout signal", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "sounddeck-native-test-"));
+  const content = Buffer.from("expected executable");
+  const manifest = fixtureManifest({
+    compression: "none",
+    downloadSha256: sha256(content),
+    sha256: sha256(content)
+  });
+  let attempts = 0;
+  try {
+    const result = await prepareNativeTools({
+      platform: "win32",
+      arch: "x64",
+      destinationRoot: root,
+      manifest,
+      downloadRetryDelayMs: 0,
+      fetchImpl: async (_url, options) => {
+        attempts += 1;
+        assert.ok(options.signal instanceof AbortSignal);
+        if (attempts === 1) throw new Error("temporary CDN failure");
+        return response(content);
+      }
+    });
+    assert.equal(attempts, 2);
+    assert.deepEqual(await readFile(result.files.tool), content);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("non-retryable native-tool responses fail immediately", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "sounddeck-native-test-"));
+  let attempts = 0;
+  try {
+    await assert.rejects(
+      prepareNativeTools({
+        platform: "win32",
+        arch: "x64",
+        destinationRoot: root,
+        manifest: fixtureManifest({
+          compression: "none",
+          downloadSha256: "0".repeat(64),
+          sha256: "0".repeat(64)
+        }),
+        downloadRetryDelayMs: 0,
+        fetchImpl: async () => {
+          attempts += 1;
+          return { ok: false, status: 404, statusText: "Not Found" };
+        }
+      }),
+      /HTTP 404 Not Found/
+    );
+    assert.equal(attempts, 1);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("timed-out native-tool downloads stop after the configured attempts", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "sounddeck-native-test-"));
+  let attempts = 0;
+  try {
+    await assert.rejects(
+      prepareNativeTools({
+        platform: "win32",
+        arch: "x64",
+        destinationRoot: root,
+        manifest: fixtureManifest({
+          compression: "none",
+          downloadSha256: "0".repeat(64),
+          sha256: "0".repeat(64)
+        }),
+        downloadAttempts: 2,
+        downloadTimeoutMs: 10,
+        downloadRetryDelayMs: 0,
+        fetchImpl: async (_url, { signal }) => {
+          attempts += 1;
+          return new Promise((_resolve, reject) => {
+            signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+          });
+        }
+      }),
+      /timed out|timeout/i
+    );
+    assert.equal(attempts, 2);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

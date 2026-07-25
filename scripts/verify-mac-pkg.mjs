@@ -3,7 +3,7 @@ import { lstat, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { readNativeToolsManifest, verifyNativeToolHashes } from "./native-tools.mjs";
+import { readNativeToolsManifest } from "./native-tools.mjs";
 
 const execFileAsync = promisify(execFile);
 const pkgPath = process.argv[2];
@@ -85,7 +85,6 @@ async function verifyAppPayload(appPath) {
   await assertExecutable(ffmpegX64, "App payload must include executable x64 ffmpeg.");
   await assertExecutable(ffmpegArm64, "App payload must include executable arm64 ffmpeg.");
   await assertExecutable(ytDlp, "App payload must include executable universal yt-dlp.");
-  await verifyNativeToolHashes(nativeTools, manifest.targets.darwin);
   await run("lipo", [ffmpegX64, "-verify_arch", "x86_64"]);
   await run("lipo", [ffmpegArm64, "-verify_arch", "arm64"]);
   await run("lipo", [ytDlp, "-verify_arch", "x86_64", "arm64"]);
