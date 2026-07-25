@@ -22,11 +22,15 @@ export async function readNativeToolsManifest() {
 }
 
 export function targetName(platform, arch) {
-  if (platform === "darwin" && (arch === "x64" || arch === "arm64" || arch === "universal")) {
-    return "darwin";
+  if (!hasNativeToolsManifestTarget(platform, arch)) {
+    throw new Error(`No native-tool manifest is defined for ${platform}-${arch}.`);
   }
-  if (platform === "win32" && arch === "x64") return "win32-x64";
-  throw new Error(`No native-tool manifest is defined for ${platform}-${arch}.`);
+  return platform === "darwin" ? "darwin" : "win32-x64";
+}
+
+export function hasNativeToolsManifestTarget(platform, arch) {
+  return (platform === "darwin" && (arch === "x64" || arch === "arm64" || arch === "universal")) ||
+    (platform === "win32" && arch === "x64");
 }
 
 export async function prepareNativeTools({
@@ -63,13 +67,12 @@ export async function prepareNativeTools({
       throw new Error(`${name} is missing from the verified native-tool cache (${destination}).`);
     }
 
-    const response = await fetchWithRetry(asset.url, {
+    const downloaded = await downloadWithRetry(asset.url, {
       fetchImpl,
       attempts: downloadAttempts,
       timeoutMs: downloadTimeoutMs,
       retryDelayMs: downloadRetryDelayMs
     });
-    const downloaded = Buffer.from(await response.arrayBuffer());
     assertDigest(`${name} download`, downloaded, asset.downloadSha256);
     const executable = asset.compression === "gzip" ? gunzipSync(downloaded) : downloaded;
     assertDigest(name, executable, asset.sha256);
@@ -171,7 +174,7 @@ export async function verifyNativeToolHashes(directory, assets) {
   }
 }
 
-async function fetchWithRetry(url, {
+async function downloadWithRetry(url, {
   fetchImpl,
   attempts,
   timeoutMs,
@@ -189,11 +192,12 @@ async function fetchWithRetry(url, {
         headers: { "User-Agent": "sounddeck-studio-build" },
         signal: AbortSignal.timeout(timeoutMs)
       });
-      if (response.ok) return response;
-
-      const error = new Error(`Failed to download ${url}: HTTP ${response.status} ${response.statusText}`);
-      error.retryable = response.status === 408 || response.status === 429 || response.status >= 500;
-      throw error;
+      if (!response.ok) {
+        const error = new Error(`Failed to download ${url}: HTTP ${response.status} ${response.statusText}`);
+        error.retryable = response.status === 408 || response.status === 429 || response.status >= 500;
+        throw error;
+      }
+      return Buffer.from(await response.arrayBuffer());
     } catch (error) {
       lastError = error;
       if (attempt === attempts || error.retryable === false) throw error;

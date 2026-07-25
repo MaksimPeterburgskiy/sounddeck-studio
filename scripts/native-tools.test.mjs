@@ -1,17 +1,24 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
 import {
+  hasNativeToolsManifestTarget,
   prepareNativeTools,
   readNativeToolsManifest,
+  targetName,
   validateManifest,
   verifyNativeToolHashes
 } from "./native-tools.mjs";
 import { parseFetchNativeToolsOptions } from "./fetch-native-tools-options.mjs";
+
+const execFileAsync = promisify(execFile);
 
 test("the committed manifest uses immutable URLs and valid SHA-256 values", async () => {
   const manifest = await readNativeToolsManifest();
@@ -53,6 +60,33 @@ test("the fetch CLI honors offline mode from the environment", () => {
       offline: true
     }
   );
+});
+
+test("native-tool manifest target support is explicit", () => {
+  for (const [platform, arch] of [
+    ["darwin", "x64"],
+    ["darwin", "arm64"],
+    ["darwin", "universal"],
+    ["win32", "x64"]
+  ]) {
+    assert.equal(hasNativeToolsManifestTarget(platform, arch), true);
+  }
+  for (const [platform, arch] of [["linux", "x64"], ["win32", "arm64"]]) {
+    assert.equal(hasNativeToolsManifestTarget(platform, arch), false);
+  }
+  assert.throws(() => targetName("linux", "x64"), /No native-tool manifest is defined/);
+});
+
+test("the fetch CLI skips development targets without a native-tool manifest", async () => {
+  const { stdout, stderr } = await execFileAsync(process.execPath, [
+    fileURLToPath(new URL("./fetch-native-tools.mjs", import.meta.url)),
+    "--platform",
+    "linux",
+    "--arch",
+    "x64"
+  ]);
+  assert.match(stdout, /No project-managed native tools for linux-x64/);
+  assert.equal(stderr, "");
 });
 
 test("environment-only CLI offline mode fails without network access", async () => {
@@ -192,9 +226,45 @@ test("transient native-tool download failures are retried with a timeout signal"
   }
 });
 
+test("transient response-body failures are retried", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "sounddeck-native-test-"));
+  const content = Buffer.from("expected executable");
+  const manifest = fixtureManifest({
+    compression: "none",
+    downloadSha256: sha256(content),
+    sha256: sha256(content)
+  });
+  let attempts = 0;
+  try {
+    const result = await prepareNativeTools({
+      platform: "win32",
+      arch: "x64",
+      destinationRoot: root,
+      manifest,
+      downloadRetryDelayMs: 0,
+      fetchImpl: async () => {
+        attempts += 1;
+        if (attempts === 1) {
+          return response(content, {
+            arrayBuffer: async () => {
+              throw new TypeError("response body connection reset");
+            }
+          });
+        }
+        return response(content);
+      }
+    });
+    assert.equal(attempts, 2);
+    assert.deepEqual(await readFile(result.files.tool), content);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("non-retryable native-tool responses fail immediately", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "sounddeck-native-test-"));
   let attempts = 0;
+  let bodyReads = 0;
   try {
     await assert.rejects(
       prepareNativeTools({
@@ -209,12 +279,21 @@ test("non-retryable native-tool responses fail immediately", async () => {
         downloadRetryDelayMs: 0,
         fetchImpl: async () => {
           attempts += 1;
-          return { ok: false, status: 404, statusText: "Not Found" };
+          return {
+            ok: false,
+            status: 404,
+            statusText: "Not Found",
+            async arrayBuffer() {
+              bodyReads += 1;
+              return Buffer.alloc(0);
+            }
+          };
         }
       }),
       /HTTP 404 Not Found/
     );
     assert.equal(attempts, 1);
+    assert.equal(bodyReads, 0);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -239,12 +318,21 @@ test("timed-out native-tool downloads stop after the configured attempts", async
         downloadRetryDelayMs: 0,
         fetchImpl: async (_url, { signal }) => {
           attempts += 1;
-          return new Promise((_resolve, reject) => {
-            signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+          return response(Buffer.alloc(0), {
+            arrayBuffer: () => new Promise((_resolve, reject) => {
+              const keepAlive = setTimeout(
+                () => reject(new Error("abort signal did not fire")),
+                1_000
+              );
+              signal.addEventListener("abort", () => {
+                clearTimeout(keepAlive);
+                reject(signal.reason);
+              }, { once: true });
+            })
           });
         }
       }),
-      /timed out|timeout/i
+      { name: "TimeoutError" }
     );
     assert.equal(attempts, 2);
   } finally {
@@ -336,13 +424,14 @@ function sha256(content) {
   return createHash("sha256").update(content).digest("hex");
 }
 
-function response(content) {
+function response(content, overrides = {}) {
   return {
     ok: true,
     status: 200,
     statusText: "OK",
     async arrayBuffer() {
       return content;
-    }
+    },
+    ...overrides
   };
 }
