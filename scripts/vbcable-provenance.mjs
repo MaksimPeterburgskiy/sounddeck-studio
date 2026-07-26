@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { access, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import lockfile from "proper-lockfile";
 
 const execFileAsync = promisify(execFile);
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
@@ -10,6 +11,10 @@ const PROVENANCE_FILENAME = "PROVENANCE.json";
 
 export function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
+}
+
+export function canonicalizeManifestText(text) {
+  return text.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n");
 }
 
 export function validateManifest(value) {
@@ -63,7 +68,7 @@ export function validateManifest(value) {
 }
 
 export async function loadManifest(manifestPath) {
-  return validateManifest(JSON.parse(await readFile(manifestPath, "utf8")));
+  return validateManifest(JSON.parse(canonicalizeManifestText(await readFile(manifestPath, "utf8"))));
 }
 
 export async function verifyAuthenticode(filePath, setup) {
@@ -201,13 +206,32 @@ export async function prepareVbCable(options) {
   validateManifest(manifest);
 
   await mkdir(stageParent, { recursive: true });
-  await rm(targetDir, { recursive: true, force: true });
-  const stageDir = await mkdtemp(path.join(stageParent, ".vbcable-stage-"));
-  const archivePath = path.join(stageDir, `${manifest.package}.zip`);
-  const payloadDir = path.join(stageDir, "payload");
-  let installed = false;
-
+  const resolvedTarget = path.resolve(targetDir);
+  const lockKey = process.platform === "win32" ? resolvedTarget.toLowerCase() : resolvedTarget;
+  const lockDir = path.join(stageParent, `.vbcable-lock-${sha256(lockKey).slice(0, 16)}`);
+  let releaseLock;
   try {
+    releaseLock = await lockfile.lock(resolvedTarget, {
+      lockfilePath: lockDir,
+      realpath: false,
+      stale: 30_000,
+      update: 10_000
+    });
+  } catch (error) {
+    if (error?.code === "ELOCKED") {
+      throw new Error(`VB-CABLE preparation is already in progress for ${targetDir}.`);
+    }
+    throw error;
+  }
+
+  let stageDir;
+  try {
+    // Serialize removal and publication for this target. A concurrent loser must
+    // never delete the verified directory published by the lock owner.
+    await rm(targetDir, { recursive: true, force: true });
+    stageDir = await mkdtemp(path.join(stageParent, ".vbcable-stage-"));
+    const archivePath = path.join(stageDir, `${manifest.package}.zip`);
+    const payloadDir = path.join(stageDir, "payload");
     const response = await fetchImpl(manifest.url, { redirect: "follow" });
     if (!response.ok) throw new Error(`VB-CABLE download failed: HTTP ${response.status} ${response.statusText}`);
     const bytes = await readResponseWithLimit(response, manifest.maximumArchiveBytes);
@@ -238,12 +262,14 @@ export async function prepareVbCable(options) {
       { flag: "wx" }
     );
     await rename(payloadDir, targetDir);
-    installed = true;
     return { archiveSha256: actualArchiveSha256, targetDir };
   } finally {
-    await rm(stageDir, { recursive: true, force: true });
-    if (!installed) {
-      await rm(targetDir, { recursive: true, force: true });
+    try {
+      if (stageDir) {
+        await rm(stageDir, { recursive: true, force: true });
+      }
+    } finally {
+      await releaseLock();
     }
   }
 }

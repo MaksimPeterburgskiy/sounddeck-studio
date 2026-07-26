@@ -156,6 +156,7 @@
     "electron": "^42.5.0",
     "electron-builder": "^26.15.3",
     "lucide-react": "^1.25.0",
+    "proper-lockfile": "^4.1.2",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "typescript": "^7.0.2",

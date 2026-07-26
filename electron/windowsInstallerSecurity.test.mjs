@@ -1,9 +1,10 @@
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   assertPreparedPayload,
+  canonicalizeManifestText,
   loadManifest,
   prepareVbCable,
   sha256,
@@ -79,6 +80,20 @@ describe("VB-CABLE provenance", () => {
     );
     expect(() => validateManifest({ ...manifest, archiveSha256: "latest" })).toThrow(
       "Invalid VB-CABLE archive SHA-256"
+    );
+  });
+
+  it("accepts a UTF-8 BOM while preserving the canonical manifest hash", async () => {
+    const directory = await makeTemporaryDirectory();
+    const manifest = fakeManifest(Buffer.from("archive"), Buffer.from("reviewed helper"));
+    const manifestText = `${JSON.stringify(manifest, null, 2)}\n`;
+    const manifestWithBomPath = path.join(directory, "vbcable-provenance.json");
+
+    await writeFile(manifestWithBomPath, `\uFEFF${manifestText}`);
+
+    await expect(loadManifest(manifestWithBomPath)).resolves.toEqual(manifest);
+    expect(sha256(Buffer.from(canonicalizeManifestText(`\uFEFF${manifestText}`), "utf8"))).toBe(
+      sha256(Buffer.from(manifestText, "utf8"))
     );
   });
 
@@ -170,6 +185,94 @@ describe("VB-CABLE provenance", () => {
 
     await expect(readFile(path.join(targetDir, manifest.setup.file))).rejects.toMatchObject({ code: "ENOENT" });
   });
+
+  it("does not let a concurrent preparation remove the verified target", async () => {
+    const root = await makeTemporaryDirectory();
+    const targetDir = path.join(root, "vbcable");
+    const stageParent = path.join(root, "staging");
+    const archiveBytes = Buffer.from("reviewed archive");
+    const setupBytes = Buffer.from("reviewed helper");
+    const manifest = fakeManifest(archiveBytes, setupBytes);
+    let releaseExpansion;
+    const expansionStarted = new Promise((resolve) => {
+      releaseExpansion = resolve;
+    });
+    let continueExpansion;
+    const expansionBlocked = new Promise((resolve) => {
+      continueExpansion = resolve;
+    });
+    const fetchImpl = async () => ({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      arrayBuffer: async () => Uint8Array.from(archiveBytes).buffer
+    });
+    const expandArchive = async (_archivePath, destinationPath) => {
+      releaseExpansion();
+      await expansionBlocked;
+      await writeFile(path.join(destinationPath, manifest.setup.file), setupBytes);
+      await writeFile(path.join(destinationPath, "driver.cat"), "catalog");
+    };
+    const firstPreparation = prepareVbCable({
+      manifest,
+      targetDir,
+      stageParent,
+      fetchImpl,
+      expandArchive,
+      verifySignature: async () => {}
+    });
+
+    await expansionStarted;
+    await expect(
+      prepareVbCable({
+        manifest,
+        targetDir,
+        stageParent,
+        fetchImpl,
+        expandArchive: vi.fn(),
+        verifySignature: vi.fn()
+      })
+    ).rejects.toThrow("preparation is already in progress");
+
+    continueExpansion();
+    await expect(firstPreparation).resolves.toMatchObject({ targetDir });
+    expect(await readFile(path.join(targetDir, manifest.setup.file), "utf8")).toBe("reviewed helper");
+  });
+
+  it("recovers an abandoned preparation lock", async () => {
+    const root = await makeTemporaryDirectory();
+    const targetDir = path.join(root, "vbcable");
+    const stageParent = path.join(root, "staging");
+    const archiveBytes = Buffer.from("reviewed archive");
+    const setupBytes = Buffer.from("reviewed helper");
+    const manifest = fakeManifest(archiveBytes, setupBytes);
+    const resolvedTarget = path.resolve(targetDir);
+    const lockKey = process.platform === "win32" ? resolvedTarget.toLowerCase() : resolvedTarget;
+    const lockDir = path.join(stageParent, `.vbcable-lock-${sha256(lockKey).slice(0, 16)}`);
+    await mkdir(lockDir, { recursive: true });
+    const abandonedAt = new Date(Date.now() - 60_000);
+    await utimes(lockDir, abandonedAt, abandonedAt);
+
+    await expect(
+      prepareVbCable({
+        manifest,
+        targetDir,
+        stageParent,
+        fetchImpl: async () => ({
+          ok: true,
+          status: 200,
+          statusText: "OK",
+          arrayBuffer: async () => Uint8Array.from(archiveBytes).buffer
+        }),
+        expandArchive: async (_archivePath, destinationPath) => {
+          await writeFile(path.join(destinationPath, manifest.setup.file), setupBytes);
+          await writeFile(path.join(destinationPath, "driver.cat"), "catalog");
+        },
+        verifySignature: async () => {}
+      })
+    ).resolves.toMatchObject({ targetDir });
+    expect(await readFile(path.join(targetDir, manifest.setup.file), "utf8")).toBe("reviewed helper");
+  });
 });
 
 describe("Windows installer trust boundary", () => {
@@ -188,10 +291,11 @@ describe("Windows installer trust boundary", () => {
   it("extracts to private NSIS storage and rechecks trust immediately before execution", async () => {
     const installer = await readFile(path.join(repoRoot, "build", "installer.nsh"), "utf8");
     const parentLock = installer.indexOf('CreateFileW(w "$PLUGINSDIR"');
-    const parentProtection = installer.indexOf("advapi32::SetSecurityInfo");
+    const parentProtection = installer.indexOf("advapi32::SetSecurityInfo", parentLock);
     const protectedCreate = installer.indexOf("kernel32::CreateDirectoryW");
     const payloadExtraction = installer.indexOf('File /r /x "PROVENANCE.json"');
-    const helperExecution = installer.indexOf("ExecWait");
+    const helperCommand = 'ExecWait \'"$PLUGINSDIR\\vbcable\\payload\\VBCABLE_Setup_x64.exe" -i -h\'';
+    const helperExecution = installer.indexOf(helperCommand);
     const lastHandleClose = installer.lastIndexOf("kernel32::CloseHandle");
 
     expect(installer).toContain('SetOutPath "$PLUGINSDIR\\vbcable\\payload"');
@@ -211,20 +315,52 @@ describe("Windows installer trust boundary", () => {
     expect(protectedCreate).toBeGreaterThan(-1);
     expect(protectedCreate).toBeGreaterThan(parentProtection);
     expect(payloadExtraction).toBeGreaterThan(protectedCreate);
+    expect(helperExecution).toBeGreaterThan(payloadExtraction);
     expect(lastHandleClose).toBeGreaterThan(helperExecution);
     expect(installer).toContain('"$SYSDIR\\icacls.exe"');
     expect(installer).toContain('/setintegritylevel "(OI)(CI)H"');
-    expect(installer).toContain('ExecWait \'"$PLUGINSDIR\\vbcable\\payload\\VBCABLE_Setup_x64.exe" -i -h\'');
+    expect(installer).toContain(helperCommand);
     expect(installer).not.toContain("$INSTDIR\\resources\\vbcable");
-    expect(installer).toContain("${IfNot} ${isUpdated}");
+    expect(installer).not.toContain("!macro customInit");
+    expect(installer).not.toContain("SoundDeckDriverSetupComplete");
+    expect(installer).toContain(
+      'ReadRegStr $0 HKLM "SYSTEM\\CurrentControlSet\\Services\\VBAudioVACMME" "ImagePath"'
+    );
     expect(installer).toContain("Abort");
+  });
+
+  it("keeps silent driver failures noninteractive without recursively removing the app", async () => {
+    const installer = await readFile(path.join(repoRoot, "build", "installer.nsh"), "utf8");
+    const failureDialogs = installer.match(/^\s*MessageBox MB_ICONSTOP\|MB_OK .*$/gm) ?? [];
+    const failureStart = installer.indexOf("!macro AbortSoundDeckInstall");
+    const failureEnd = installer.indexOf("!macroend", failureStart);
+    const activeFailure = installer.slice(failureStart, failureEnd);
+    const failureCalls = installer.match(/^\s*!insertmacro AbortSoundDeckInstall\s*$/gm) ?? [];
+
+    expect(failureDialogs.length).toBeGreaterThanOrEqual(4);
+    expect(failureDialogs.every((dialog) => dialog.endsWith("/SD IDOK"))).toBe(true);
+    expect(failureStart).toBeGreaterThan(-1);
+    expect(activeFailure).toContain("kernel32::CloseHandle(p r7)");
+    expect(activeFailure).toContain("kernel32::CloseHandle(p r6)");
+    expect(activeFailure).toContain("kernel32::LocalFree(p r2)");
+    expect(activeFailure).toContain("${EnableX64FSRedirection}");
+    expect(activeFailure).toContain("SoundDeck Studio remains installed");
+    expect(activeFailure).toContain("SetErrorLevel 2");
+    expect(activeFailure).toContain("Abort");
+    expect(activeFailure).not.toContain("$INSTDIR");
+    expect(activeFailure).not.toContain("UNINSTALL_FILENAME");
+    expect(activeFailure).not.toContain("RMDir");
+    expect(failureCalls.length).toBeGreaterThan(0);
+    expect(installer).toContain("${ElseIf} $0 == 3010");
+    expect(installer).toContain("SetRebootFlag true");
+    expect(installer).toContain("SetErrorLevel 3010");
   });
 
   it("anchors runtime verification outside the adjacent manifest and system-loads Authenticode", async () => {
     const manifest = await loadManifest(manifestPath);
     const runtimeVerifier = await readFile(path.join(repoRoot, "build", "verify-vbcable.ps1"), "utf8");
     const manifestText = await readFile(manifestPath, "utf8");
-    const manifestSha256 = sha256(Buffer.from(manifestText.replace(/\r\n?/g, "\n"), "utf8"));
+    const manifestSha256 = sha256(Buffer.from(canonicalizeManifestText(manifestText), "utf8"));
 
     expect(runtimeVerifier).toContain("$manifest.files.PSObject.Properties");
     expect(runtimeVerifier).toContain("Get-ChildItem -LiteralPath $payloadDirectory -Force");
@@ -236,5 +372,6 @@ describe("Windows installer trust boundary", () => {
     expect(runtimeVerifier).toContain("TimeStamperCertificate");
     expect(runtimeVerifier).toContain("Microsoft.PowerShell.Security\\Get-AuthenticodeSignature");
     expect(runtimeVerifier).toContain('$env:PSModulePath = Join-Path $PSHOME "Modules"');
+    expect(runtimeVerifier).toContain("[System.IO.Path]::GetFileName($FilePath) -cne $manifest.setup.file");
   });
 });

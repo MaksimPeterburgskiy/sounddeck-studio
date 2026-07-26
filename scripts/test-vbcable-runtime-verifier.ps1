@@ -17,13 +17,15 @@ $originalModulePath = $env:PSModulePath
 function Invoke-ExpectedFailure {
   param(
     [Parameter(Mandatory = $true)]
-    [string] $Scenario
+    [string] $Scenario,
+
+    [string] $CandidateFile = "VBCABLE_Setup_x64.exe"
   )
 
   $failed = $false
   try {
     & $testVerifier `
-      -FilePath (Join-Path $testPayload "VBCABLE_Setup_x64.exe") `
+      -FilePath (Join-Path $testPayload $CandidateFile) `
       -ManifestPath $testManifest | Out-Null
   } catch {
     $failed = $true
@@ -54,6 +56,8 @@ Export-ModuleMember -Function Get-AuthenticodeSignature
     -FilePath (Join-Path $testPayload "VBCABLE_Setup_x64.exe") `
     -ManifestPath $testManifest | Out-Null
 
+  Invoke-ExpectedFailure -Scenario "an alternate execution target" -CandidateFile "readme.txt"
+
   $tamperedManifest = Get-Content -LiteralPath $testManifest -Raw | ConvertFrom-Json
   $tamperedManifest.setup.authenticodeSimpleName = "Unapproved Publisher"
   $tamperedManifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $testManifest -Encoding UTF8
@@ -71,4 +75,4 @@ Export-ModuleMember -Function Get-AuthenticodeSignature
   Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-Write-Output "VB-CABLE runtime verifier rejected module, manifest, inventory, and payload tampering."
+Write-Output "VB-CABLE runtime verifier rejected target, module, manifest, inventory, and payload tampering."

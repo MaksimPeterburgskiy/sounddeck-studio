@@ -39,6 +39,9 @@ if ($manifest.schemaVersion -ne 1 -or $manifest.package -cne "VBCABLE_Driver_Pac
 if ($manifest.setup.file -cne "VBCABLE_Setup_x64.exe") {
   throw "The VB-CABLE setup filename is not approved."
 }
+if ([System.IO.Path]::GetFileName($FilePath) -cne $manifest.setup.file) {
+  throw "The requested VB-CABLE setup helper does not match the approved manifest entry."
+}
 $payloadDirectory = Split-Path -Parent $FilePath
 $expectedFileNames = @()
 
