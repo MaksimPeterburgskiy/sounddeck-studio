@@ -28,6 +28,12 @@ function developmentNativeToolCandidates({ repoRoot, platform, arch, tool, env =
   const cacheName = platform === "darwin"
     ? (tool === "ffmpeg" ? `ffmpeg-${arch}` : "yt-dlp")
     : (tool === "ffmpeg" ? "ffmpeg.exe" : "yt-dlp.exe");
+  if (platform === "darwin") {
+    const staged = repoRoot
+      ? path.join(repoRoot, "tmp", "development-native-tools", target, cacheName)
+      : "";
+    return [configured, existsSync(staged) ? staged : ""].filter(Boolean);
+  }
   const cached = repoRoot ? path.join(repoRoot, "tmp", "native-tools", target, cacheName) : "";
   return [configured, existsSync(cached) ? cached : ""].filter(Boolean);
 }

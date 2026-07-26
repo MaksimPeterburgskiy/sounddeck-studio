@@ -52,6 +52,33 @@ describe("development native tool discovery", () => {
     expect(candidates).toEqual(["/opt/local/bin/ffmpeg"]);
   });
 
+  it("uses only disposable signed copies for managed macOS development tools", () => {
+    const repoRoot = mkdtempSync(path.join(os.tmpdir(), "sounddeck-native-candidates-"));
+    const verifiedCache = path.join(repoRoot, "tmp", "native-tools", "darwin", "ffmpeg-x64");
+    const signedCopy = path.join(
+      repoRoot,
+      "tmp",
+      "development-native-tools",
+      "darwin",
+      "ffmpeg-x64"
+    );
+    try {
+      mkdirSync(path.dirname(verifiedCache), { recursive: true });
+      mkdirSync(path.dirname(signedCopy), { recursive: true });
+      writeFileSync(verifiedCache, "verified but unsigned");
+      writeFileSync(signedCopy, "disposable signed copy");
+      expect(developmentNativeToolCandidates({
+        repoRoot,
+        platform: "darwin",
+        arch: "x64",
+        tool: "ffmpeg",
+        env: {}
+      })).toEqual([signedCopy]);
+    } finally {
+      rmSync(repoRoot, { recursive: true, force: true });
+    }
+  });
+
   it("does not invent Windows executable cache paths on unsupported platforms", () => {
     const repoRoot = mkdtempSync(path.join(os.tmpdir(), "sounddeck-native-candidates-"));
     const fakeLinuxCache = path.join(repoRoot, "tmp", "native-tools", "linux-x64", "ffmpeg.exe");

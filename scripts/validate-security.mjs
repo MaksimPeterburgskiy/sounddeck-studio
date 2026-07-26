@@ -104,14 +104,48 @@ assert(
   !/--method\s+(?:PATCH|PUT)[^\n]*git\/refs?\/heads\/main/.test(badgeWriteJob),
   "Badge write job must not update the main Git reference."
 );
+const existingBadgePrLookup = badgeWriteJob.indexOf("pulls?state=open&head=");
+const badgeNoChangeGuard = badgeWriteJob.indexOf('if [[ "$current_data" == "$BADGE_DATA" ]]');
+assert(
+  existingBadgePrLookup >= 0 && existingBadgePrLookup < badgeNoChangeGuard,
+  "Badge write job must find an existing pull request before its no-change exit."
+);
+assert(
+  /if \[\[ "\$current_data" == "\$BADGE_DATA" \]\]; then[\s\S]*?pulls\/\$existing_pr_number[\s\S]*?--raw-field state=closed[\s\S]*?exit 0/.test(badgeWriteJob),
+  "Badge write job must close a stale pull request before its no-change exit."
+);
 
 await assertMissing(path.join(workflowsDir, "dependabot-auto-merge.yml"));
 
 const packageJson = JSON.parse(await readFile(path.join(repoRoot, "package.json"), "utf8"));
 assert(packageJson.build?.publish?.releaseType === "draft", "Electron Builder releases must remain drafts.");
 assert(
+  packageJson.build?.nsis?.artifactName === "SoundDeck-Studio-Setup-${version}.${ext}",
+  "The Windows installer artifact name must match its updater metadata."
+);
+assert(
+  packageJson.build?.portable?.artifactName === "SoundDeck-Studio-${version}.${ext}",
+  "The Windows portable artifact name must match the release notes."
+);
+assert(
   packageJson.scripts?.prestart === "pnpm run fetch:native-tools --allow-host-tools",
   "Development startup must fetch verified native tools unless host tools are available."
+);
+const devCodesign = await readFile(
+  path.join(repoRoot, "scripts", "codesign-macos-dev-deps.mjs"),
+  "utf8"
+);
+assert(
+  !devCodesign.includes('join(repoRoot, "tmp", "native-tools"'),
+  "The macOS development codesign helper must not mutate the verified native-tool cache."
+);
+const nativeToolDiscovery = await readFile(
+  path.join(repoRoot, "electron", "nativeTools.cjs"),
+  "utf8"
+);
+assert(
+  nativeToolDiscovery.includes('"development-native-tools"'),
+  "macOS development must execute disposable signed native-tool copies."
 );
 const macX64ArchFiles = packageJson.build?.mac?.x64ArchFiles || "";
 assert(

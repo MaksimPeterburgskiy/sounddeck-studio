@@ -52,15 +52,21 @@ jobs:
           BADGE_BRANCH: automation/update-download-badge
         run: |
           current_data="$(gh api "repos/${{ github.repository }}/contents/docs/downloads-badge.json?ref=main" --jq '.content' | tr -d '\n')"
+          existing_pr_number="$(gh api "repos/${{ github.repository }}/pulls?state=open&head=${{ github.repository_owner }}:$BADGE_BRANCH&base=main" --jq '.[0].number // empty')"
           if [[ "$current_data" == "$BADGE_DATA" ]]; then
+            if [[ -n "$existing_pr_number" ]]; then
+              gh api --method PATCH "repos/${{ github.repository }}/pulls/$existing_pr_number" \
+                --raw-field state=closed \
+                >/dev/null
+              echo "Closed stale badge pull request #$existing_pr_number."
+            fi
             echo "Download badge is already up to date."
             exit 0
           fi
 
           base_sha="$(gh api "repos/${{ github.repository }}/git/ref/heads/main" --jq '.object.sha')"
-          existing_pr="$(gh api "repos/${{ github.repository }}/pulls?state=open&head=${{ github.repository_owner }}:$BADGE_BRANCH&base=main" --jq '.[0].html_url // empty')"
           if gh api "repos/${{ github.repository }}/git/ref/heads/$BADGE_BRANCH" >/dev/null 2>&1; then
-            if [[ -z "$existing_pr" ]]; then
+            if [[ -z "$existing_pr_number" ]]; then
               gh api --method PATCH "repos/${{ github.repository }}/git/refs/heads/$BADGE_BRANCH" \
                 --raw-field sha="$base_sha" \
                 --field force=true \
@@ -81,8 +87,8 @@ jobs:
             --raw-field branch="$BADGE_BRANCH" \
             >/dev/null
 
-          if [[ -n "$existing_pr" ]]; then
-            echo "Updated $existing_pr"
+          if [[ -n "$existing_pr_number" ]]; then
+            echo "Updated https://github.com/${{ github.repository }}/pull/$existing_pr_number"
           else
             gh api --method POST "repos/${{ github.repository }}/pulls" \
               --raw-field title="Update download badge" \

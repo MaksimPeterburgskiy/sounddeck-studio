@@ -105,7 +105,11 @@
       "isRelocatable": false,
       "scripts": null
     },
+    "portable": {
+      "artifactName": "SoundDeck-Studio-${version}.${ext}"
+    },
     "nsis": {
+      "artifactName": "SoundDeck-Studio-Setup-${version}.${ext}",
       "oneClick": false,
       "perMachine": true,
       "allowToChangeInstallationDirectory": true,
