@@ -37,24 +37,29 @@
   ${EndIf}
 !macroend
 
+; NSIS still honors /D when the directory-selection page is disabled. Force an
+; explicit override to name a dedicated application directory so the generated
+; uninstaller can never recursively remove a caller-supplied shared parent.
+!macro customInit
+  !insertmacro GetDParameter $R0
+  ${If} $R0 != ""
+    StrCpy $1 "$INSTDIR" 1 -1
+    ${If} $1 == "\"
+      StrCpy $INSTDIR "$INSTDIR" -1
+    ${EndIf}
+    ${GetFileName} "$INSTDIR" $1
+    ${If} $1 != "${APP_FILENAME}"
+      StrCpy $INSTDIR "$INSTDIR\${APP_FILENAME}"
+    ${EndIf}
+  ${EndIf}
+!macroend
+
 ; Capture this before electron-builder's install section removes an old
 ; version. ${isUpdated} only reflects the updater command-line flag and is
 ; false for a manually launched upgrade.
 ; Retained as an unexpanded reference while the active failure path avoids
 ; recursive application rollback. electron-builder does not call this macro.
 !macro unusedSoundDeckRollbackInit
-  ; NSIS still honors /D when the directory-selection page is disabled. Force
-  ; that override to name a dedicated application directory so uninstall and
-  ; rollback can never recursively remove a caller-supplied shared parent.
-  StrCpy $1 "$INSTDIR" 1 -1
-  ${If} $1 == "\"
-    StrCpy $INSTDIR "$INSTDIR" -1
-  ${EndIf}
-  ${GetFileName} "$INSTDIR" $1
-  ${If} $1 != "${APP_FILENAME}"
-    StrCpy $INSTDIR "$INSTDIR\${APP_FILENAME}"
-  ${EndIf}
-
   StrCpy $SoundDeckHadExistingInstall 0
   StrCpy $SoundDeckOwnsInstallDirectory 0
   StrCpy $SoundDeckInstallDirectoryHandle -1
@@ -490,7 +495,9 @@
         MessageBox MB_ICONSTOP|MB_OK "SoundDeck Studio was installed, but the verified VB-CABLE driver setup failed with exit code $0. Run setup again to retry." /SD IDOK
         !insertmacro AbortSoundDeckInstall
       ${Else}
-        DetailPrint "VB-CABLE setup finished successfully."
+        DetailPrint "VB-CABLE setup finished successfully and requires a restart."
+        SetRebootFlag true
+        SetErrorLevel 3010
       ${EndIf}
   ${EndIf}
   ${EnableX64FSRedirection}

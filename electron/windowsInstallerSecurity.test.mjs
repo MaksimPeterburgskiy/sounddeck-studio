@@ -288,6 +288,19 @@ describe("Windows installer trust boundary", () => {
     expect(extraResources.some((resource) => resource.from === "build/vbcable")).toBe(false);
   });
 
+  it("confines hidden /D overrides to an app-owned child directory", async () => {
+    const installer = await readFile(path.join(repoRoot, "build", "installer.nsh"), "utf8");
+    const customInitStart = installer.indexOf("!macro customInit");
+    const customInitEnd = installer.indexOf("!macroend", customInitStart);
+    const customInit = installer.slice(customInitStart, customInitEnd);
+
+    expect(customInitStart).toBeGreaterThan(-1);
+    expect(customInit).toContain("!insertmacro GetDParameter $R0");
+    expect(customInit).toContain('${If} $R0 != ""');
+    expect(customInit).toContain('${GetFileName} "$INSTDIR" $1');
+    expect(customInit).toContain('StrCpy $INSTDIR "$INSTDIR\\${APP_FILENAME}"');
+  });
+
   it("extracts to private NSIS storage and rechecks trust immediately before execution", async () => {
     const installer = await readFile(path.join(repoRoot, "build", "installer.nsh"), "utf8");
     const parentLock = installer.indexOf('CreateFileW(w "$PLUGINSDIR"');
@@ -321,7 +334,6 @@ describe("Windows installer trust boundary", () => {
     expect(installer).toContain('/setintegritylevel "(OI)(CI)H"');
     expect(installer).toContain(helperCommand);
     expect(installer).not.toContain("$INSTDIR\\resources\\vbcable");
-    expect(installer).not.toContain("!macro customInit");
     expect(installer).not.toContain("SoundDeckDriverSetupComplete");
     expect(installer).toContain(
       'ReadRegStr $0 HKLM "SYSTEM\\CurrentControlSet\\Services\\VBAudioVACMME" "ImagePath"'
@@ -352,8 +364,8 @@ describe("Windows installer trust boundary", () => {
     expect(activeFailure).not.toContain("RMDir");
     expect(failureCalls.length).toBeGreaterThan(0);
     expect(installer).toContain("${ElseIf} $0 == 3010");
-    expect(installer).toContain("SetRebootFlag true");
-    expect(installer).toContain("SetErrorLevel 3010");
+    expect(installer.match(/SetRebootFlag true/g)).toHaveLength(2);
+    expect(installer.match(/SetErrorLevel 3010/g)).toHaveLength(2);
   });
 
   it("anchors runtime verification outside the adjacent manifest and system-loads Authenticode", async () => {
