@@ -183,14 +183,13 @@ describe("VB-CABLE provenance", () => {
 });
 
 describe("Windows installer trust boundary", () => {
-  it("keeps VB-CABLE out of installed app resources and hides custom paths for per-machine installs", async () => {
+  it("keeps VB-CABLE out of installed app resources for per-machine installs", async () => {
     const packageJson = JSON.parse(await readFile(path.join(repoRoot, "package.json"), "utf8"));
     const extraResources = packageJson.build.win.extraResources;
 
     expect(packageJson.build.nsis).toMatchObject({
       oneClick: false,
-      perMachine: true,
-      allowToChangeInstallationDirectory: false
+      perMachine: true
     });
     expect(extraResources.some((resource) => resource.from === "build/vbcable")).toBe(false);
   });

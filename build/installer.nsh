@@ -15,23 +15,6 @@
   DeleteRegValue ${ROOT_KEY} "${RUN_KEY}" "sounddeck-studio"
 !macroend
 
-; NSIS still honors /D when the directory-selection page is disabled. Force an
-; explicit override to name a dedicated application directory so the generated
-; uninstaller can never recursively remove a caller-supplied shared parent.
-!macro customInit
-  !insertmacro GetDParameter $R0
-  ${If} $R0 != ""
-    StrCpy $1 "$INSTDIR" 1 -1
-    ${If} $1 == "\"
-      StrCpy $INSTDIR "$INSTDIR" -1
-    ${EndIf}
-    ${GetFileName} "$INSTDIR" $1
-    ${If} $1 != "${APP_FILENAME}"
-      StrCpy $INSTDIR "$INSTDIR\${APP_FILENAME}"
-    ${EndIf}
-  ${EndIf}
-!macroend
-
 ; customInstall runs after electron-builder has copied and registered the app.
 ; A missing driver is retried on every setup run, so preserve the application
 ; instead of invoking its path-based recursive uninstaller from elevated setup.
@@ -246,15 +229,14 @@
         DetailPrint "VB-CABLE setup could not be started."
         MessageBox MB_ICONSTOP|MB_OK "SoundDeck Studio was installed, but the verified VB-CABLE driver setup could not be started. Run setup again to retry." /SD IDOK
         !insertmacro AbortSoundDeckInstall
-      ${ElseIf} $0 == 3010
-        DetailPrint "VB-CABLE setup finished successfully and requires a restart."
-        SetRebootFlag true
-        SetErrorLevel 3010
       ${ElseIf} $0 != 0
+      ${AndIf} $0 != 3010
         DetailPrint "VB-CABLE setup failed with exit code $0."
         MessageBox MB_ICONSTOP|MB_OK "SoundDeck Studio was installed, but the verified VB-CABLE driver setup failed with exit code $0. Run setup again to retry." /SD IDOK
         !insertmacro AbortSoundDeckInstall
       ${Else}
+        ; The driver loads at boot, so a restart is needed even when the helper
+        ; exits 0. Report the standard soft-reboot code to silent callers.
         DetailPrint "VB-CABLE setup finished successfully and requires a restart."
         SetRebootFlag true
         SetErrorLevel 3010
