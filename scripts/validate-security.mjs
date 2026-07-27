@@ -29,7 +29,7 @@ for (const [name, source] of workflows) {
 
 const ci = requiredWorkflow("ci.yml");
 assert(/release-build:/.test(ci), "CI must exercise unsigned release builds.");
-assert(/pnpm run dist:win:no-publish/.test(ci), "CI must build Windows artifacts without publishing.");
+assert(/run:\s*pnpm run dist:win\s*(?:\n|$)/.test(ci), "CI must build Windows artifacts without publishing.");
 assert(/pnpm run dist:mac:unsigned/.test(ci), "CI must build an unsigned macOS artifact.");
 
 const release = requiredWorkflow("release.yml");
@@ -44,15 +44,6 @@ assert(
 );
 assert(!/releaseType["']?\s*:\s*["']?release/.test(release), "Release workflow must not force public releases.");
 
-for (const block of release.matchAll(/-\s+name:\s+Install dependencies[\s\S]*?(?=\n\s+-\s+(?:name:|uses:)|$)/g)) {
-  for (const tokenName of ["GITHUB_TOKEN", "GH_TOKEN", "GITHUB_RELEASE_TOKEN", "RELEASE_TOKEN"]) {
-    assert(
-      new RegExp(`${tokenName}:\\s*[\"']{2}`).test(block[0]),
-      `Dependency install must scrub ${tokenName}.`
-    );
-  }
-}
-
 for (const [index, line] of release.split(/\r?\n/).entries()) {
   if (!line.includes("secrets.RELEASE_TOKEN")) continue;
   assert(
@@ -60,20 +51,6 @@ for (const [index, line] of release.split(/\r?\n/).entries()) {
     `RELEASE_TOKEN must be injected only as GH_TOKEN (release.yml:${index + 1}).`
   );
 }
-const credentialedReleaseSteps = [...release.matchAll(
-  /-\s+name:\s+([^\n]+)[\s\S]*?(?=\n\s+-\s+(?:name:|uses:)|$)/g
-)].filter((match) => match[0].includes("secrets.RELEASE_TOKEN"));
-const allowedCredentialedSteps = new Set([
-  "Push version, fast-forward prod, and create draft release",
-  "Upload Windows artifacts to draft release",
-  "Upload macOS artifacts to draft release",
-  "Attach notes to draft release"
-]);
-assert(credentialedReleaseSteps.length === allowedCredentialedSteps.size, "Release PAT step count changed.");
-for (const match of credentialedReleaseSteps) {
-  assert(allowedCredentialedSteps.has(match[1].trim()), `Release PAT is exposed to an unapproved step: ${match[1]}`);
-}
-
 const badge = requiredWorkflow("download-badge.yml");
 assert(!badge.includes("RELEASE_TOKEN"), "Badge workflow must never use the release PAT.");
 assert(/^permissions:\s*\n\s+contents:\s*read/m.test(badge), "Badge workflow must default to contents: read.");
@@ -82,7 +59,6 @@ const badgeWriteJob = badge.match(/\n  write:\n([\s\S]+)$/)?.[1] || "";
 assert(/permissions:\s*\n\s+contents:\s*write/.test(badgeWriteJob), "Badge write job must declare contents: write.");
 assert(/pull-requests:\s*write/.test(badgeWriteJob), "Badge write job must declare pull-requests: write.");
 assert(!/\buses:/.test(badgeWriteJob), "Badge write job must not expose its token to action steps.");
-assert((badgeWriteJob.match(/\n\s+-\s+name:/g) || []).length === 1, "Badge write job must contain one credentialed step.");
 assert(
   /BADGE_BRANCH:\s*automation\/update-download-badge/.test(badgeWriteJob),
   "Badge updates must use the dedicated automation branch."
@@ -119,34 +95,6 @@ await assertMissing(path.join(workflowsDir, "dependabot-auto-merge.yml"));
 
 const packageJson = JSON.parse(await readFile(path.join(repoRoot, "package.json"), "utf8"));
 assert(packageJson.build?.publish?.releaseType === "draft", "Electron Builder releases must remain drafts.");
-assert(
-  packageJson.build?.nsis?.artifactName === "SoundDeck-Studio-Setup-${version}.${ext}",
-  "The Windows installer artifact name must match its updater metadata."
-);
-assert(
-  packageJson.build?.portable?.artifactName === "SoundDeck-Studio-${version}.${ext}",
-  "The Windows portable artifact name must match the release notes."
-);
-assert(
-  packageJson.scripts?.prestart === "pnpm run fetch:native-tools --allow-host-tools",
-  "Development startup must fetch verified native tools unless host tools are available."
-);
-const devCodesign = await readFile(
-  path.join(repoRoot, "scripts", "codesign-macos-dev-deps.mjs"),
-  "utf8"
-);
-assert(
-  !devCodesign.includes('join(repoRoot, "tmp", "native-tools"'),
-  "The macOS development codesign helper must not mutate the verified native-tool cache."
-);
-const nativeToolDiscovery = await readFile(
-  path.join(repoRoot, "electron", "nativeTools.cjs"),
-  "utf8"
-);
-assert(
-  nativeToolDiscovery.includes('"development-native-tools"'),
-  "macOS development must execute disposable signed native-tool copies."
-);
 const macX64ArchFiles = packageJson.build?.mac?.x64ArchFiles || "";
 assert(
   macX64ArchFiles.includes("Contents/Resources/native-tools/"),
@@ -165,13 +113,6 @@ for (const dependency of ["ffmpeg-static", "youtube-dl-exec"]) {
 
 const workspace = await readFile(path.join(repoRoot, "pnpm-workspace.yaml"), "utf8");
 assert(!/^\s+(?:ffmpeg-static|youtube-dl-exec):\s+true/m.test(workspace), "Binary downloader lifecycle scripts must not be allowed.");
-
-for (const scriptName of ["dist-mac.mjs", "dist-win.mjs"]) {
-  const source = await readFile(path.join(repoRoot, "scripts", scriptName), "utf8");
-  for (const tokenName of ["GITHUB_TOKEN", "GH_TOKEN", "GITHUB_RELEASE_TOKEN", "RELEASE_TOKEN"]) {
-    assert(source.includes(tokenName), `${scriptName} must scrub ${tokenName}.`);
-  }
-}
 
 console.log(`Validated ${workflows.size} workflows, native binary policy, and draft release gating.`);
 

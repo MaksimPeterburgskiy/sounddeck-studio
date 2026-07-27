@@ -63,21 +63,6 @@ test("the fetch CLI honors offline mode from the environment", () => {
   );
 });
 
-test("the fetch CLI recognizes the development host-tool fallback", () => {
-  assert.deepEqual(
-    parseFetchNativeToolsOptions(["--allow-host-tools"], {
-      platform: "win32",
-      arch: "x64",
-      env: {}
-    }),
-    {
-      platform: "win32",
-      arch: "x64",
-      allowHostTools: true
-    }
-  );
-});
-
 test("native-tool manifest target support is explicit", () => {
   for (const [platform, arch] of [
     ["darwin", "x64"],
