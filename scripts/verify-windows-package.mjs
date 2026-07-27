@@ -2,18 +2,13 @@ import { access, readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { readNativeToolsManifest, verifyNativeToolHashes } from "./native-tools.mjs";
+import { verifyNativeToolHashes, verifyPackagedProvenance } from "./native-tools.mjs";
 
 const execFileAsync = promisify(execFile);
 const appOutDir = process.argv[2] || path.join("release", "win-unpacked");
 const releaseDir = path.dirname(appOutDir);
 const toolsDir = path.join(appOutDir, "resources", "native-tools");
-const manifest = await readNativeToolsManifest();
-const assets = manifest.targets["win32-x64"];
-const provenance = JSON.parse(await readFile(path.join(toolsDir, "PROVENANCE.json"), "utf8"));
-if (provenance.target !== "win32-x64" || JSON.stringify(provenance.assets) !== JSON.stringify(assets)) {
-  throw new Error("Packaged native-tool provenance does not match config/native-tools.json.");
-}
+const assets = await verifyPackagedProvenance(toolsDir, "win32-x64");
 
 await verifyNativeToolHashes(toolsDir, assets);
 for (const [name, asset] of Object.entries(assets)) {

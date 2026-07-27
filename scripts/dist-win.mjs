@@ -1,5 +1,4 @@
-import { spawn } from "node:child_process";
-import { resolveSpawnCommand } from "./spawn-command.mjs";
+import { runStep } from "./spawn-command.mjs";
 
 if (process.platform !== "win32") {
   throw new Error("Windows packaging requires Windows.");
@@ -27,22 +26,5 @@ const steps = [
 ];
 
 for (const [command, args, overrides = {}] of steps) {
-  await run(command, args, overrides);
-}
-
-function run(command, args, overrides) {
-  return new Promise((resolve, reject) => {
-    const resolved = resolveSpawnCommand(command, args);
-    const child = spawn(resolved.command, resolved.args, {
-      cwd: process.cwd(),
-      env: { ...env, ...overrides },
-      stdio: "inherit",
-      windowsHide: true
-    });
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`${command} ${args.join(" ")} exited with code ${code}`));
-    });
-  });
+  await runStep(command, args, { ...env, ...overrides });
 }

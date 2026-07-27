@@ -40,7 +40,8 @@ export async function canUseDevelopmentHostTools({
 }
 
 async function commandOnPath({ command, platform, env }) {
-  const pathValue = environmentValue(env, "PATH");
+  // process.env is already case-insensitive on Windows, so PATH covers Path.
+  const pathValue = env.PATH || "";
   if (!pathValue) return false;
   const delimiter = platform === "win32" ? ";" : ":";
   for (const directory of pathValue.split(delimiter)) {
@@ -68,9 +69,4 @@ async function exists(filePath) {
   } catch {
     return false;
   }
-}
-
-function environmentValue(env, name) {
-  const entry = Object.entries(env).find(([key]) => key.toUpperCase() === name);
-  return entry?.[1] || "";
 }

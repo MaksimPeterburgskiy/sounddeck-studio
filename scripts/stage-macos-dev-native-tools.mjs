@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { chmod, copyFile, mkdir, readdir, rename, rm, stat } from "node:fs/promises";
+import { chmod, copyFile, mkdir, rename, rm } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
@@ -9,6 +9,10 @@ const execFileAsync = promisify(execFile);
 const repoRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const defaultDestinationRoot = path.join(repoRoot, "tmp", "development-native-tools");
 
+// Signing rewrites each binary, so development copies are staged under a unique
+// directory and swapped in atomically — the verified cache is never mutated.
+// A hard kill can leak one staging directory under gitignored tmp/; that is
+// cheaper to tolerate than to collect safely across concurrent runs.
 export async function stageMacosDevelopmentNativeTools({
   prepared,
   destinationRoot = defaultDestinationRoot,
@@ -19,9 +23,8 @@ export async function stageMacosDevelopmentNativeTools({
   }
 
   const targetDir = path.join(destinationRoot, "darwin");
-  const stagingDir = path.join(destinationRoot, `.darwin-${process.pid}-${randomUUID()}`);
+  const stagingDir = path.join(destinationRoot, `.darwin-${randomUUID()}`);
   const staged = {};
-  await pruneAbandonedStagingDirectories(destinationRoot);
   await mkdir(stagingDir, { recursive: true });
 
   try {
@@ -46,44 +49,9 @@ export async function clearMacosDevelopmentNativeTools(
   destinationRoot = defaultDestinationRoot
 ) {
   await rm(path.join(destinationRoot, "darwin"), { recursive: true, force: true });
-  await pruneAbandonedStagingDirectories(destinationRoot);
 }
 
 async function signAndVerify(filePath) {
   await execFileAsync("codesign", ["--force", "--sign", "-", filePath]);
   await execFileAsync("codesign", ["--verify", "--strict", filePath]);
-}
-
-async function pruneAbandonedStagingDirectories(destinationRoot) {
-  const entries = await readdir(destinationRoot, { withFileTypes: true }).catch((error) => {
-    if (error.code === "ENOENT") return [];
-    throw error;
-  });
-  const oldestActiveStagingMs = Date.now() - 24 * 60 * 60 * 1_000;
-
-  await Promise.all(entries.map(async (entry) => {
-    const match = /^\.darwin-(\d+)-/.exec(entry.name);
-    if (!entry.isDirectory() || !match) return;
-
-    const directory = path.join(destinationRoot, entry.name);
-    const processId = Number(match[1]);
-    const directoryStat = await stat(directory).catch(() => null);
-    if (
-      processId !== process.pid &&
-      isProcessRunning(processId) &&
-      directoryStat?.mtimeMs >= oldestActiveStagingMs
-    ) {
-      return;
-    }
-    await rm(directory, { recursive: true, force: true });
-  }));
-}
-
-function isProcessRunning(processId) {
-  try {
-    process.kill(processId, 0);
-    return true;
-  } catch (error) {
-    return error.code !== "ESRCH";
-  }
 }

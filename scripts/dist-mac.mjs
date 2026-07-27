@@ -1,7 +1,7 @@
-import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { runStep } from "./spawn-command.mjs";
 
 const args = new Set(process.argv.slice(2));
 const unsigned = args.has("--unsigned");
@@ -75,8 +75,8 @@ if (unsigned) {
   console.log(`Using keychain notarization profile "${notarizationEnv.APPLE_KEYCHAIN_PROFILE}".`);
 }
 
-for (const [command, stepArgs, envOverrides] of steps) {
-  await run(command, stepArgs, envOverrides);
+for (const [command, stepArgs, envOverrides = {}] of steps) {
+  await runStep(command, stepArgs, { ...env, ...envOverrides });
 }
 
 function readEnvFile(filePath) {
@@ -168,19 +168,4 @@ function selectNotarizationEnv(values, skip) {
     "Set APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, and APPLE_TEAM_ID,",
     "or set APPLE_KEYCHAIN_PROFILE in .env.macos.local."
   ].join(" "));
-}
-
-function run(command, stepArgs, envOverrides = {}) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, stepArgs, {
-      cwd: process.cwd(),
-      env: { ...env, ...envOverrides },
-      stdio: "inherit"
-    });
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`${command} ${stepArgs.join(" ")} exited with code ${code}`));
-    });
-  });
 }

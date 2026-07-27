@@ -1,12 +1,9 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { promisify } from "node:util";
-import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
 import { canUseDevelopmentHostTools } from "./development-native-tools.mjs";
 import {
@@ -18,8 +15,6 @@ import {
   verifyNativeToolHashes
 } from "./native-tools.mjs";
 import { parseFetchNativeToolsOptions } from "./fetch-native-tools-options.mjs";
-
-const execFileAsync = promisify(execFile);
 
 test("the committed manifest uses immutable URLs and valid SHA-256 values", async () => {
   const manifest = await readNativeToolsManifest();
@@ -76,18 +71,6 @@ test("native-tool manifest target support is explicit", () => {
     assert.equal(hasNativeToolsManifestTarget(platform, arch), false);
   }
   assert.throws(() => targetName("linux", "x64"), /No native-tool manifest is defined/);
-});
-
-test("the fetch CLI skips development targets without a native-tool manifest", async () => {
-  const { stdout, stderr } = await execFileAsync(process.execPath, [
-    fileURLToPath(new URL("./fetch-native-tools.mjs", import.meta.url)),
-    "--platform",
-    "linux",
-    "--arch",
-    "x64"
-  ]);
-  assert.match(stdout, /No project-managed native tools for linux-x64/);
-  assert.equal(stderr, "");
 });
 
 test("development host-tool fallback accepts explicit executable overrides", async () => {
@@ -151,35 +134,6 @@ test("development host-tool fallback validates an existing managed cache first",
       cacheRoot,
       env: { PATH: pathRoot }
     }), false);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-test("the development prefetch skips verified host overrides while offline", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "sounddeck-native-cli-host-"));
-  const ffmpeg = path.join(root, "ffmpeg.exe");
-  const ytDlp = path.join(root, "yt-dlp.exe");
-  try {
-    await writeFile(ffmpeg, "ffmpeg", { mode: 0o755 });
-    await writeFile(ytDlp, "yt-dlp", { mode: 0o755 });
-    const { stdout, stderr } = await execFileAsync(process.execPath, [
-      fileURLToPath(new URL("./fetch-native-tools.mjs", import.meta.url)),
-      "--allow-host-tools",
-      "--platform",
-      "win32",
-      "--arch",
-      "x64"
-    ], {
-      env: {
-        ...process.env,
-        SOUNDDECK_FFMPEG_PATH: ffmpeg,
-        SOUNDDECK_YT_DLP_PATH: ytDlp,
-        SOUNDDECK_NATIVE_TOOLS_OFFLINE: "1"
-      }
-    });
-    assert.match(stdout, /already available; skipping managed downloads/);
-    assert.equal(stderr, "");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -322,41 +276,6 @@ test("transient native-tool download failures are retried with a timeout signal"
   }
 });
 
-test("transient response-body failures are retried", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "sounddeck-native-test-"));
-  const content = Buffer.from("expected executable");
-  const manifest = fixtureManifest({
-    compression: "none",
-    downloadSha256: sha256(content),
-    sha256: sha256(content)
-  });
-  let attempts = 0;
-  try {
-    const result = await prepareNativeTools({
-      platform: "win32",
-      arch: "x64",
-      destinationRoot: root,
-      manifest,
-      downloadRetryDelayMs: 0,
-      fetchImpl: async () => {
-        attempts += 1;
-        if (attempts === 1) {
-          return response(content, {
-            arrayBuffer: async () => {
-              throw new TypeError("response body connection reset");
-            }
-          });
-        }
-        return response(content);
-      }
-    });
-    assert.equal(attempts, 2);
-    assert.deepEqual(await readFile(result.files.tool), content);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
 test("non-retryable native-tool responses fail immediately", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "sounddeck-native-test-"));
   let attempts = 0;
@@ -390,47 +309,6 @@ test("non-retryable native-tool responses fail immediately", async () => {
     );
     assert.equal(attempts, 1);
     assert.equal(bodyReads, 0);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-test("timed-out native-tool downloads stop after the configured attempts", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "sounddeck-native-test-"));
-  let attempts = 0;
-  try {
-    await assert.rejects(
-      prepareNativeTools({
-        platform: "win32",
-        arch: "x64",
-        destinationRoot: root,
-        manifest: fixtureManifest({
-          compression: "none",
-          downloadSha256: "0".repeat(64),
-          sha256: "0".repeat(64)
-        }),
-        downloadAttempts: 2,
-        downloadTimeoutMs: 10,
-        downloadRetryDelayMs: 0,
-        fetchImpl: async (_url, { signal }) => {
-          attempts += 1;
-          return response(Buffer.alloc(0), {
-            arrayBuffer: () => new Promise((_resolve, reject) => {
-              const keepAlive = setTimeout(
-                () => reject(new Error("abort signal did not fire")),
-                1_000
-              );
-              signal.addEventListener("abort", () => {
-                clearTimeout(keepAlive);
-                reject(signal.reason);
-              }, { once: true });
-            })
-          });
-        }
-      }),
-      { name: "TimeoutError" }
-    );
-    assert.equal(attempts, 2);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

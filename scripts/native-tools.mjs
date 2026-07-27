@@ -164,6 +164,18 @@ export async function sha256File(filePath) {
   return createHash("sha256").update(await readFile(filePath)).digest("hex");
 }
 
+// Confirms a packaged bundle's PROVENANCE.json still describes the assets the
+// manifest pins, and returns those assets for further per-platform checks.
+export async function verifyPackagedProvenance(directory, target) {
+  const manifest = await readNativeToolsManifest();
+  const assets = manifest.targets[target];
+  const provenance = JSON.parse(await readFile(path.join(directory, "PROVENANCE.json"), "utf8"));
+  if (provenance.target !== target || JSON.stringify(provenance.assets) !== JSON.stringify(assets)) {
+    throw new Error("Packaged native-tool provenance does not match config/native-tools.json.");
+  }
+  return assets;
+}
+
 export async function verifyNativeToolHashes(directory, assets) {
   for (const [name, asset] of Object.entries(assets)) {
     const filePath = path.join(directory, asset.fileName);
@@ -228,8 +240,4 @@ function normalizeArch(arch) {
   if (arch === "arm64" || arch === 3) return "arm64";
   if (arch === "universal" || arch === 4) return "universal";
   return String(arch);
-}
-
-export async function clearNativeToolsCache(root = cacheRoot) {
-  await rm(root, { recursive: true, force: true });
 }

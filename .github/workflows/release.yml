@@ -41,11 +41,6 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-        env:
-          GITHUB_TOKEN: ""
-          GH_TOKEN: ""
-          GITHUB_RELEASE_TOKEN: ""
-          RELEASE_TOKEN: ""
 
       - name: Validate release security policy
         run: pnpm run validate:security
@@ -106,40 +101,11 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-        env:
-          GITHUB_TOKEN: ""
-          GH_TOKEN: ""
-          GITHUB_RELEASE_TOKEN: ""
-          RELEASE_TOKEN: ""
 
-      - name: Fetch verified native tools
-        run: node scripts/fetch-native-tools.mjs --platform win32 --arch x64
-        env:
-          GITHUB_TOKEN: ""
-          GH_TOKEN: ""
-          GITHUB_RELEASE_TOKEN: ""
-          RELEASE_TOKEN: ""
-
-      - name: Fetch VB-CABLE driver pack
-        run: node scripts/fetch-vbcable.mjs
-
-      - name: Generate installer artwork
-        run: node scripts/make-installer-art.mjs
-
-      - name: Build renderer
-        run: pnpm run build
-
-      - name: Build Windows installers without publishing
-        run: pnpm exec electron-builder --win --publish never
-        env:
-          SOUNDDECK_NATIVE_TOOLS_OFFLINE: "1"
-          GITHUB_TOKEN: ""
-          GH_TOKEN: ""
-          GITHUB_RELEASE_TOKEN: ""
-          RELEASE_TOKEN: ""
-
-      - name: Verify Windows package contents
-        run: node scripts/verify-windows-package.mjs
+      # dist:win fetches the manifest-pinned native tools, builds without
+      # publishing, and verifies the packaged binaries. Same pipeline as CI.
+      - name: Build and verify Windows installers
+        run: pnpm run dist:win
 
       - name: Upload Windows artifacts to draft release
         env:
@@ -180,19 +146,9 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-        env:
-          GITHUB_TOKEN: ""
-          GH_TOKEN: ""
-          GITHUB_RELEASE_TOKEN: ""
-          RELEASE_TOKEN: ""
 
       - name: Fetch verified native tools
         run: node scripts/fetch-native-tools.mjs --platform darwin --arch universal
-        env:
-          GITHUB_TOKEN: ""
-          GH_TOKEN: ""
-          GITHUB_RELEASE_TOKEN: ""
-          RELEASE_TOKEN: ""
 
       - name: Import Developer ID certificates
         uses: apple-actions/import-codesign-certs@5142e029c445c10ffc7149d172e540235a065466 # v7
@@ -204,10 +160,6 @@ jobs:
         run: pnpm run dist:mac
         env:
           SOUNDDECK_NATIVE_TOOLS_OFFLINE: "1"
-          GITHUB_TOKEN: ""
-          GH_TOKEN: ""
-          GITHUB_RELEASE_TOKEN: ""
-          RELEASE_TOKEN: ""
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}

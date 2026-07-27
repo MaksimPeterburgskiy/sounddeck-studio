@@ -3,7 +3,7 @@ import { lstat, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { readNativeToolsManifest } from "./native-tools.mjs";
+import { verifyPackagedProvenance } from "./native-tools.mjs";
 
 const execFileAsync = promisify(execFile);
 const pkgPath = process.argv[2];
@@ -76,12 +76,9 @@ async function verifyAppPayload(appPath) {
   const ffmpegX64 = path.join(nativeTools, "ffmpeg-x64");
   const ffmpegArm64 = path.join(nativeTools, "ffmpeg-arm64");
   const ytDlp = path.join(nativeTools, "yt-dlp");
-  const manifest = await readNativeToolsManifest();
-  const provenance = JSON.parse(await readFile(path.join(nativeTools, "PROVENANCE.json"), "utf8"));
-  if (provenance.target !== "darwin" ||
-      JSON.stringify(provenance.assets) !== JSON.stringify(manifest.targets.darwin)) {
-    throw new Error("Packaged native-tool provenance does not match config/native-tools.json.");
-  }
+  // Hashes are not re-checked here: codesigning rewrites each binary after
+  // installNativeTools verified it, so provenance is the surviving link.
+  await verifyPackagedProvenance(nativeTools, "darwin");
   await assertExecutable(ffmpegX64, "App payload must include executable x64 ffmpeg.");
   await assertExecutable(ffmpegArm64, "App payload must include executable arm64 ffmpeg.");
   await assertExecutable(ytDlp, "App payload must include executable universal yt-dlp.");

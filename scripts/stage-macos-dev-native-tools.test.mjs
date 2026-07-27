@@ -25,9 +25,6 @@ test("macOS development signing mutates only disposable tool copies", async () =
     }
     await mkdir(path.join(destinationRoot, "darwin"), { recursive: true });
     await writeFile(path.join(destinationRoot, "darwin", "stale-tool"), "stale");
-    const abandonedStaging = path.join(destinationRoot, ".darwin-99999999-abandoned");
-    await mkdir(abandonedStaging, { recursive: true });
-    await writeFile(path.join(abandonedStaging, "ffmpeg"), "orphaned");
 
     const result = await stageMacosDevelopmentNativeTools({
       prepared,
@@ -52,7 +49,6 @@ test("macOS development signing mutates only disposable tool copies", async () =
       readFile(path.join(destinationRoot, "darwin", "stale-tool")),
       /ENOENT/
     );
-    await assert.rejects(readFile(path.join(abandonedStaging, "ffmpeg")), /ENOENT/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

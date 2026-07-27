@@ -30,11 +30,6 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-        env:
-          GITHUB_TOKEN: ""
-          GH_TOKEN: ""
-          GITHUB_RELEASE_TOKEN: ""
-          RELEASE_TOKEN: ""
 
       - name: Validate release security policy
         run: pnpm run validate:security
@@ -73,11 +68,6 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-        env:
-          GITHUB_TOKEN: ""
-          GH_TOKEN: ""
-          GITHUB_RELEASE_TOKEN: ""
-          RELEASE_TOKEN: ""
 
       - name: Build Windows release artifacts
         if: runner.os == 'Windows'
@@ -85,9 +75,4 @@ jobs:
 
       - name: Build unsigned macOS release artifact
         if: runner.os == 'macOS'
-        env:
-          GITHUB_TOKEN: ""
-          GH_TOKEN: ""
-          GITHUB_RELEASE_TOKEN: ""
-          RELEASE_TOKEN: ""
         run: pnpm run dist:mac:unsigned

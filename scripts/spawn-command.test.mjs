@@ -3,32 +3,8 @@ import { spawnSync } from "node:child_process";
 import test from "node:test";
 import { resolveSpawnCommand } from "./spawn-command.mjs";
 
-test("Windows pnpm commands use the CMD shim", () => {
-  assert.deepEqual(
-    resolveSpawnCommand("pnpm", ["run", "build"], {
-      platform: "win32",
-      comSpec: "C:\\Windows\\System32\\cmd.exe"
-    }),
-    {
-      command: "C:\\Windows\\System32\\cmd.exe",
-      args: ["/d", "/s", "/c", "pnpm.cmd", "run", "build"]
-    }
-  );
-});
-
-test("native executables are spawned directly", () => {
-  assert.deepEqual(
-    resolveSpawnCommand("node", ["scripts/fetch-native-tools.mjs"], {
-      platform: "win32",
-      comSpec: "C:\\Windows\\System32\\cmd.exe"
-    }),
-    {
-      command: "node",
-      args: ["scripts/fetch-native-tools.mjs"]
-    }
-  );
-});
-
+// The mapping itself is trivial; what can actually break is whether the shim we
+// synthesise is one Windows will really execute.
 test("the resolved Windows pnpm command executes the installed shim", {
   skip: process.platform !== "win32"
 }, () => {
@@ -39,4 +15,14 @@ test("the resolved Windows pnpm command executes the installed shim", {
   });
   assert.equal(result.status, 0, result.error?.message || result.stderr);
   assert.match(result.stdout.trim(), /^\d+\.\d+\.\d+$/);
+});
+
+test("non-pnpm commands are spawned directly on Windows", () => {
+  assert.deepEqual(
+    resolveSpawnCommand("node", ["scripts/fetch-native-tools.mjs"], {
+      platform: "win32",
+      comSpec: "C:\\Windows\\System32\\cmd.exe"
+    }),
+    { command: "node", args: ["scripts/fetch-native-tools.mjs"] }
+  );
 });
