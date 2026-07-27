@@ -1,4 +1,4 @@
-import type { HotkeyBinding, MediaImportResult, SoundLibrary } from "../types";
+import type { HotkeyBinding, MediaImportResult, SoundLibrary, UpdateChannel } from "../types";
 
 const storageKey = "sounddeck-dev-library";
 
@@ -121,6 +121,12 @@ export function installDevBridge() {
     },
     async installUpdate() {
       // No updater outside Electron.
+    },
+    async getUpdateChannel() {
+      return { preference: null, installedChannel: "stable" as const };
+    },
+    async setUpdateChannel(channel: UpdateChannel) {
+      return { preference: channel, installedChannel: "stable" as const };
     },
     onUpdateStatus() {
       return () => undefined;

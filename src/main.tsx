@@ -5,6 +5,7 @@ import {
   Download,
   Eye,
   EyeOff,
+  FlaskConical,
   FolderOpen,
   GripVertical,
   Headphones,
@@ -24,6 +25,7 @@ import {
   Save,
   Scissors,
   Settings,
+  ShieldCheck,
   Square,
   Trash2,
   Upload,
@@ -39,7 +41,7 @@ import { claimCaptureSlot, eventToToken, formatAccelerator, MODIFIER_TOKENS, nor
 import { makeWaveform } from "./lib/waveform";
 import { installDevBridge } from "./lib/devBridge";
 import { cancelTopLevelDrag } from "./lib/drop";
-import type { AppCapabilities, CorsairState, HotkeyBinding, HotkeyResult, MediaImportResult, SoundBoard, SoundDeckPlatform, SoundEffects, SoundLibrary, SoundSlot, StartupSettings, UpdateStatus, VirtualBackend } from "./types";
+import type { AppCapabilities, CorsairState, HotkeyBinding, HotkeyResult, MediaImportResult, SoundBoard, SoundDeckPlatform, SoundEffects, SoundLibrary, SoundSlot, StartupSettings, UpdateChannel, UpdateChannelState, UpdateStatus, VirtualBackend } from "./types";
 import "./styles.css";
 
 installDevBridge();
@@ -81,6 +83,7 @@ function App() {
   const [platform, setPlatform] = useState<SoundDeckPlatform>("unknown");
   const [capabilities, setCapabilities] = useState<AppCapabilities | null>(null);
   const [startupSettings, setStartupSettings] = useState<StartupSettings>({ supported: false, enabled: false, hideOnStartup: true });
+  const [updateChannel, setUpdateChannelState] = useState<UpdateChannelState | null>(null);
   const [startupUpdateStatus, setStartupUpdateStatus] = useState<StartupUpdateStatus>("idle");
   const startupSettingsRequestTokenRef = useRef(0);
   const engineRef = useRef<AudioEngine | null>(null);
@@ -89,6 +92,7 @@ function App() {
     void window.sounddeck.getVersion().then(setAppVersion).catch(() => undefined);
     void window.sounddeck.getPlatform().then(setPlatform).catch(() => undefined);
     void window.sounddeck.getCapabilities().then(setCapabilities).catch(() => undefined);
+    void window.sounddeck.getUpdateChannel().then(setUpdateChannelState).catch(() => undefined);
     const requestToken = ++startupSettingsRequestTokenRef.current;
     void window.sounddeck.getStartupSettings().then((settings) => {
       if (requestToken === startupSettingsRequestTokenRef.current) setStartupSettings(settings);
@@ -772,6 +776,24 @@ function App() {
     updateLibrary((current) => ({ ...current, settings: { ...current.settings, ...normalizedPatch } }));
   }
 
+  async function changeUpdateChannel(channel: UpdateChannel) {
+    if (!updateChannel) return;
+    const effective = updateChannel.preference ?? updateChannel.installedChannel;
+    if (channel === effective) return;
+    if (channel === "stable" && effective === "beta") {
+      const confirmed = window.confirm(
+        "Switch back to stable updates?\n\n" +
+        "The app may downgrade to the current stable version, and boards or settings saved by a newer beta may not load cleanly in an older build."
+      );
+      if (!confirmed) return;
+    }
+    try {
+      setUpdateChannelState(await window.sounddeck.setUpdateChannel(channel));
+    } catch {
+      // Preference didn't stick; leave the selector on the persisted state.
+    }
+  }
+
   async function updateRunAtStartup(enabled: boolean, hideOnStartup = startupSettings.hideOnStartup ?? true) {
     const requestToken = ++startupSettingsRequestTokenRef.current;
     const previous = startupSettings;
@@ -987,7 +1009,9 @@ function App() {
             startupSettings={startupSettings}
             startupUpdateStatus={startupUpdateStatus}
             capabilities={capabilities}
+            updateChannel={updateChannel}
             onChangeStartup={(enabled, hideOnStartup) => void updateRunAtStartup(enabled, hideOnStartup)}
+            onChangeUpdateChannel={(channel) => void changeUpdateChannel(channel)}
           />
         )}
 
@@ -1988,12 +2012,15 @@ function ClipEditor({ sound, engine, onChange, onClose, mediaUsedElsewhere }: {
   );
 }
 
-function SettingsPanel({ startupSettings, startupUpdateStatus, capabilities, onChangeStartup }: {
+function SettingsPanel({ startupSettings, startupUpdateStatus, capabilities, updateChannel, onChangeStartup, onChangeUpdateChannel }: {
   startupSettings: StartupSettings;
   startupUpdateStatus: StartupUpdateStatus;
   capabilities: AppCapabilities | null;
+  updateChannel: UpdateChannelState | null;
   onChangeStartup: (enabled: boolean, hideOnStartup?: boolean) => void;
+  onChangeUpdateChannel: (channel: UpdateChannel) => void;
 }) {
+  const effectiveChannel = updateChannel ? updateChannel.preference ?? updateChannel.installedChannel : null;
   const startupSupported = capabilities?.runAtStartupSupported ?? startupSettings.supported;
   const disabled = !startupSupported || startupUpdateStatus === "saving";
   const hideOnStartup = startupSettings.hideOnStartup ?? true;
@@ -2052,6 +2079,41 @@ function SettingsPanel({ startupSettings, startupUpdateStatus, capabilities, onC
           </label>
         </div>
       </section>
+      {capabilities?.updateChecksSupported && effectiveChannel && (
+        <section>
+          <h2>Update Channel</h2>
+          <div className="toggleRow settingsToggleRow">
+            <label className="settingsToggle">
+              <input
+                type="radio"
+                name="update-channel"
+                value="stable"
+                checked={effectiveChannel === "stable"}
+                onChange={() => onChangeUpdateChannel("stable")}
+              />
+              <ShieldCheck size={17} />
+              <span className="settingsToggleText">
+                <strong>Stable</strong>
+                <small>Tested releases only. Switching back from beta may downgrade the app.</small>
+              </span>
+            </label>
+            <label className="settingsToggle">
+              <input
+                type="radio"
+                name="update-channel"
+                value="beta"
+                checked={effectiveChannel === "beta"}
+                onChange={() => onChangeUpdateChannel("beta")}
+              />
+              <FlaskConical size={17} />
+              <span className="settingsToggleText">
+                <strong>Beta</strong>
+                <small>Nightly builds from development. Newer features, rougher edges.</small>
+              </span>
+            </label>
+          </div>
+        </section>
+      )}
     </div>
   );
 }

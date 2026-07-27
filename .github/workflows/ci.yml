@@ -38,6 +38,9 @@ jobs:
   release-build:
     # Pinned so the check context stays stable if the matrix gains keys later.
     name: release-build (${{ matrix.runner }})
+    # PRs only: pushes to main get full-packaging coverage from the nightly
+    # beta build, so rebuilding (and discarding) artifacts here is wasted work.
+    if: github.event_name == 'pull_request'
     needs: build-and-test
     strategy:
       fail-fast: false

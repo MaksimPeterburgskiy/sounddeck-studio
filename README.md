@@ -32,6 +32,16 @@ Installed builds check for updates and apply them on restart.
 
 > **macOS permissions:** microphone passthrough, recording, and global hotkeys may require approving SoundDeck Studio in **System Settings -> Privacy & Security**.
 
+### Beta builds
+
+A new beta is published every night whenever `main` has changed, as a prerelease on the [releases page](https://github.com/MaksimPeterburgskiy/sounddeck-studio/releases) (versions like `0.1.18-beta.42`). Betas are built, signed, and notarized exactly like stable releases and install over the stable app in place.
+
+- A beta install auto-updates to newer betas and moves back onto the next stable release once one is newer.
+- A stable install never sees betas unless you opt in.
+- You can switch channels any time in **Settings -> Update Channel** inside the app.
+
+> **Switching back to stable** may downgrade the app to the current stable version, and boards or settings saved by a newer beta may not load cleanly in an older build.
+
 ## Features
 
 ### Soundboard

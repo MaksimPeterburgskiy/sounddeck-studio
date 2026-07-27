@@ -13,6 +13,7 @@ const { shouldDetachProcessTree, terminateProcessTree } = require("./processTree
 const { createMacTrayTemplateImage, MAC_TRAY_ICON_FILENAME } = require("./trayIcon.cjs");
 const { createShutdownLifecycle, registerWindowShutdown } = require("./shutdownLifecycle.cjs");
 const { createUpdateInstallLifecycle } = require("./updateInstallLifecycle.cjs");
+const { installedChannel, normalizeChannelPreference, resolveUpdaterFlags } = require("./updateChannel.cjs");
 const { getWindowsStartupState, hasStartupArg, startupLoginItemOptions, STARTUP_ARG, WINDOWS_STARTUP_NAME } = require("./startupSettings.cjs");
 const {
   sanitizeName,
@@ -304,6 +305,18 @@ async function writeStartupPreferences(preferences) {
   const current = await readAppSettings();
   const startup = { ...(current.startup || {}), ...preferences };
   await fs.writeFile(appSettingsFile(), JSON.stringify({ ...current, startup }, null, 2));
+}
+
+async function readUpdateChannelPreference() {
+  const settings = await readAppSettings();
+  return normalizeChannelPreference(settings?.updates?.channel);
+}
+
+async function writeUpdateChannelPreference(channel) {
+  await fs.mkdir(appRoot(), { recursive: true });
+  const current = await readAppSettings();
+  const updates = { ...(current.updates || {}), channel };
+  await fs.writeFile(appSettingsFile(), JSON.stringify({ ...current, updates }, null, 2));
 }
 
 async function getStartupSettings(argv = process.argv) {
@@ -775,6 +788,17 @@ function registerHotkeys(bindings) {
 const UPDATE_CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
 
 function setupAutoUpdates() {
+  const channelState = async () => ({
+    preference: await readUpdateChannelPreference(),
+    installedChannel: installedChannel(app.getVersion())
+  });
+  const persistChannelPreference = async (channel) => {
+    const preference = normalizeChannelPreference(channel);
+    if (!preference) throw new Error("Unknown update channel");
+    await writeUpdateChannelPreference(preference);
+    return preference;
+  };
+  handleTrustedIpc("update:getChannel", () => channelState());
   const registerUnsupportedUpdateHandlers = () => {
     // No auto-updater is available for this build (dev, portable, or missing
     // electron-updater). Keep the IPC handlers registered so the renderer's
@@ -785,6 +809,10 @@ function setupAutoUpdates() {
       sendToMainWindow("update-status", { state: "up-to-date" });
     });
     handleTrustedIpc("update:install", () => undefined);
+    handleTrustedIpc("update:setChannel", async (_event, channel) => {
+      await persistChannelPreference(channel);
+      return channelState();
+    });
   };
   // Portable Windows builds have no installer to hand updates to. Installed
   // Windows and signed/notarized macOS packages can use electron-updater.
@@ -831,7 +859,23 @@ function setupAutoUpdates() {
       console.error("Auto-update check failed:", error);
     });
   };
-  check();
+  const applyChannelFlags = (preference) => {
+    const flags = resolveUpdaterFlags(preference);
+    if (!flags) return;
+    autoUpdater.allowPrerelease = flags.allowPrerelease;
+    autoUpdater.allowDowngrade = flags.allowDowngrade;
+  };
+  handleTrustedIpc("update:setChannel", async (_event, channel) => {
+    const preference = await persistChannelPreference(channel);
+    applyChannelFlags(preference);
+    void check();
+    return channelState();
+  });
+  // The persisted channel preference must be in effect before the first check.
+  void readUpdateChannelPreference().then((preference) => {
+    applyChannelFlags(preference);
+    return check();
+  });
   // Long-running sessions (app lives in the tray) should still pick up new
   // releases without a restart.
   updateCheckTimer = setInterval(check, UPDATE_CHECK_INTERVAL_MS);
