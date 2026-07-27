@@ -26,7 +26,7 @@ for (const [name, source] of workflows) {
       `${name} uses a mutable action reference: ${match[1]}`
     );
   }
-  for (const match of source.matchAll(/uses:\s*actions\/checkout@[a-f0-9]{40}[\s\S]*?(?=\n\s*-\s+(?:uses:|name:)|$)/g)) {
+  for (const match of source.matchAll(/uses:\s*actions\/checkout@[a-f0-9]{40}[\s\S]*?(?=\n\s*-\s+[\w-]+:|$)/g)) {
     assert(
       /persist-credentials:\s*false/.test(match[0]),
       `${name} checkout must set persist-credentials: false.`

@@ -234,6 +234,9 @@ jobs:
   release-notes:
     needs: [version, windows-package, macos-package]
     runs-on: windows-latest
+    # contents: write lets github.token read the draft release's assets when
+    # composing the notes — drafts are invisible to read-only tokens. The
+    # write to the release itself still happens through the PAT.
     permissions:
       contents: write
     steps:

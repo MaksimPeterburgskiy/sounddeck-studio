@@ -40,7 +40,7 @@ const env = {
   MACOS_INSTALLER_IDENTITY: unsigned ? "" : signingEnv.MACOS_INSTALLER_IDENTITY
 };
 for (const tokenName of ["GITHUB_TOKEN", "GH_TOKEN", "GITHUB_RELEASE_TOKEN", "RELEASE_TOKEN"]) {
-  env[tokenName] = "";
+  delete env[tokenName];
 }
 
 const electronBuilderArgs = unsigned

@@ -150,7 +150,7 @@ function bundledYtDlpCandidates() {
       platform: process.platform,
       arch: process.arch,
       tool: "yt-dlp"
-    })];
+    })].filter(Boolean);
   }
   return developmentNativeToolCandidates({
     repoRoot: path.join(__dirname, ".."),

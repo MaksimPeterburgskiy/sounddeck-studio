@@ -41,7 +41,9 @@ export async function prepareNativeTools({
   destinationRoot = cacheRoot,
   fetchImpl = globalThis.fetch,
   downloadAttempts = 3,
-  downloadTimeoutMs = 30_000,
+  // Each asset is 25-80 MB, so slow connections need headroom; retrying with
+  // the same budget would not help them.
+  downloadTimeoutMs = Number(process.env.SOUNDDECK_NATIVE_TOOLS_TIMEOUT_MS) || 120_000,
   downloadRetryDelayMs = 250
 } = {}) {
   rejectUnpinnedOverrides();

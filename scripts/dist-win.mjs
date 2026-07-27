@@ -6,12 +6,11 @@ if (process.platform !== "win32") {
 
 const env = {
   ...process.env,
-  GITHUB_TOKEN: "",
-  GH_TOKEN: "",
-  GITHUB_RELEASE_TOKEN: "",
-  RELEASE_TOKEN: "",
   SOUNDDECK_NATIVE_TOOLS_OFFLINE: "1"
 };
+for (const tokenName of ["GITHUB_TOKEN", "GH_TOKEN", "GITHUB_RELEASE_TOKEN", "RELEASE_TOKEN"]) {
+  delete env[tokenName];
+}
 
 const steps = [
   ["pnpm", ["run", "clean:release"]],
