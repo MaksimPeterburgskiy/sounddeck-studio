@@ -35,7 +35,7 @@ Useful commands:
 ## Branch model
 
 - **`main`** is the base branch; all pull requests target `main`.
-- **`prod`** is the release branch. Maintainers release by running the *Release* workflow, which versions `main`, fast-forwards `prod`, and assembles a draft GitHub Release. After every packaging job passes, inspect the draft artifacts and updater metadata, then publish it manually. Never open PRs against `prod`. The full checklist and native-binary policy are in [docs/release-security.md](docs/release-security.md).
+- **`prod`** is the release branch. Maintainers release by running the *Release* workflow, which versions `main`, fast-forwards `prod`, and assembles a draft GitHub Release. After every packaging job passes, inspect the draft artifacts and updater metadata, then publish it manually. Never open PRs against `prod`.
 
 ## Pull request guidelines
 
