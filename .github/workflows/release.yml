@@ -187,7 +187,8 @@ jobs:
           $repo = "${{ github.repository }}"
           $version = "${{ needs.version.outputs.version }}"
           $tag = "${{ needs.version.outputs.tag }}"
-          $prev = git describe --tags --abbrev=0 "$tag^" 2>$null
+          # Betas tag main too; notes must diff against the previous *stable*.
+          $prev = git describe --tags --abbrev=0 --exclude "*-beta*" "$tag^" 2>$null
           $release = gh release view $tag --repo $repo --json assets | ConvertFrom-Json
           $assetNames = @($release.assets | ForEach-Object { $_.name })
           $windowsInstaller = $assetNames | Where-Object { $_ -eq "SoundDeck-Studio-Setup-$version.exe" } | Select-Object -First 1

@@ -22,6 +22,10 @@ permissions:
 
 jobs:
   version:
+    # Betas only ever come from main: a dispatch on another ref would package
+    # unmerged code under release notes that claim main. Skipping here skips
+    # every downstream job too.
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     outputs:
       should_build: ${{ steps.version.outputs.should_build }}
@@ -287,10 +291,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Keep the newest 5 published prereleases; stable releases are never
-          # touched (isPrerelease filter).
+          # Keep the newest 5 published betas. Only tags this workflow minted
+          # (v*-beta.*) are candidates: stable releases and any hand-published
+          # prerelease (rc, alpha, ...) are never touched.
           gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
-            --jq '.[] | select(.prerelease and (.draft | not)) | [.created_at, .tag_name] | @tsv' |
+            --jq '.[] | select(.prerelease and (.draft | not) and (.tag_name | test("-beta\\."))) | [.created_at, .tag_name] | @tsv' |
             sort -r | tail -n +6 | cut -f2 |
           while read -r old_tag; do
             echo "Pruning old beta release $old_tag"

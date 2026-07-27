@@ -804,18 +804,30 @@ function registerHotkeys(bindings) {
 
 const UPDATE_CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
 
-function setupAutoUpdates() {
-  const channelState = async () => ({
+// The channel IPC is registered at module scope, not in setupAutoUpdates():
+// the renderer queries the channel in its mount effect, which can run before
+// createWindow() resolves and setupAutoUpdates() gets called. What a change
+// of preference does to the live updater is injected by setupAutoUpdates()
+// once one exists; until then persisting the preference is all there is to do.
+let onUpdateChannelPreferenceChanged = () => undefined;
+
+async function updateChannelState() {
+  return {
     preference: await readUpdateChannelPreference(),
     installedChannel: installedChannel(app.getVersion())
-  });
-  const persistChannelPreference = async (channel) => {
-    const preference = normalizeChannelPreference(channel);
-    if (!preference) throw new Error("Unknown update channel");
-    await writeUpdateChannelPreference(preference);
-    return preference;
   };
-  handleTrustedIpc("update:getChannel", () => channelState());
+}
+
+handleTrustedIpc("update:getChannel", () => updateChannelState());
+handleTrustedIpc("update:setChannel", async (_event, channel) => {
+  const preference = normalizeChannelPreference(channel);
+  if (!preference) throw new Error("Unknown update channel");
+  await writeUpdateChannelPreference(preference);
+  onUpdateChannelPreferenceChanged(preference);
+  return updateChannelState();
+});
+
+function setupAutoUpdates() {
   const registerUnsupportedUpdateHandlers = () => {
     // No auto-updater is available for this build (dev, portable, or missing
     // electron-updater). Keep the IPC handlers registered so the renderer's
@@ -826,10 +838,6 @@ function setupAutoUpdates() {
       sendToMainWindow("update-status", { state: "up-to-date" });
     });
     handleTrustedIpc("update:install", () => undefined);
-    handleTrustedIpc("update:setChannel", async (_event, channel) => {
-      await persistChannelPreference(channel);
-      return channelState();
-    });
   };
   // Portable Windows builds have no installer to hand updates to. Installed
   // Windows and signed/notarized macOS packages can use electron-updater.
@@ -879,15 +887,14 @@ function setupAutoUpdates() {
   const applyChannelFlags = (preference) => {
     const flags = resolveUpdaterFlags(preference);
     if (!flags) return;
+    autoUpdater.channel = flags.channel;
     autoUpdater.allowPrerelease = flags.allowPrerelease;
     autoUpdater.allowDowngrade = flags.allowDowngrade;
   };
-  handleTrustedIpc("update:setChannel", async (_event, channel) => {
-    const preference = await persistChannelPreference(channel);
+  onUpdateChannelPreferenceChanged = (preference) => {
     applyChannelFlags(preference);
     void check();
-    return channelState();
-  });
+  };
   // The persisted channel preference must be in effect before the first check.
   void readUpdateChannelPreference().then((preference) => {
     applyChannelFlags(preference);

@@ -33,11 +33,11 @@ describe("resolveUpdaterFlags", () => {
     expect(resolveUpdaterFlags("bogus")).toBeNull();
   });
 
-  it("opts a stable install into prereleases for the beta channel", () => {
-    expect(resolveUpdaterFlags("beta")).toEqual({ allowPrerelease: true, allowDowngrade: false });
+  it("opts a stable install into prereleases and the beta feed", () => {
+    expect(resolveUpdaterFlags("beta")).toEqual({ channel: "beta", allowPrerelease: true, allowDowngrade: false });
   });
 
-  it("lets a beta install downgrade back onto stable", () => {
-    expect(resolveUpdaterFlags("stable")).toEqual({ allowPrerelease: false, allowDowngrade: true });
+  it("points a beta install back at the stable feed and allows the downgrade", () => {
+    expect(resolveUpdaterFlags("stable")).toEqual({ channel: "latest", allowPrerelease: false, allowDowngrade: true });
   });
 });
