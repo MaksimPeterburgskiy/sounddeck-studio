@@ -863,7 +863,12 @@ function setupAutoUpdates() {
   autoUpdater.on("update-available", (info) => sendStatus({ state: "downloading", version: info.version, percent: 0 }));
   autoUpdater.on("update-not-available", () => sendStatus({ state: "up-to-date" }));
   autoUpdater.on("download-progress", (progress) => sendStatus({ state: "downloading", percent: progress.percent }));
-  autoUpdater.on("update-downloaded", (info) => sendStatus({ state: "ready", version: info.version }));
+  autoUpdater.on("update-downloaded", (info) => {
+    // Re-arm install-on-quit: a channel switch may have disarmed it to keep a
+    // payload downloaded from the old channel from installing at quit.
+    autoUpdater.autoInstallOnAppQuit = true;
+    sendStatus({ state: "ready", version: info.version });
+  });
   handleTrustedIpc("update:install", () => {
     // Silent install with auto-relaunch: no installer pages, no "run app?" prompt.
     updateInstallLifecycle.requestInstall(() => autoUpdater.quitAndInstall(true, true));
@@ -893,6 +898,11 @@ function setupAutoUpdates() {
   };
   onUpdateChannelPreferenceChanged = (preference) => {
     applyChannelFlags(preference);
+    // An update downloaded from the old channel may already be registered to
+    // install on quit; disarm that so it can't land after the user switched
+    // away. The check below downloads from the new channel if there is
+    // anything to install, and update-downloaded re-arms install-on-quit.
+    autoUpdater.autoInstallOnAppQuit = false;
     void check();
   };
   // The persisted channel preference must be in effect before the first check.

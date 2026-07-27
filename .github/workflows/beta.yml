@@ -58,8 +58,10 @@ jobs:
 
           # Betas are prereleases of the *next* patch so they sort above the
           # current stable release. The commit counter is based on the latest
-          # stable tag, so it resets at each real release.
-          stable_tag="$(git describe --tags --abbrev=0 --match "v*" --exclude "*-beta*")"
+          # stable tag, so it resets at each real release. Excluding every
+          # dashed tag skips all prereleases (beta, rc, ...), whose suffix
+          # would otherwise break the patch arithmetic below.
+          stable_tag="$(git describe --tags --abbrev=0 --match "v*" --exclude "*-*")"
           base="${stable_tag#v}"
           IFS=. read -r major minor patch <<< "$base"
           counter="$(git rev-list --count "$stable_tag..HEAD")"
