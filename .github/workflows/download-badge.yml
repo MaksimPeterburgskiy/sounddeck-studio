@@ -14,10 +14,8 @@ concurrency:
   group: download-badge
 
 jobs:
-  calculate:
+  update:
     runs-on: ubuntu-latest
-    outputs:
-      badge_data: ${{ steps.export.outputs.data }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -33,44 +31,21 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
 
-      - name: Export badge data
-        run: echo "data=$(base64 < docs/downloads-badge.json | tr -d '\n')" >> "$GITHUB_OUTPUT"
-        id: export
-
-  write:
-    needs: calculate
-    runs-on: ubuntu-latest
-    steps:
-      # This job holds the only write credential, so it runs no action steps.
-      # The badge commit reaches main through a repo-scoped write deploy key
-      # (a DeployKey bypass on the protect-main ruleset) because the workflow
-      # token cannot bypass the pull-request rule and pull requests opened by
-      # it would never run the required checks. The GitHub host keys below
-      # come from the authenticated meta API, not ssh-keyscan.
-      - name: Commit badge data to main
+      # The PAT appears only here, never in an action's inputs or the script
+      # env, and pushes directly to main through the admin bypass on the
+      # protect-main ruleset (the workflow token cannot bypass it, and pull
+      # requests it opens never run the required checks).
+      - name: Commit badge data
         env:
-          BADGE_DATA: ${{ needs.calculate.outputs.badge_data }}
-          DEPLOY_KEY: ${{ secrets.BADGE_DEPLOY_KEY }}
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         run: |
-          umask 077
-          mkdir -p ~/.ssh
-          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/badge_deploy_key
-          cat >> ~/.ssh/known_hosts <<'HOST_KEYS'
-          github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl
-          github.com ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFB9nkt5YRrYMjNuG5N87uRgg6CLrbo5wAdT/y6v0mKV0U2w0WZ2YB/++Tpockg=
-          HOST_KEYS
-          export GIT_SSH_COMMAND="ssh -i ~/.ssh/badge_deploy_key -o IdentitiesOnly=yes"
-
-          git clone --quiet --depth 1 --branch main \
-            "git@github.com:${{ github.repository }}.git" badge-repo
-          cd badge-repo
-          base64 -d <<<"$BADGE_DATA" > docs/downloads-badge.json
-          if git diff --quiet; then
-            echo "Download badge is already up to date."
-            exit 0
-          fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit --quiet -am "Update download badge"
-          git push --quiet origin main
-          echo "Committed the refreshed download badge to main."
+          git add docs/downloads-badge.json
+          if git diff --cached --quiet; then
+            echo "Download badge is already up to date."
+          else
+            gh auth setup-git
+            git commit -m "Update download badge"
+            git push origin HEAD:main
+          fi
