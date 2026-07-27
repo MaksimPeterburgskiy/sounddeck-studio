@@ -8,7 +8,6 @@ tmp/
 .codex/
 build/vbcable/
 build/.vbcable-stage-*/
-build/.vbcable-lock-*/
 build/blackhole/
 build/extra-pkgs/
 build/yt-dlp/

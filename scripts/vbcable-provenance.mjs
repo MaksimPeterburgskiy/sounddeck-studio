@@ -3,7 +3,6 @@ import { createHash } from "node:crypto";
 import { access, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import lockfile from "proper-lockfile";
 
 const execFileAsync = promisify(execFile);
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
@@ -120,9 +119,18 @@ if ($signature.SignerCertificate.Subject -notmatch "(^|,\s*)SERIALNUMBER=$escape
   );
 }
 
+// Requires payloadDir to hold exactly the reviewed vendor inventory, every file
+// to match its pinned digest, and the setup helper to carry the approved
+// Authenticode identity. expectProvenance distinguishes a freshly extracted
+// archive from a directory already published by prepareVbCable.
 export async function verifyPayload(payloadDir, manifest, options = {}) {
-  const verifySignature = options.verifySignature ?? verifyAuthenticode;
-  const entries = await readdir(payloadDir, { withFileTypes: true });
+  const { verifySignature = verifyAuthenticode, expectProvenance = false } = options;
+  if (expectProvenance) {
+    await access(path.join(payloadDir, PROVENANCE_FILENAME));
+  }
+  const entries = (await readdir(payloadDir, { withFileTypes: true })).filter(
+    (entry) => !expectProvenance || entry.name !== PROVENANCE_FILENAME
+  );
   const actualFiles = entries.filter((entry) => entry.isFile()).map((entry) => entry.name).sort();
   const expectedFiles = Object.keys(manifest.files).sort();
   if (actualFiles.length !== expectedFiles.length || actualFiles.some((file, index) => file !== expectedFiles[index])) {
@@ -167,13 +175,9 @@ Expand-Archive -LiteralPath $env:SOUNDDECK_VBCABLE_ARCHIVE -DestinationPath $env
   );
 }
 
+// Caps what an untrusted endpoint can stream into memory before the pinned
+// archive digest gets a chance to reject it.
 async function readResponseWithLimit(response, maximumBytes) {
-  if (!response.body || typeof response.body.getReader !== "function") {
-    const bytes = Buffer.from(await response.arrayBuffer());
-    if (bytes.length > maximumBytes) throw new Error(`VB-CABLE archive exceeds ${maximumBytes} bytes.`);
-    return bytes;
-  }
-
   const reader = response.body.getReader();
   const chunks = [];
   let totalBytes = 0;
@@ -206,28 +210,11 @@ export async function prepareVbCable(options) {
   validateManifest(manifest);
 
   await mkdir(stageParent, { recursive: true });
-  const resolvedTarget = path.resolve(targetDir);
-  const lockKey = process.platform === "win32" ? resolvedTarget.toLowerCase() : resolvedTarget;
-  const lockDir = path.join(stageParent, `.vbcable-lock-${sha256(lockKey).slice(0, 16)}`);
-  let releaseLock;
-  try {
-    releaseLock = await lockfile.lock(resolvedTarget, {
-      lockfilePath: lockDir,
-      realpath: false,
-      stale: 30_000,
-      update: 10_000
-    });
-  } catch (error) {
-    if (error?.code === "ELOCKED") {
-      throw new Error(`VB-CABLE preparation is already in progress for ${targetDir}.`);
-    }
-    throw error;
-  }
 
   let stageDir;
   try {
-    // Serialize removal and publication for this target. A concurrent loser must
-    // never delete the verified directory published by the lock owner.
+    // No pre-existing payload is ever read. The ignored target is discarded and
+    // rebuilt from a freshly downloaded and fully verified archive every time.
     await rm(targetDir, { recursive: true, force: true });
     stageDir = await mkdtemp(path.join(stageParent, ".vbcable-stage-"));
     const archivePath = path.join(stageDir, `${manifest.package}.zip`);
@@ -264,36 +251,14 @@ export async function prepareVbCable(options) {
     await rename(payloadDir, targetDir);
     return { archiveSha256: actualArchiveSha256, targetDir };
   } finally {
-    try {
-      if (stageDir) {
-        await rm(stageDir, { recursive: true, force: true });
-      }
-    } finally {
-      await releaseLock();
+    if (stageDir) {
+      await rm(stageDir, { recursive: true, force: true });
     }
   }
 }
 
-export async function assertPreparedPayload(payloadDir, manifest, options = {}) {
-  await access(path.join(payloadDir, PROVENANCE_FILENAME));
-  const entries = await readdir(payloadDir, { withFileTypes: true });
-  const payloadEntries = entries.filter((entry) => entry.name !== PROVENANCE_FILENAME);
-  const expected = new Set(Object.keys(manifest.files));
-  if (
-    payloadEntries.length !== expected.size ||
-    payloadEntries.some((entry) => !entry.isFile() || !expected.has(entry.name))
-  ) {
-    throw new Error("Prepared VB-CABLE payload does not match the reviewed inventory.");
-  }
-  for (const entry of payloadEntries) {
-    const actualSha256 = sha256(await readFile(path.join(payloadDir, entry.name)));
-    if (actualSha256 !== manifest.files[entry.name]) {
-      throw new Error(
-        `VB-CABLE file SHA-256 mismatch for ${entry.name}. Expected ${manifest.files[entry.name]}, got ${actualSha256}.`
-      );
-    }
-  }
-  const setupPath = path.join(payloadDir, manifest.setup.file);
-  await (options.verifySignature ?? verifyAuthenticode)(setupPath, manifest.setup);
-  return { setupPath, setupSha256: manifest.setup.sha256 };
+// Re-checks a directory already published by prepareVbCable, immediately before
+// electron-builder consumes it.
+export function assertPreparedPayload(payloadDir, manifest, options = {}) {
+  return verifyPayload(payloadDir, manifest, { ...options, expectProvenance: true });
 }

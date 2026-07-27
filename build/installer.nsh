@@ -3,7 +3,6 @@
 
 !define SOUNDDECK_RUN_KEY "Software\Microsoft\Windows\CurrentVersion\Run"
 !define SOUNDDECK_PROFILE_LIST_KEY "SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList"
-!define SOUNDDECK_INSTALLER_STATE_KEY "Software\SoundDeck Studio\InstallerState"
 !define SOUNDDECK_DIRECTORY_LOCK_ACCESS 0x000C0080
 !define SOUNDDECK_DIRECTORY_OPEN_FLAGS 0x02200000
 !define SOUNDDECK_PROTECTED_SECURITY_INFORMATION 0x80000007
@@ -14,27 +13,6 @@
   ; name was made explicit in app.setLoginItemSettings().
   DeleteRegValue ${ROOT_KEY} "${RUN_KEY}" "com.sounddeck.studio"
   DeleteRegValue ${ROOT_KEY} "${RUN_KEY}" "sounddeck-studio"
-!macroend
-
-!macro SoundDeckDirectoryHasContents RESULT
-  StrCpy ${RESULT} 0
-  ClearErrors
-  FindFirst $3 $4 "$INSTDIR\*.*"
-  ${IfNot} ${Errors}
-    ${Do}
-      ${If} $4 != "."
-      ${AndIf} $4 != ".."
-        StrCpy ${RESULT} 1
-        ${Break}
-      ${EndIf}
-      ClearErrors
-      FindNext $3 $4
-      ${If} ${Errors}
-        ${Break}
-      ${EndIf}
-    ${Loop}
-    FindClose $3
-  ${EndIf}
 !macroend
 
 ; NSIS still honors /D when the directory-selection page is disabled. Force an
@@ -52,167 +30,6 @@
       StrCpy $INSTDIR "$INSTDIR\${APP_FILENAME}"
     ${EndIf}
   ${EndIf}
-!macroend
-
-; Capture this before electron-builder's install section removes an old
-; version. ${isUpdated} only reflects the updater command-line flag and is
-; false for a manually launched upgrade.
-; Retained as an unexpanded reference while the active failure path avoids
-; recursive application rollback. electron-builder does not call this macro.
-!macro unusedSoundDeckRollbackInit
-  StrCpy $SoundDeckHadExistingInstall 0
-  StrCpy $SoundDeckOwnsInstallDirectory 0
-  StrCpy $SoundDeckInstallDirectoryHandle -1
-  ClearErrors
-  ReadRegStr $2 SHELL_CONTEXT "${SOUNDDECK_INSTALLER_STATE_KEY}" "IncompleteInstallLocation"
-  ${IfNot} ${Errors}
-  ${AndIf} $2 == $INSTDIR
-    ; A failed rollback can leave locked application files after the normal
-    ; uninstall registration is gone. This elevated state marks only the exact
-    ; directory the installer previously created, allowing a safe retry.
-    StrCpy $SoundDeckOwnsInstallDirectory 1
-  ${EndIf}
-
-  ClearErrors
-  ReadRegStr $0 SHELL_CONTEXT "${INSTALL_REGISTRY_KEY}" "InstallLocation"
-  ${IfNot} ${Errors}
-  ${AndIf} $0 != ""
-    ; Any registered copy makes this an upgrade. electron-builder removes that
-    ; copy even when /D moves the replacement to another directory.
-    StrCpy $SoundDeckHadExistingInstall 1
-    ; Only the registered application directory is already owned by this app.
-    ; A /D override targeting another directory must still pass the fresh-path
-    ; check below, even when another SoundDeck installation is registered.
-    StrCpy $1 "$0" 1 -1
-    ${If} $1 == "\"
-      StrCpy $0 "$0" -1
-    ${EndIf}
-    ${If} $0 == $INSTDIR
-      StrCpy $SoundDeckOwnsInstallDirectory 1
-    ${EndIf}
-  ${EndIf}
-
-  ; Pin the actual target before inspecting or changing it. Omitting delete
-  ; sharing prevents the directory or any ancestor from being renamed while
-  ; elevated extraction and rollback still address it by path.
-  ${If} $SoundDeckOwnsInstallDirectory == 0
-    ClearErrors
-    CreateDirectory "$INSTDIR"
-  ${EndIf}
-  System::Call 'kernel32::CreateFileW(w "$INSTDIR", i ${SOUNDDECK_DIRECTORY_LOCK_ACCESS}, i 3, p 0, i 3, i ${SOUNDDECK_DIRECTORY_OPEN_FLAGS}, p 0) p.rSoundDeckInstallDirectoryHandle ?e'
-  Pop $5
-  ${If} $SoundDeckInstallDirectoryHandle == -1
-    DetailPrint "Could not lock the application directory (Windows error $5)."
-    MessageBox MB_ICONSTOP|MB_OK "SoundDeck Studio could not safely lock the application directory. Setup will stop without installing files." /SD IDOK
-    SetErrorLevel 2
-    Quit
-  ${EndIf}
-  System::Alloc 52
-  Pop $8
-  System::Call 'kernel32::GetFileInformationByHandle(p rSoundDeckInstallDirectoryHandle, p r8) i.r0 ?e'
-  Pop $5
-  ${If} $0 == 0
-    System::Free $8
-    System::Call 'kernel32::CloseHandle(p rSoundDeckInstallDirectoryHandle)'
-    StrCpy $SoundDeckInstallDirectoryHandle -1
-    DetailPrint "Could not validate the application directory (Windows error $5)."
-    MessageBox MB_ICONSTOP|MB_OK "SoundDeck Studio could not safely validate the application directory. Setup will stop without installing files." /SD IDOK
-    SetErrorLevel 2
-    Quit
-  ${EndIf}
-  System::Call '*$8(i.r9)'
-  System::Free $8
-  IntOp $0 $9 & 0x10
-  IntOp $1 $9 & 0x400
-  ${If} $0 == 0
-  ${OrIf} $1 != 0
-    System::Call 'kernel32::CloseHandle(p rSoundDeckInstallDirectoryHandle)'
-    StrCpy $SoundDeckInstallDirectoryHandle -1
-    DetailPrint "The application path is not a real directory."
-    MessageBox MB_ICONSTOP|MB_OK "SoundDeck Studio requires a normal application directory, not a redirected path. Setup will stop without installing files." /SD IDOK
-    SetErrorLevel 2
-    Quit
-  ${EndIf}
-
-  ; A new target may only take ownership of an empty directory. Check once
-  ; before changing its ACL so pre-existing contents remain untouched.
-  ${If} $SoundDeckOwnsInstallDirectory == 0
-    !insertmacro SoundDeckDirectoryHasContents $2
-    ${If} $2 == 1
-      System::Call 'kernel32::CloseHandle(p rSoundDeckInstallDirectoryHandle)'
-      StrCpy $SoundDeckInstallDirectoryHandle -1
-      DetailPrint "The application directory already contains unrelated files: $INSTDIR"
-      MessageBox MB_ICONSTOP|MB_OK "SoundDeck Studio requires a new or empty application directory. Setup will stop without changing the existing contents of $INSTDIR." /SD IDOK
-      SetErrorLevel 2
-      Quit
-    ${EndIf}
-  ${EndIf}
-
-  ; Every target receives a Program Files-style protected DACL. Applying it to
-  ; registered paths also migrates legacy custom installs that users could edit.
-    System::Call 'advapi32::ConvertStringSecurityDescriptorToSecurityDescriptorW(w "O:BAG:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;GRGX;;;BU)", i 1, *p .r2, p 0) i.r0 ?e'
-    Pop $5
-    ${If} $0 == 0
-      System::Call 'kernel32::CloseHandle(p rSoundDeckInstallDirectoryHandle)'
-      StrCpy $SoundDeckInstallDirectoryHandle -1
-      DetailPrint "Could not build protected application-directory permissions (Windows error $5)."
-      MessageBox MB_ICONSTOP|MB_OK "SoundDeck Studio could not protect the application directory. Setup will stop without installing files." /SD IDOK
-      SetErrorLevel 2
-      Quit
-    ${EndIf}
-    System::Call 'advapi32::GetSecurityDescriptorOwner(p r2, *p .R0, *i .R1) i.r0'
-    ${If} $0 == 0
-      System::Call 'kernel32::LocalFree(p r2)'
-      System::Call 'kernel32::CloseHandle(p rSoundDeckInstallDirectoryHandle)'
-      StrCpy $SoundDeckInstallDirectoryHandle -1
-      DetailPrint "Could not read the protected application-directory owner."
-      SetErrorLevel 2
-      Quit
-    ${EndIf}
-    System::Call 'advapi32::GetSecurityDescriptorGroup(p r2, *p .R2, *i .R3) i.r0'
-    ${If} $0 == 0
-      System::Call 'kernel32::LocalFree(p r2)'
-      System::Call 'kernel32::CloseHandle(p rSoundDeckInstallDirectoryHandle)'
-      StrCpy $SoundDeckInstallDirectoryHandle -1
-      DetailPrint "Could not read the protected application-directory group."
-      SetErrorLevel 2
-      Quit
-    ${EndIf}
-    System::Call 'advapi32::GetSecurityDescriptorDacl(p r2, *i .R4, *p .R5, *i .R6) i.r0'
-    ${If} $0 == 0
-    ${OrIf} $R4 == 0
-      System::Call 'kernel32::LocalFree(p r2)'
-      System::Call 'kernel32::CloseHandle(p rSoundDeckInstallDirectoryHandle)'
-      StrCpy $SoundDeckInstallDirectoryHandle -1
-      DetailPrint "Could not read the protected application-directory DACL."
-      SetErrorLevel 2
-      Quit
-    ${EndIf}
-    System::Call 'advapi32::SetSecurityInfo(p rSoundDeckInstallDirectoryHandle, i 1, i ${SOUNDDECK_PROTECTED_SECURITY_INFORMATION}, p R0, p R2, p R5, p 0) i.r0'
-    StrCpy $5 $0
-    System::Call 'kernel32::LocalFree(p r2)'
-    ${If} $5 != 0
-      System::Call 'kernel32::CloseHandle(p rSoundDeckInstallDirectoryHandle)'
-      StrCpy $SoundDeckInstallDirectoryHandle -1
-      DetailPrint "Could not protect the application directory (Windows error $5)."
-      MessageBox MB_ICONSTOP|MB_OK "SoundDeck Studio could not protect the application directory. Setup will stop without installing files." /SD IDOK
-      SetErrorLevel 2
-      Quit
-    ${EndIf}
-
-    ; Catch a child inserted between the initial empty check and the ACL change.
-    ${If} $SoundDeckOwnsInstallDirectory == 0
-      !insertmacro SoundDeckDirectoryHasContents $2
-      ${If} $2 == 1
-        System::Call 'kernel32::CloseHandle(p rSoundDeckInstallDirectoryHandle)'
-        StrCpy $SoundDeckInstallDirectoryHandle -1
-        DetailPrint "The application directory changed while setup was securing it: $INSTDIR"
-        MessageBox MB_ICONSTOP|MB_OK "The application directory changed while SoundDeck Studio was securing it. Setup will stop without installing files." /SD IDOK
-        SetErrorLevel 2
-        Quit
-      ${EndIf}
-    ${EndIf}
-
 !macroend
 
 ; customInstall runs after electron-builder has copied and registered the app.
@@ -233,63 +50,6 @@
   ${EndIf}
   ${EnableX64FSRedirection}
   DetailPrint "SoundDeck Studio remains installed. Run setup again to retry the missing driver."
-  SetErrorLevel 2
-  Abort
-!macroend
-
-; Historical rollback implementation, intentionally unexpanded.
-!macro unusedAbortSoundDeckInstall
-  ; Release every native resource that may have been acquired before the
-  ; failure. The state registers are initialized before staging begins and
-  ; cleared whenever ownership is released.
-  ${If} $7 != -1
-    System::Call 'kernel32::CloseHandle(p r7)'
-    StrCpy $7 -1
-  ${EndIf}
-  ${If} $6 != -1
-    System::Call 'kernel32::CloseHandle(p r6)'
-    StrCpy $6 -1
-  ${EndIf}
-  ${If} $2 != 0
-    System::Call 'kernel32::LocalFree(p r2)'
-    StrCpy $2 0
-  ${EndIf}
-  ${EnableX64FSRedirection}
-
-  ${If} $SoundDeckHadExistingInstall == 0
-    DeleteRegKey SHELL_CONTEXT "${SOUNDDECK_INSTALLER_STATE_KEY}"
-    DetailPrint "Rolling back the incomplete SoundDeck Studio installation..."
-    ClearErrors
-    ; _?= runs the installed uninstaller in place so ExecWait observes the real
-    ; cleanup result instead of the short-lived NSIS self-copy launcher.
-    ExecWait '"$INSTDIR\${UNINSTALL_FILENAME}" /allusers /S _?=$INSTDIR' $R9
-    ${If} ${Errors}
-      DetailPrint "Could not start the application rollback."
-    ${ElseIf} $R9 != 0
-      DetailPrint "Application rollback failed with exit code $R9."
-    ${Else}
-      System::Call 'kernel32::CloseHandle(p rSoundDeckInstallDirectoryHandle)'
-      StrCpy $SoundDeckInstallDirectoryHandle -1
-      ; The in-place uninstaller cannot delete its own executable while running.
-      ; The waiting installer removes that final file and directory afterward.
-      Delete "$INSTDIR\${UNINSTALL_FILENAME}"
-      RMDir "$INSTDIR"
-    ${EndIf}
-    ${If} ${FileExists} "$INSTDIR\*.*"
-      WriteRegStr SHELL_CONTEXT "${SOUNDDECK_INSTALLER_STATE_KEY}" "IncompleteInstallLocation" "$INSTDIR"
-      DetailPrint "Application rollback left files in $INSTDIR. A retry may reuse this installer-owned directory."
-    ${Else}
-      RMDir "$INSTDIR"
-      DetailPrint "Incomplete application installation rolled back."
-    ${EndIf}
-  ${Else}
-    DeleteRegKey SHELL_CONTEXT "${SOUNDDECK_INSTALLER_STATE_KEY}"
-    DetailPrint "Application files from the existing installation were preserved."
-  ${EndIf}
-  ${If} $SoundDeckInstallDirectoryHandle != -1
-    System::Call 'kernel32::CloseHandle(p rSoundDeckInstallDirectoryHandle)'
-    StrCpy $SoundDeckInstallDirectoryHandle -1
-  ${EndIf}
   SetErrorLevel 2
   Abort
 !macroend

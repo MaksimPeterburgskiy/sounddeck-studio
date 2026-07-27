@@ -35,44 +35,6 @@ jobs:
       - name: Run unit tests with coverage
         run: pnpm run test:coverage
 
-  windows-installer-security:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v7.0.1
-
-      - name: Set up pnpm
-        uses: pnpm/action-setup@v6.0.9
-        with:
-          version: 11.6.0
-          run_install: false
-
-      - uses: actions/setup-node@v6.4.0
-        with:
-          node-version: 24
-          cache: pnpm
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Fetch and verify reviewed VB-CABLE payload
-        run: node scripts/fetch-vbcable.mjs
-
-      - name: Exercise runtime verifier against hostile inputs
-        shell: powershell
-        run: .\scripts\test-vbcable-runtime-verifier.ps1 -PayloadDirectory .\build\vbcable
-
-      - name: Generate installer artwork
-        run: node scripts/make-installer-art.mjs
-
-      - name: Build renderer
-        run: pnpm run build
-
-      - name: Reverify VB-CABLE packaging input
-        run: node scripts/verify-vbcable.mjs
-
-      - name: Compile Windows NSIS installer without publishing or running it
-        run: pnpm exec electron-builder --win nsis --publish never
-
   release-build:
     # Pinned so the check context stays stable if the matrix gains keys later.
     name: release-build (${{ matrix.runner }})
@@ -111,6 +73,15 @@ jobs:
       - name: Build Windows release artifacts
         if: runner.os == 'Windows'
         run: pnpm run dist:win:no-publish
+
+      # Reuses the verified payload the build above already fetched into
+      # build/vbcable. Confirms the installer-time verifier rejects a hostile
+      # PowerShell module, an unapproved execution target, a tampered manifest,
+      # an unlisted companion file, and a tampered payload file.
+      - name: Exercise VB-CABLE runtime verifier against hostile inputs
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: .\scripts\test-vbcable-runtime-verifier.ps1 -PayloadDirectory .\build\vbcable
 
       - name: Build unsigned macOS release artifact
         if: runner.os == 'macOS'
