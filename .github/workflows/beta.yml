@@ -13,8 +13,9 @@ on:
 # Queue overlapping runs instead of cancelling: killing a near-finished
 # notarization is worse than waiting.
 concurrency:
-  group: beta
+  group: release
   cancel-in-progress: false
+  queue: max
 
 permissions:
   contents: write
@@ -141,7 +142,7 @@ jobs:
       # EP_DRAFT makes electron-builder upload into the existing draft release
       # instead of publishing one of its own.
       - name: Build and upload Windows installers to the draft release
-        run: pnpm exec electron-builder --win --publish always
+        run: pnpm exec electron-builder --win --publish always --config.publish.channel=beta
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           EP_DRAFT: "true"
@@ -195,7 +196,7 @@ jobs:
           MACOS_INSTALLER_IDENTITY: ${{ secrets.MACOS_INSTALLER_IDENTITY }}
           BLACKHOLE_REPO: https://github.com/ExistentialAudio/BlackHole.git
           BLACKHOLE_COMMIT: 11efc147fef0ac537be1c24ea7e29e4b2a2d63c7
-        run: pnpm run dist:mac
+        run: pnpm run dist:mac -- --channel beta
 
       - name: Verify macOS package
         run: |

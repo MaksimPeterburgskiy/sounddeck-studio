@@ -284,12 +284,29 @@ function windowsStartupState(settings) {
   });
 }
 
-async function readAppSettings() {
+let appSettingsWriteQueue = Promise.resolve();
+
+async function readAppSettingsFile() {
   try {
     return JSON.parse(await fs.readFile(appSettingsFile(), "utf8"));
   } catch {
     return {};
   }
+}
+
+async function readAppSettings() {
+  await appSettingsWriteQueue;
+  return readAppSettingsFile();
+}
+
+async function updateAppSettings(update) {
+  const pendingWrite = appSettingsWriteQueue.then(async () => {
+    await fs.mkdir(appRoot(), { recursive: true });
+    const current = await readAppSettingsFile();
+    await fs.writeFile(appSettingsFile(), JSON.stringify(update(current), null, 2));
+  });
+  appSettingsWriteQueue = pendingWrite.catch(() => undefined);
+  return pendingWrite;
 }
 
 async function readStartupPreferences() {
@@ -301,10 +318,10 @@ async function readStartupPreferences() {
 }
 
 async function writeStartupPreferences(preferences) {
-  await fs.mkdir(appRoot(), { recursive: true });
-  const current = await readAppSettings();
-  const startup = { ...(current.startup || {}), ...preferences };
-  await fs.writeFile(appSettingsFile(), JSON.stringify({ ...current, startup }, null, 2));
+  await updateAppSettings((current) => {
+    const startup = { ...(current.startup || {}), ...preferences };
+    return { ...current, startup };
+  });
 }
 
 async function readUpdateChannelPreference() {
@@ -313,10 +330,10 @@ async function readUpdateChannelPreference() {
 }
 
 async function writeUpdateChannelPreference(channel) {
-  await fs.mkdir(appRoot(), { recursive: true });
-  const current = await readAppSettings();
-  const updates = { ...(current.updates || {}), channel };
-  await fs.writeFile(appSettingsFile(), JSON.stringify({ ...current, updates }, null, 2));
+  await updateAppSettings((current) => {
+    const updates = { ...(current.updates || {}), channel };
+    return { ...current, updates };
+  });
 }
 
 async function getStartupSettings(argv = process.argv) {
