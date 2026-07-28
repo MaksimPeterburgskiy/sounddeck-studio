@@ -868,10 +868,15 @@ function setupAutoUpdates() {
   // autoInstallOnAppQuit the moment this listener yields, so the staleness
   // decision and the re-arm can't sit behind an await.
   let channelPreference = null;
+  // Version of the payload currently offered by the ready toast, or null when
+  // nothing downloaded is installable (including after a channel switch
+  // invalidated it).
+  let readyPayloadVersion = null;
   autoUpdater.on("update-downloaded", (info) => {
     // A download begun before a channel switch can finish after it; never
     // offer or arm a payload the current preference wouldn't have chosen.
     if (isStalePayload(channelPreference, info.version, app.getVersion())) {
+      readyPayloadVersion = null;
       // The switch-time check couldn't download anything while this download
       // held the updater's single in-flight slot (downloadUpdate() returns
       // the existing promise), and that slot is only released after this
@@ -883,9 +888,14 @@ function setupAutoUpdates() {
     // Re-arm install-on-quit: a channel switch may have disarmed it to keep a
     // payload downloaded from the old channel from installing at quit.
     autoUpdater.autoInstallOnAppQuit = true;
+    readyPayloadVersion = info.version;
     sendStatus({ state: "ready", version: info.version });
   });
   handleTrustedIpc("update:install", () => {
+    // A channel switch may have invalidated the payload while its ready toast
+    // was still on screen; never install what the current channel wouldn't
+    // have chosen.
+    if (!readyPayloadVersion) return;
     // Silent install with auto-relaunch: no installer pages, no "run app?" prompt.
     updateInstallLifecycle.requestInstall(() => autoUpdater.quitAndInstall(true, true));
   });
@@ -899,11 +909,16 @@ function setupAutoUpdates() {
       throw error;
     }
   });
+  let pendingCheck = null;
   const check = () => {
     if (shutdownLifecycle.isShuttingDown()) return Promise.resolve();
-    return autoUpdater.checkForUpdates().catch((error) => {
+    const run = autoUpdater.checkForUpdates().catch((error) => {
       console.error("Auto-update check failed:", error);
+    }).finally(() => {
+      if (pendingCheck === run) pendingCheck = null;
     });
+    pendingCheck = run;
+    return run;
   };
   const applyChannelFlags = (preference) => {
     const flags = resolveUpdaterFlags(preference);
@@ -920,7 +935,18 @@ function setupAutoUpdates() {
     // away. The check below downloads from the new channel if there is
     // anything to install, and update-downloaded re-arms install-on-quit.
     autoUpdater.autoInstallOnAppQuit = false;
-    void check();
+    // A payload already offered by the ready toast may be one the new channel
+    // would never pick; retract it (update:install refuses it from here on,
+    // and up-to-date dismisses the toast).
+    if (readyPayloadVersion && isStalePayload(preference, readyPayloadVersion, app.getVersion())) {
+      readyPayloadVersion = null;
+      sendStatus({ state: "up-to-date" });
+    }
+    // A check already in flight (startup or the four-hour timer) ran with the
+    // old channel, and electron-updater would hand a concurrent call that
+    // same cached promise. Let it settle first, then query the new channel.
+    const settled = pendingCheck || Promise.resolve();
+    void settled.then(() => check());
   };
   // The persisted channel preference must be in effect before the first check.
   void readUpdateChannelPreference().then((preference) => {

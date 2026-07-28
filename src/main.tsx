@@ -134,10 +134,12 @@ function App() {
   useEffect(() => {
     return window.sounddeck.onUpdateStatus((status) => {
       setUpdateStatus((current) => {
-        // Once an update is downloaded and ready to install, don't let a later
-        // background check (checking / up-to-date / error) displace it. The
-        // downloaded update is still available, so the restart prompt should stay.
-        if (current?.state === "ready" && status.state !== "downloading" && status.state !== "ready") return current;
+        // Once an update is downloaded and ready to install, transient
+        // statuses (checking / error) don't displace it: the downloaded
+        // update is still available, so the restart prompt should stay. A
+        // definitive up-to-date does displace it — that only arrives when the
+        // readied payload no longer applies (e.g. after a channel switch).
+        if (current?.state === "ready" && (status.state === "checking" || status.state === "error")) return current;
         return status;
       });
       // A hidden download toast should still resurface once the update is ready.
