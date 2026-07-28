@@ -7,6 +7,7 @@ tmp/
 .claude/
 .codex/
 build/vbcable/
+build/.vbcable-stage-*/
 build/blackhole/
 build/extra-pkgs/
 build/yt-dlp/
