@@ -1,8 +1,8 @@
 name: Release
 
-# Cuts a stable release from main. The release stays a draft while both
-# platforms build, upload, and validate their assets, then flips to published
-# in one atomic step so no updater ever sees a partial release.
+# Cuts a stable release from main. The release stays a draft and its tag stays
+# unpublished while both platforms build, upload, and validate their assets.
+# Publishing creates the tag and exposes the complete release in one step.
 
 on:
   workflow_dispatch:
@@ -25,6 +25,7 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
       tag: ${{ steps.version.outputs.tag }}
+      sha: ${{ steps.version.outputs.sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -55,20 +56,24 @@ jobs:
       - name: Run unit tests
         run: pnpm test
 
-      - name: Bump version and tag
+      - name: Bump version and commit
         id: version
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          pnpm version ${{ inputs.bump }} -m "Release v%s"
+          pnpm version ${{ inputs.bump }} --no-git-tag-version
           $version = node -p "require('./package.json').version"
+          git add -- package.json
+          git commit -m "Release v$version"
+          $sha = git rev-parse HEAD
           echo "version=$version" >> $env:GITHUB_OUTPUT
           echo "tag=v$version" >> $env:GITHUB_OUTPUT
+          echo "sha=$sha" >> $env:GITHUB_OUTPUT
 
       # A run that dies after packaging leaves a draft whose version this run
       # has already bumped past, so it can never be published. Runs before the
-      # new tag exists, so this can only ever match earlier drafts. The git tag
-      # and version commit stay: they are already on main and prod.
+      # new draft exists, so this can only ever match earlier drafts. Their
+      # version commits stay on main and prod, but no stable tags were exposed.
       - name: Delete draft releases left by failed runs
         env:
           GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
@@ -85,7 +90,7 @@ jobs:
           GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         run: |
           gh auth setup-git
-          git push origin main --follow-tags
+          git push origin main
           git fetch origin prod
           git checkout prod
           git merge --ff-only main
@@ -93,7 +98,7 @@ jobs:
           git checkout main
           gh release create "v${{ steps.version.outputs.version }}" `
             --repo "${{ github.repository }}" `
-            --verify-tag `
+            --target "${{ steps.version.outputs.sha }}" `
             --draft `
             --title "SoundDeck Studio v${{ steps.version.outputs.version }}"
 
@@ -103,7 +108,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.version.outputs.tag }}
+          ref: ${{ needs.version.outputs.sha }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -148,7 +153,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.version.outputs.tag }}
+          ref: ${{ needs.version.outputs.sha }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -218,7 +223,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.version.outputs.tag }}
+          ref: ${{ needs.version.outputs.sha }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -229,9 +234,10 @@ jobs:
           $repo = "${{ github.repository }}"
           $version = "${{ needs.version.outputs.version }}"
           $tag = "${{ needs.version.outputs.tag }}"
+          $sha = "${{ needs.version.outputs.sha }}"
           # Prerelease tags (betas, rc, ...) land on main too; notes must diff
           # against the previous *stable*, so skip every dashed tag.
-          $prev = git describe --tags --abbrev=0 --exclude "*-*" "$tag^" 2>$null
+          $prev = git describe --tags --abbrev=0 --exclude "*-*" "$sha^" 2>$null
           $release = gh release view $tag --repo $repo --json assets | ConvertFrom-Json
           $assetNames = @($release.assets | ForEach-Object { $_.name })
           $windowsInstaller = $assetNames | Where-Object { $_ -eq "SoundDeck-Studio-Setup-$version.exe" } | Select-Object -First 1
@@ -267,7 +273,7 @@ jobs:
           )
 
           if ($prev) {
-            $commits = git log "$prev..$tag" --no-merges --pretty='- %s (%h)' | Where-Object { $_ -notmatch '^- Release v\d' }
+            $commits = git log "$prev..$sha" --no-merges --pretty='- %s (%h)' | Where-Object { $_ -notmatch '^- Release v\d' }
             $lines += "### What's changed since $prev"
             $lines += ""
             $lines += $commits
@@ -350,7 +356,7 @@ jobs:
             exit 1
           fi
 
-          # The atomic step: both platforms are complete and cross-checked, so
-          # the release becomes visible to users and updaters in one edit.
+          # The atomic step: publishing creates the stable tag at the draft's
+          # pinned target and exposes the complete release to updaters.
           gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
           echo "Published $TAG — https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG" >> "$GITHUB_STEP_SUMMARY"
