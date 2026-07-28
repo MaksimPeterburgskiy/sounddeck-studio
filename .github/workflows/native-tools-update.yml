@@ -1,0 +1,132 @@
+name: Native tools update
+
+# Watches yt-dlp for new releases so the manifest pin cannot silently rot.
+# The check job verifies the release's SHA2-256SUMS signature against the
+# key pinned in config/yt-dlp-signing-keys.asc and re-hashes the exact
+# assets before proposing a manifest bump; a maintainer still reviews and
+# merges the resulting pull request. ffmpeg stays manual — its upstream
+# publishes no signed checksums and changes rarely.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "41 6 * * 1,4"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-tools-update
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      updated: ${{ steps.export.outputs.updated }}
+      version: ${{ steps.export.outputs.version }}
+      manifest: ${{ steps.export.outputs.manifest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+
+      - name: Check for a newer signed yt-dlp release
+        run: node scripts/update-ytdlp-manifest.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - name: Export updated manifest
+        id: export
+        run: |
+          if git diff --quiet config/native-tools.json; then
+            echo "updated=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "updated=true" >> "$GITHUB_OUTPUT"
+          echo "version=$(node -p "JSON.parse(require('node:fs').readFileSync('config/native-tools.json', 'utf8')).targets.darwin['yt-dlp'].version")" >> "$GITHUB_OUTPUT"
+          echo "manifest=$(base64 < config/native-tools.json | tr -d '\n')" >> "$GITHUB_OUTPUT"
+
+  # When upstream is already at the pinned version again (for example a newer
+  # release was deleted after a bump PR opened), any open bump PR points at
+  # dead assets and must not stay mergeable.
+  close-stale:
+    needs: check
+    if: needs.check.outputs.updated == 'false'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Close a stale yt-dlp bump pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          stale_pr="$(gh api "repos/${{ github.repository }}/pulls?state=open&head=${{ github.repository_owner }}:automation/update-yt-dlp&base=main" --jq '.[0].number // empty')"
+          if [[ -n "$stale_pr" ]]; then
+            gh api --method PATCH "repos/${{ github.repository }}/pulls/$stale_pr" \
+              --raw-field state=closed \
+              >/dev/null
+            echo "Closed stale yt-dlp bump pull request #$stale_pr."
+          else
+            echo "No stale yt-dlp bump pull request to close."
+          fi
+
+  propose:
+    needs: check
+    if: needs.check.outputs.updated == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      # This job holds the write token, so it runs no action steps; the
+      # branch and pull request are managed through the REST API only.
+      - name: Open or update the yt-dlp bump pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MANIFEST_DATA: ${{ needs.check.outputs.manifest }}
+          VERSION: ${{ needs.check.outputs.version }}
+          BUMP_BRANCH: automation/update-yt-dlp
+        run: |
+          existing_pr_number="$(gh api "repos/${{ github.repository }}/pulls?state=open&head=${{ github.repository_owner }}:$BUMP_BRANCH&base=main" --jq '.[0].number // empty')"
+
+          base_sha="$(gh api "repos/${{ github.repository }}/git/ref/heads/main" --jq '.object.sha')"
+          if gh api "repos/${{ github.repository }}/git/ref/heads/$BUMP_BRANCH" >/dev/null 2>&1; then
+            if [[ -z "$existing_pr_number" ]]; then
+              gh api --method PATCH "repos/${{ github.repository }}/git/refs/heads/$BUMP_BRANCH" \
+                --raw-field sha="$base_sha" \
+                --field force=true \
+                >/dev/null
+            fi
+          else
+            gh api --method POST "repos/${{ github.repository }}/git/refs" \
+              --raw-field ref="refs/heads/$BUMP_BRANCH" \
+              --raw-field sha="$base_sha" \
+              >/dev/null
+          fi
+
+          current_sha="$(gh api "repos/${{ github.repository }}/contents/config/native-tools.json?ref=$BUMP_BRANCH" --jq '.sha')"
+          gh api --method PUT "repos/${{ github.repository }}/contents/config/native-tools.json" \
+            --raw-field message="Update yt-dlp to $VERSION" \
+            --raw-field content="$MANIFEST_DATA" \
+            --raw-field sha="$current_sha" \
+            --raw-field branch="$BUMP_BRANCH" \
+            >/dev/null
+
+          body="Automated yt-dlp bump to \`$VERSION\`. The new hashes were verified against the release's GPG-signed SHA2-256SUMS using the key pinned in \`config/yt-dlp-signing-keys.asc\`.
+
+          Review the diff against the [upstream release notes](https://github.com/yt-dlp/yt-dlp/releases/tag/$VERSION) before merging. GitHub does not start CI for pull requests opened by the workflow token — close and reopen this pull request to run the checks."
+          if [[ -n "$existing_pr_number" ]]; then
+            echo "Updated https://github.com/${{ github.repository }}/pull/$existing_pr_number"
+          else
+            gh api --method POST "repos/${{ github.repository }}/pulls" \
+              --raw-field title="Update yt-dlp to $VERSION" \
+              --raw-field head="$BUMP_BRANCH" \
+              --raw-field base="main" \
+              --raw-field body="$body" \
+              --jq '.html_url'
+          fi

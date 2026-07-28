@@ -1,5 +1,9 @@
 name: Release
 
+# Cuts a stable release from main. The release stays a draft while both
+# platforms build, upload, and validate their assets, then flips to published
+# in one atomic step so no updater ever sees a partial release.
+
 on:
   workflow_dispatch:
     inputs:
@@ -13,7 +17,7 @@ on:
 concurrency: release
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   version:
@@ -22,26 +26,28 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       tag: ${{ steps.version.outputs.tag }}
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
           fetch-depth: 0
-          # PAT so version/tag pushes pass branch protection (GITHUB_TOKEN can't).
-          token: ${{ secrets.RELEASE_TOKEN }}
+          persist-credentials: false
 
       - name: Set up pnpm
-        uses: pnpm/action-setup@v6.0.9
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
         with:
           version: 11.6.0
           run_install: false
 
-      - uses: actions/setup-node@v6.4.0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: 24
           cache: pnpm
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Validate release security policy
+        run: pnpm run validate:security
 
       - name: Type-check and build renderer
         run: pnpm run build
@@ -59,33 +65,55 @@ jobs:
           echo "version=$version" >> $env:GITHUB_OUTPUT
           echo "tag=v$version" >> $env:GITHUB_OUTPUT
 
-      - name: Push version commit and tag to main
-        run: git push origin main --follow-tags
-
-      - name: Fast-forward prod to main
+      # A run that dies after packaging leaves a draft whose version this run
+      # has already bumped past, so it can never be published. Runs before the
+      # new tag exists, so this can only ever match earlier drafts. The git tag
+      # and version commit stay: they are already on main and prod.
+      - name: Delete draft releases left by failed runs
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         run: |
+          gh api --paginate "repos/${{ github.repository }}/releases?per_page=100" `
+            --jq '.[] | select(.draft and (.tag_name | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))) | .id' |
+            ForEach-Object {
+              Write-Host "Deleting stale draft release $_"
+              gh api -X DELETE "repos/${{ github.repository }}/releases/$_"
+            }
+
+      - name: Push version, fast-forward prod, and create draft release
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          gh auth setup-git
+          git push origin main --follow-tags
           git fetch origin prod
           git checkout prod
           git merge --ff-only main
           git push origin prod
           git checkout main
+          gh release create "v${{ steps.version.outputs.version }}" `
+            --repo "${{ github.repository }}" `
+            --verify-tag `
+            --draft `
+            --title "SoundDeck Studio v${{ steps.version.outputs.version }}"
 
   windows-package:
     needs: version
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.version.outputs.tag }}
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Set up pnpm
-        uses: pnpm/action-setup@v6.0.9
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
         with:
           version: 11.6.0
           run_install: false
 
-      - uses: actions/setup-node@v6.4.0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: 24
           cache: pnpm
@@ -93,58 +121,64 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Fetch VB-CABLE driver pack
-        run: node scripts/fetch-vbcable.mjs
+      # dist:win fetches the manifest-pinned native tools, builds without
+      # publishing, and verifies the packaged binaries. Same pipeline as CI.
+      - name: Build and verify Windows installers
+        run: pnpm run dist:win
 
-      - name: Generate installer artwork
-        run: node scripts/make-installer-art.mjs
-
-      - name: Build renderer
-        run: pnpm run build
-
-      - name: Reverify VB-CABLE packaging input
-        run: node scripts/verify-vbcable.mjs
-
-      - name: Build and publish Windows installers
-        run: pnpm exec electron-builder --win --publish always
+      - name: Upload Windows artifacts to draft release
         env:
           GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          $patterns = @("release/*.exe", "release/*.exe.blockmap", "release/latest.yml")
+          $artifactPaths = @($patterns | ForEach-Object {
+            Get-ChildItem $_ -File -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }
+          })
+          if (-not ($artifactPaths | Where-Object { $_ -like "*.exe" })) {
+            throw "No Windows executable artifacts found."
+          }
+          if (-not ($artifactPaths | Where-Object { $_ -like "*latest.yml" })) {
+            throw "No Windows updater feed found."
+          }
+          gh release upload "${{ needs.version.outputs.tag }}" @artifactPaths --clobber
 
   macos-package:
-    needs: [version, windows-package]
+    needs: version
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.version.outputs.tag }}
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Set up pnpm
-        uses: pnpm/action-setup@v6.0.9
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
         with:
           version: 11.6.0
           run_install: false
 
-      - uses: actions/setup-node@v6.4.0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: 24
           cache: pnpm
 
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Fetch verified native tools
+        run: node scripts/fetch-native-tools.mjs --platform darwin --arch universal
+
       - name: Import Developer ID certificates
-        uses: apple-actions/import-codesign-certs@v7
+        uses: apple-actions/import-codesign-certs@5142e029c445c10ffc7149d172e540235a065466 # v7
         with:
           p12-file-base64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
           p12-password: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
 
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          YOUTUBE_DL_SKIP_DOWNLOAD: "true"
-
       - name: Build signed and notarized macOS package
+        run: pnpm run dist:mac
         env:
-          GITHUB_TOKEN: ${{ github.token }}
+          SOUNDDECK_NATIVE_TOOLS_OFFLINE: "1"
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
@@ -154,7 +188,6 @@ jobs:
           MACOS_INSTALLER_IDENTITY: ${{ secrets.MACOS_INSTALLER_IDENTITY }}
           BLACKHOLE_REPO: https://github.com/ExistentialAudio/BlackHole.git
           BLACKHOLE_COMMIT: 11efc147fef0ac537be1c24ea7e29e4b2a2d63c7
-        run: pnpm run dist:mac
 
       - name: Verify macOS package
         run: |
@@ -163,7 +196,7 @@ jobs:
           spctl --assess --verbose --type install release/*.pkg
           xcrun stapler validate release/*.pkg
 
-      - name: Upload macOS package and update artifacts to GitHub Release
+      - name: Upload macOS artifacts to draft release
         env:
           GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         run: |
@@ -177,15 +210,21 @@ jobs:
   release-notes:
     needs: [version, windows-package, macos-package]
     runs-on: windows-latest
+    # contents: write lets github.token read the draft release's assets when
+    # composing the notes — drafts are invisible to read-only tokens. The
+    # write to the release itself still happens through the PAT.
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.version.outputs.tag }}
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Write release notes
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           $repo = "${{ github.repository }}"
           $version = "${{ needs.version.outputs.version }}"
@@ -239,7 +278,79 @@ jobs:
           }
 
           Set-Content -Path notes.md -Value ($lines -join "`n") -Encoding utf8
-          gh release edit $tag --repo $repo --title "SoundDeck Studio $tag" --notes-file notes.md
 
-      - name: Summary
-        run: echo "Released v${{ needs.version.outputs.version }} — https://github.com/${{ github.repository }}/releases/tag/${{ needs.version.outputs.tag }}" >> $env:GITHUB_STEP_SUMMARY
+      - name: Attach notes to draft release
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: gh release edit "${{ needs.version.outputs.tag }}" --repo "${{ github.repository }}" --title "SoundDeck Studio ${{ needs.version.outputs.tag }}" --notes-file notes.md
+
+  publish:
+    needs: [version, windows-package, macos-package, release-notes]
+    runs-on: ubuntu-latest
+    steps:
+      # Publishing through the PAT rather than github.token: a release event
+      # raised by GITHUB_TOKEN triggers no workflows, and download-badge.yml
+      # listens for release:published.
+      - name: Validate draft assets and publish release
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          TAG: ${{ needs.version.outputs.tag }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          # Drafts have no git ref, so releases/tags/$TAG can't find them.
+          release_id="$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            --jq ".[] | select(.draft and .tag_name == \"$TAG\") | .id" | head -n1)"
+          if [[ -z "$release_id" ]]; then
+            echo "Draft release for $TAG not found."
+            exit 1
+          fi
+
+          assets_json="$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases/$release_id/assets?per_page=100")"
+          names="$(jq -r '.[].name' <<< "$assets_json")"
+          echo "Draft assets:"
+          echo "$names"
+
+          missing=0
+          require_asset() {
+            if ! grep -Fxq "$1" <<< "$names"; then
+              echo "Missing required asset: $1"
+              missing=1
+            fi
+          }
+          require_asset "SoundDeck-Studio-Setup-$VERSION.exe"
+          require_asset "SoundDeck-Studio-Setup-$VERSION.exe.blockmap"
+          require_asset "SoundDeck-Studio-$VERSION.exe"
+          require_asset "latest.yml"
+          require_asset "SoundDeck.Studio-$VERSION.pkg"
+          require_asset "SoundDeck.Studio-$VERSION.zip"
+          require_asset "latest-mac.yml"
+          if ! grep -Fxq "SoundDeck.Studio-$VERSION.zip.blockmap" <<< "$names"; then
+            echo "Note: no macOS zip blockmap; differential mac updates unavailable for this release."
+          fi
+
+          # The updater feeds must point at assets that actually exist.
+          check_feed_refs() {
+            local feed="$1"
+            local asset_id
+            asset_id="$(jq -r ".[] | select(.name == \"$feed\") | .id" <<< "$assets_json" | head -n1)"
+            gh api "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" -H "Accept: application/octet-stream" > "$feed"
+            while read -r ref; do
+              [[ -z "$ref" ]] && continue
+              if ! grep -Fxq "$ref" <<< "$names"; then
+                echo "$feed references missing asset: $ref"
+                missing=1
+              fi
+            done < <(sed -nE 's/^.*(url|path): (.+)$/\2/p' "$feed" | sort -u)
+          }
+          check_feed_refs latest.yml
+          check_feed_refs latest-mac.yml
+
+          if [[ "$missing" -ne 0 ]]; then
+            echo "Draft release is incomplete; leaving it unpublished."
+            exit 1
+          fi
+
+          # The atomic step: both platforms are complete and cross-checked, so
+          # the release becomes visible to users and updaters in one edit.
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+          echo "Published $TAG — https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG" >> "$GITHUB_STEP_SUMMARY"

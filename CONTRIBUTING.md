@@ -22,10 +22,10 @@ Useful commands:
 
 | Command | What it does |
 | --- | --- |
+| `pnpm start` | Fetch verified native tools, then run the app in development (Vite + Electron) |
 | `pnpm test` | Run the Vitest unit tests |
 | `pnpm run build` | Type-check (tsc) and bundle the renderer |
 | `pnpm run dist:win` | Build the Windows installer + portable exe into `release/` (downloads VB-CABLE on first run) |
-| `pnpm run dist:win:no-publish` | Same as `dist:win`, but never publishes (used by CI) |
 | `pnpm run dist:mac` | Build the signed/notarized macOS package and updater artifacts into `release/` |
 | `pnpm run dist:mac:unsigned` | Build an unsigned macOS smoke-test app artifact |
 
@@ -34,7 +34,7 @@ Useful commands:
 ## Branch model
 
 - **`main`** is the base branch; all pull requests target `main`.
-- **`prod`** is the release branch. Maintainers release by running the *Release* workflow, which versions `main`, fast-forwards `prod`, and publishes a GitHub Release. Never open PRs against `prod`.
+- **`prod`** is the release branch. Maintainers release by running the *Release* workflow, which versions `main`, fast-forwards `prod`, and assembles a draft GitHub Release. After every packaging job passes, inspect the draft artifacts and updater metadata, then publish it manually. Never open PRs against `prod`.
 - **Betas** are published from `main` by the *Beta* workflow: a nightly cron builds a prerelease whenever `main` has changed since the last build, and maintainers can dispatch it manually for an on-demand build. Betas never touch `prod`, the Release workflow, or `package.json` on `main` (the beta version is written only inside the build).
 
 ## Pull request guidelines

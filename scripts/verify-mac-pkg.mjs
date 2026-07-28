@@ -3,6 +3,7 @@ import { lstat, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import { verifyPackagedProvenance } from "./native-tools.mjs";
 
 const execFileAsync = promisify(execFile);
 const pkgPath = process.argv[2];
@@ -71,6 +72,21 @@ async function verifyAppPayload(appPath) {
     path.join(appPath, "Contents/Resources/trayTemplate@2x.png"),
     "App payload must include the 2x macOS tray template icon."
   );
+  const nativeTools = path.join(appPath, "Contents/Resources/native-tools");
+  const ffmpegX64 = path.join(nativeTools, "ffmpeg-x64");
+  const ffmpegArm64 = path.join(nativeTools, "ffmpeg-arm64");
+  const ytDlp = path.join(nativeTools, "yt-dlp");
+  // Hashes are not re-checked here: codesigning rewrites each binary after
+  // installNativeTools verified it, so provenance is the surviving link.
+  await verifyPackagedProvenance(nativeTools, "darwin");
+  await assertExecutable(ffmpegX64, "App payload must include executable x64 ffmpeg.");
+  await assertExecutable(ffmpegArm64, "App payload must include executable arm64 ffmpeg.");
+  await assertExecutable(ytDlp, "App payload must include executable universal yt-dlp.");
+  await run("lipo", [ffmpegX64, "-verify_arch", "x86_64"]);
+  await run("lipo", [ffmpegArm64, "-verify_arch", "arm64"]);
+  await run("lipo", [ytDlp, "-verify_arch", "x86_64", "arm64"]);
+  await run(process.arch === "x64" ? ffmpegX64 : ffmpegArm64, ["-version"]);
+  await run(ytDlp, ["--version"]);
   await run("codesign", ["--verify", "--deep", "--strict", "--verbose=2", appPath]);
   await run("spctl", ["--assess", "--verbose", "--type", "execute", appPath]);
 }
@@ -101,6 +117,12 @@ async function assertFile(filePath, message) {
     }
     throw error;
   }
+}
+
+async function assertExecutable(filePath, message) {
+  await assertFile(filePath, message);
+  const stats = await lstat(filePath);
+  if ((stats.mode & 0o111) === 0) throw new Error(`${message} File is not executable: ${filePath}`);
 }
 
 function assertIncludes(content, expected, message) {

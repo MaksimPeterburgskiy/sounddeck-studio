@@ -119,14 +119,6 @@ for (const file of uiohookFiles) {
   runCodesign(["--force", "--sign", "-", file]);
 }
 
-const extraDevBinaries = [
-  join(repoRoot, "build", "yt-dlp", "yt-dlp_macos")
-].filter(existsSync);
-
-for (const file of extraDevBinaries) {
-  runCodesign(["--force", "--sign", "-", file]);
-}
-
 const electronRoot = resolvePackageRoot("electron");
 const electronApp = electronRoot ? join(electronRoot, "dist", "Electron.app") : null;
 
@@ -134,6 +126,6 @@ if (electronApp && existsSync(electronApp)) {
   runCodesign(["--force", "--deep", "--sign", "-", electronApp]);
 }
 
-if (!cueSdkFiles.length && !uiohookFiles.length && !extraDevBinaries.length && (!electronApp || !existsSync(electronApp))) {
+if (!cueSdkFiles.length && !uiohookFiles.length && (!electronApp || !existsSync(electronApp))) {
   console.log("> no macOS dev dependencies found to codesign");
 }

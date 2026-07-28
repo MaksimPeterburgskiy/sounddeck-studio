@@ -95,11 +95,10 @@ pnpm start          # dev server + Electron with hot reload
 
 | Command | What it does |
 | --- | --- |
-| `pnpm start` | Run the app in development (Vite + Electron) |
+| `pnpm start` | Fetch verified native tools, then run the app in development (Vite + Electron) |
 | `pnpm test` | Run the Vitest unit tests |
 | `pnpm run build` | Type-check with `tsc` and bundle the renderer |
 | `pnpm run dist:win` | Build the Windows installer + portable exe into `release/` |
-| `pnpm run dist:win:no-publish` | Same as `dist:win`, but never publishes (used by CI) |
 | `pnpm run dist:mac` | Build the signed/notarized macOS package and updater artifacts into `release/` |
 | `pnpm run dist:mac:unsigned` | Build an unsigned macOS smoke-test app artifact |
 

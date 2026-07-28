@@ -1,7 +1,7 @@
-import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { runStep } from "./spawn-command.mjs";
 
 const argv = process.argv.slice(2);
 const args = new Set(argv);
@@ -46,6 +46,9 @@ const env = {
   CSC_INSTALLER_NAME: unsigned ? "" : signingEnv.CSC_INSTALLER_NAME,
   MACOS_INSTALLER_IDENTITY: unsigned ? "" : signingEnv.MACOS_INSTALLER_IDENTITY
 };
+for (const tokenName of ["GITHUB_TOKEN", "GH_TOKEN", "GITHUB_RELEASE_TOKEN", "RELEASE_TOKEN"]) {
+  delete env[tokenName];
+}
 
 const electronBuilderArgs = unsigned
   ? [
@@ -65,11 +68,11 @@ const electronBuilderArgs = unsigned
 const steps = [
   ["pnpm", ["run", "clean:release"]],
   ["node", ["scripts/prepare-mac-assets.mjs"]],
-  ["node", ["scripts/fetch-ytdlp-mac.mjs"]],
+  ["node", ["scripts/fetch-native-tools.mjs", "--platform", "darwin", "--arch", "universal"]],
   ["node", ["scripts/build-blackhole.mjs"]],
   ...(unsigned ? [] : [["node", ["scripts/build-mac-hal-driver-pkg.mjs"]]]),
   ["pnpm", ["run", "build"]],
-  ["pnpm", electronBuilderArgs],
+  ["pnpm", electronBuilderArgs, { SOUNDDECK_NATIVE_TOOLS_OFFLINE: "1" }],
   ...(unsigned ? [] : [["node", ["scripts/fix-mac-pkg-destination.mjs"]]])
 ];
 
@@ -81,8 +84,8 @@ if (unsigned) {
   console.log(`Using keychain notarization profile "${notarizationEnv.APPLE_KEYCHAIN_PROFILE}".`);
 }
 
-for (const [command, stepArgs] of steps) {
-  await run(command, stepArgs);
+for (const [command, stepArgs, envOverrides = {}] of steps) {
+  await runStep(command, stepArgs, { ...env, ...envOverrides });
 }
 
 function readEnvFile(filePath) {
@@ -174,19 +177,4 @@ function selectNotarizationEnv(values, skip) {
     "Set APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, and APPLE_TEAM_ID,",
     "or set APPLE_KEYCHAIN_PROFILE in .env.macos.local."
   ].join(" "));
-}
-
-function run(command, stepArgs) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, stepArgs, {
-      cwd: process.cwd(),
-      env,
-      stdio: "inherit"
-    });
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`${command} ${stepArgs.join(" ")} exited with code ${code}`));
-    });
-  });
 }

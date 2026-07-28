@@ -10,7 +10,6 @@ build/vbcable/
 build/.vbcable-stage-*/
 build/blackhole/
 build/extra-pkgs/
-build/yt-dlp/
 build/icon.icns
 build/icon.png
 build/installerSidebar.bmp
