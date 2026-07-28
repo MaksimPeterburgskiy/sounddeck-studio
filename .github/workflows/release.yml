@@ -65,6 +65,21 @@ jobs:
           echo "version=$version" >> $env:GITHUB_OUTPUT
           echo "tag=v$version" >> $env:GITHUB_OUTPUT
 
+      # A run that dies after packaging leaves a draft whose version this run
+      # has already bumped past, so it can never be published. Runs before the
+      # new tag exists, so this can only ever match earlier drafts. The git tag
+      # and version commit stay: they are already on main and prod.
+      - name: Delete draft releases left by failed runs
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          gh api --paginate "repos/${{ github.repository }}/releases?per_page=100" `
+            --jq '.[] | select(.draft and (.tag_name | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))) | .id' |
+            ForEach-Object {
+              Write-Host "Deleting stale draft release $_"
+              gh api -X DELETE "repos/${{ github.repository }}/releases/$_"
+            }
+
       - name: Push version, fast-forward prod, and create draft release
         env:
           GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
@@ -128,7 +143,7 @@ jobs:
           gh release upload "${{ needs.version.outputs.tag }}" @artifactPaths --clobber
 
   macos-package:
-    needs: [version, windows-package]
+    needs: version
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
