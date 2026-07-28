@@ -868,7 +868,14 @@ function setupAutoUpdates() {
     // switched to stable; never offer or arm that stale payload. (The other
     // direction is fine: a stable payload is acceptable on every channel.)
     const preference = await readUpdateChannelPreference();
-    if (preference === "stable" && installedChannel(info.version) === "beta") return;
+    if (preference === "stable" && installedChannel(info.version) === "beta") {
+      // The switch-time check couldn't download anything while this download
+      // held the updater's single in-flight slot (downloadUpdate() returns
+      // the existing promise). Now that the slot is free, check again so the
+      // stable payload actually arrives instead of waiting for the timer.
+      void check();
+      return;
+    }
     // Re-arm install-on-quit: a channel switch may have disarmed it to keep a
     // payload downloaded from the old channel from installing at quit.
     autoUpdater.autoInstallOnAppQuit = true;
