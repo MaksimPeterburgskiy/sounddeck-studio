@@ -273,7 +273,7 @@ jobs:
           )
 
           if ($prev) {
-            $commits = git log "$prev..$sha" --no-merges --pretty='- %s (%h)' | Where-Object { $_ -notmatch '^- Release v\d' }
+            $commits = git log "$prev..$sha" --no-merges --pretty='- %s (%h)' | Where-Object { $_ -notmatch '^- (Release v\d|Update download badge)' }
             $lines += "### What's changed since $prev"
             $lines += ""
             $lines += $commits
