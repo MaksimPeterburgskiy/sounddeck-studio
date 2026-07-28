@@ -13,6 +13,7 @@ const { shouldDetachProcessTree, terminateProcessTree } = require("./processTree
 const { createMacTrayTemplateImage, MAC_TRAY_ICON_FILENAME } = require("./trayIcon.cjs");
 const { createShutdownLifecycle, registerWindowShutdown } = require("./shutdownLifecycle.cjs");
 const { createUpdateInstallLifecycle } = require("./updateInstallLifecycle.cjs");
+const { installedChannel, isStalePayload, normalizeChannelPreference, resolveUpdaterFlags } = require("./updateChannel.cjs");
 const { getWindowsStartupState, hasStartupArg, startupLoginItemOptions, STARTUP_ARG, WINDOWS_STARTUP_NAME } = require("./startupSettings.cjs");
 const {
   sanitizeName,
@@ -283,12 +284,29 @@ function windowsStartupState(settings) {
   });
 }
 
-async function readAppSettings() {
+let appSettingsWriteQueue = Promise.resolve();
+
+async function readAppSettingsFile() {
   try {
     return JSON.parse(await fs.readFile(appSettingsFile(), "utf8"));
   } catch {
     return {};
   }
+}
+
+async function readAppSettings() {
+  await appSettingsWriteQueue;
+  return readAppSettingsFile();
+}
+
+async function updateAppSettings(update) {
+  const pendingWrite = appSettingsWriteQueue.then(async () => {
+    await fs.mkdir(appRoot(), { recursive: true });
+    const current = await readAppSettingsFile();
+    await fs.writeFile(appSettingsFile(), JSON.stringify(update(current), null, 2));
+  });
+  appSettingsWriteQueue = pendingWrite.catch(() => undefined);
+  return pendingWrite;
 }
 
 async function readStartupPreferences() {
@@ -300,10 +318,22 @@ async function readStartupPreferences() {
 }
 
 async function writeStartupPreferences(preferences) {
-  await fs.mkdir(appRoot(), { recursive: true });
-  const current = await readAppSettings();
-  const startup = { ...(current.startup || {}), ...preferences };
-  await fs.writeFile(appSettingsFile(), JSON.stringify({ ...current, startup }, null, 2));
+  await updateAppSettings((current) => {
+    const startup = { ...(current.startup || {}), ...preferences };
+    return { ...current, startup };
+  });
+}
+
+async function readUpdateChannelPreference() {
+  const settings = await readAppSettings();
+  return normalizeChannelPreference(settings?.updates?.channel);
+}
+
+async function writeUpdateChannelPreference(channel) {
+  await updateAppSettings((current) => {
+    const updates = { ...(current.updates || {}), channel };
+    return { ...current, updates };
+  });
 }
 
 async function getStartupSettings(argv = process.argv) {
@@ -774,6 +804,29 @@ function registerHotkeys(bindings) {
 
 const UPDATE_CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
 
+// The channel IPC is registered at module scope, not in setupAutoUpdates():
+// the renderer queries the channel in its mount effect, which can run before
+// createWindow() resolves and setupAutoUpdates() gets called. What a change
+// of preference does to the live updater is injected by setupAutoUpdates()
+// once one exists; until then persisting the preference is all there is to do.
+let onUpdateChannelPreferenceChanged = () => undefined;
+
+async function updateChannelState() {
+  return {
+    preference: await readUpdateChannelPreference(),
+    installedChannel: installedChannel(app.getVersion())
+  };
+}
+
+handleTrustedIpc("update:getChannel", () => updateChannelState());
+handleTrustedIpc("update:setChannel", async (_event, channel) => {
+  const preference = normalizeChannelPreference(channel);
+  if (!preference) throw new Error("Unknown update channel");
+  await writeUpdateChannelPreference(preference);
+  onUpdateChannelPreferenceChanged(preference);
+  return updateChannelState();
+});
+
 function setupAutoUpdates() {
   const registerUnsupportedUpdateHandlers = () => {
     // No auto-updater is available for this build (dev, portable, or missing
@@ -810,15 +863,67 @@ function setupAutoUpdates() {
   autoUpdater.on("update-available", (info) => sendStatus({ state: "downloading", version: info.version, percent: 0 }));
   autoUpdater.on("update-not-available", () => sendStatus({ state: "up-to-date" }));
   autoUpdater.on("download-progress", (progress) => sendStatus({ state: "downloading", percent: progress.percent }));
-  autoUpdater.on("update-downloaded", (info) => sendStatus({ state: "ready", version: info.version }));
+  // macOS hands a completed payload to the native Squirrel updater as soon
+  // as autoInstallOnAppQuit is set, and a staged Squirrel update installs at
+  // quit with no way to cancel — a later channel switch couldn't retract it.
+  // So on macOS a payload goes native only on an explicit install; Windows
+  // keeps install-on-quit, whose flag is read at quit time and can still be
+  // disarmed by a switch.
+  const canArmInstallOnQuit = process.platform !== "darwin";
+  autoUpdater.autoInstallOnAppQuit = false;
+  // In-memory mirror of the persisted preference, so the update-downloaded
+  // listener can decide synchronously: macOS's updater consults
+  // autoInstallOnAppQuit the moment this listener yields, so the staleness
+  // decision and the arming can't sit behind an await.
+  let channelPreference = null;
+  // Version of the payload currently offered by the ready toast, or null when
+  // nothing downloaded is installable (including after a channel switch
+  // invalidated it).
+  let readyPayloadVersion = null;
+  autoUpdater.on("update-downloaded", (info) => {
+    // A download begun before a channel switch can finish after it; never
+    // offer or arm a payload the current preference wouldn't have chosen.
+    if (isStalePayload(channelPreference, info.version, app.getVersion())) {
+      readyPayloadVersion = null;
+      // The switch-time check couldn't download anything while this download
+      // held the updater's single in-flight slot (downloadUpdate() returns
+      // the existing promise), and that slot is only released after this
+      // event's dispatch settles. Re-check from a fresh task so the new
+      // channel's payload actually arrives instead of waiting for the timer.
+      setTimeout(() => void check(), 0);
+      return;
+    }
+    // Re-arm install-on-quit where that's revocable (Windows); a channel
+    // switch may have disarmed it to keep an old-channel payload from
+    // installing at quit.
+    if (canArmInstallOnQuit) autoUpdater.autoInstallOnAppQuit = true;
+    readyPayloadVersion = info.version;
+    sendStatus({ state: "ready", version: info.version });
+  });
   handleTrustedIpc("update:install", () => {
+    // A channel switch may have invalidated the payload while its ready toast
+    // was still on screen; never install what the current channel wouldn't
+    // have chosen.
+    if (!readyPayloadVersion) return;
     // Silent install with auto-relaunch: no installer pages, no "run app?" prompt.
     updateInstallLifecycle.requestInstall(() => autoUpdater.quitAndInstall(true, true));
   });
+  // Every metadata check — manual or automatic — funnels through
+  // pendingCheck so a channel switch can wait out an in-flight old-channel
+  // check (electron-updater hands concurrent callers the same cached
+  // promise) before querying anew.
+  let pendingCheck = null;
+  const trackCheck = (run) => {
+    const tracked = run.catch(() => undefined).finally(() => {
+      if (pendingCheck === tracked) pendingCheck = null;
+    });
+    pendingCheck = tracked;
+    return run;
+  };
   handleTrustedIpc("update:check", async () => {
     if (shutdownLifecycle.isShuttingDown()) return;
     try {
-      const result = await autoUpdater.checkForUpdates();
+      const result = await trackCheck(autoUpdater.checkForUpdates());
       await result?.downloadPromise;
     } catch (error) {
       console.error("Manual update check failed:", error);
@@ -827,11 +932,44 @@ function setupAutoUpdates() {
   });
   const check = () => {
     if (shutdownLifecycle.isShuttingDown()) return Promise.resolve();
-    return autoUpdater.checkForUpdates().catch((error) => {
+    return trackCheck(autoUpdater.checkForUpdates()).catch((error) => {
       console.error("Auto-update check failed:", error);
     });
   };
-  check();
+  const applyChannelFlags = (preference) => {
+    const flags = resolveUpdaterFlags(preference, app.getVersion());
+    if (!flags) return;
+    autoUpdater.channel = flags.channel;
+    autoUpdater.allowPrerelease = flags.allowPrerelease;
+    autoUpdater.allowDowngrade = flags.allowDowngrade;
+  };
+  onUpdateChannelPreferenceChanged = (preference) => {
+    channelPreference = preference;
+    applyChannelFlags(preference);
+    // An update downloaded from the old channel may already be registered to
+    // install on quit; disarm that so it can't land after the user switched
+    // away. The check below downloads from the new channel if there is
+    // anything to install, and update-downloaded re-arms install-on-quit.
+    autoUpdater.autoInstallOnAppQuit = false;
+    // A payload already offered by the ready toast may be one the new channel
+    // would never pick; retract it (update:install refuses it from here on,
+    // and up-to-date dismisses the toast).
+    if (readyPayloadVersion && isStalePayload(preference, readyPayloadVersion, app.getVersion())) {
+      readyPayloadVersion = null;
+      sendStatus({ state: "up-to-date" });
+    }
+    // A check already in flight (startup or the four-hour timer) ran with the
+    // old channel, and electron-updater would hand a concurrent call that
+    // same cached promise. Let it settle first, then query the new channel.
+    const settled = pendingCheck || Promise.resolve();
+    void settled.then(() => check());
+  };
+  // The persisted channel preference must be in effect before the first check.
+  void readUpdateChannelPreference().then((preference) => {
+    channelPreference = preference;
+    applyChannelFlags(preference);
+    return check();
+  });
   // Long-running sessions (app lives in the tray) should still pick up new
   // releases without a restart.
   updateCheckTimer = setInterval(check, UPDATE_CHECK_INTERVAL_MS);

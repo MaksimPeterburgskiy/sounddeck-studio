@@ -149,6 +149,15 @@ export interface AppCapabilities {
   corsairAvailable: boolean;
 }
 
+export type UpdateChannel = "stable" | "beta";
+
+export interface UpdateChannelState {
+  /** Explicit user preference; null means the installed version decides. */
+  preference: UpdateChannel | null;
+  /** Channel implied by the installed version's semver prerelease tag. */
+  installedChannel: UpdateChannel;
+}
+
 export type UpdateStatus =
   | { state: "checking" }
   | { state: "up-to-date" }
@@ -195,6 +204,8 @@ declare global {
       onCorsairKey: (callback: (key: string) => void) => () => void;
       checkForUpdates: () => Promise<void>;
       installUpdate: () => Promise<void>;
+      getUpdateChannel: () => Promise<UpdateChannelState>;
+      setUpdateChannel: (channel: UpdateChannel) => Promise<UpdateChannelState>;
       onUpdateStatus: (callback: (status: UpdateStatus) => void) => () => void;
     };
   }
