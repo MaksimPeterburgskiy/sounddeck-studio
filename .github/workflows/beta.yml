@@ -31,9 +31,16 @@ jobs:
       should_build: ${{ steps.version.outputs.should_build }}
       version: ${{ steps.version.outputs.version }}
       tag: ${{ steps.version.outputs.tag }}
+      sha: ${{ steps.version.outputs.sha }}
     steps:
+      # Checked out by branch name, not github.sha: this run may have queued
+      # behind a Release run in the shared concurrency group, and github.sha
+      # was pinned before Release pushed its version commit and stable tag.
+      # Resolving main here (and threading the SHA to the packaging jobs) makes
+      # a queued beta build the post-release state instead of a stale one.
       - uses: actions/checkout@v7.0.1
         with:
+          ref: main
           fetch-depth: 0
 
       - name: Compute beta version and create draft release
@@ -41,6 +48,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          sha="$(git rev-parse HEAD)"
+
           # Freshness guard (cron only): skip the nightly when nothing real has
           # merged since the last build of any kind (stable or beta). Bot-only
           # commits don't count. Dispatched runs always build.
@@ -98,7 +107,7 @@ jobs:
 
           gh release create "$tag" --repo "$GITHUB_REPOSITORY" \
             --draft --prerelease \
-            --target "$GITHUB_SHA" \
+            --target "$sha" \
             --title "SoundDeck Studio $version (beta)" \
             --notes-file notes.md
 
@@ -106,6 +115,7 @@ jobs:
             echo "should_build=true"
             echo "version=$version"
             echo "tag=$tag"
+            echo "sha=$sha"
           } >> "$GITHUB_OUTPUT"
 
   windows-package:
@@ -115,7 +125,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ needs.version.outputs.sha }}
           fetch-depth: 0
 
       - name: Set up pnpm
@@ -160,7 +170,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ needs.version.outputs.sha }}
           fetch-depth: 0
 
       - name: Set up pnpm
