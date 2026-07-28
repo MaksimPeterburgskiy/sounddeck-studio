@@ -13,7 +13,7 @@ const { shouldDetachProcessTree, terminateProcessTree } = require("./processTree
 const { createMacTrayTemplateImage, MAC_TRAY_ICON_FILENAME } = require("./trayIcon.cjs");
 const { createShutdownLifecycle, registerWindowShutdown } = require("./shutdownLifecycle.cjs");
 const { createUpdateInstallLifecycle } = require("./updateInstallLifecycle.cjs");
-const { installedChannel, normalizeChannelPreference, resolveUpdaterFlags } = require("./updateChannel.cjs");
+const { installedChannel, isStalePayload, normalizeChannelPreference, resolveUpdaterFlags } = require("./updateChannel.cjs");
 const { getWindowsStartupState, hasStartupArg, startupLoginItemOptions, STARTUP_ARG, WINDOWS_STARTUP_NAME } = require("./startupSettings.cjs");
 const {
   sanitizeName,
@@ -863,17 +863,21 @@ function setupAutoUpdates() {
   autoUpdater.on("update-available", (info) => sendStatus({ state: "downloading", version: info.version, percent: 0 }));
   autoUpdater.on("update-not-available", () => sendStatus({ state: "up-to-date" }));
   autoUpdater.on("download-progress", (progress) => sendStatus({ state: "downloading", percent: progress.percent }));
-  autoUpdater.on("update-downloaded", async (info) => {
-    // A download started on the beta channel can finish after the user
-    // switched to stable; never offer or arm that stale payload. (The other
-    // direction is fine: a stable payload is acceptable on every channel.)
-    const preference = await readUpdateChannelPreference();
-    if (preference === "stable" && installedChannel(info.version) === "beta") {
+  // In-memory mirror of the persisted preference, so the update-downloaded
+  // listener can decide synchronously: macOS's updater consults
+  // autoInstallOnAppQuit the moment this listener yields, so the staleness
+  // decision and the re-arm can't sit behind an await.
+  let channelPreference = null;
+  autoUpdater.on("update-downloaded", (info) => {
+    // A download begun before a channel switch can finish after it; never
+    // offer or arm a payload the current preference wouldn't have chosen.
+    if (isStalePayload(channelPreference, info.version, app.getVersion())) {
       // The switch-time check couldn't download anything while this download
       // held the updater's single in-flight slot (downloadUpdate() returns
-      // the existing promise). Now that the slot is free, check again so the
-      // stable payload actually arrives instead of waiting for the timer.
-      void check();
+      // the existing promise), and that slot is only released after this
+      // event's dispatch settles. Re-check from a fresh task so the new
+      // channel's payload actually arrives instead of waiting for the timer.
+      setTimeout(() => void check(), 0);
       return;
     }
     // Re-arm install-on-quit: a channel switch may have disarmed it to keep a
@@ -909,6 +913,7 @@ function setupAutoUpdates() {
     autoUpdater.allowDowngrade = flags.allowDowngrade;
   };
   onUpdateChannelPreferenceChanged = (preference) => {
+    channelPreference = preference;
     applyChannelFlags(preference);
     // An update downloaded from the old channel may already be registered to
     // install on quit; disarm that so it can't land after the user switched
@@ -919,6 +924,7 @@ function setupAutoUpdates() {
   };
   // The persisted channel preference must be in effect before the first check.
   void readUpdateChannelPreference().then((preference) => {
+    channelPreference = preference;
     applyChannelFlags(preference);
     return check();
   });

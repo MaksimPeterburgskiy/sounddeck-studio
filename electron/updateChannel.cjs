@@ -28,4 +28,31 @@ function resolveUpdaterFlags(preference) {
   return null;
 }
 
-module.exports = { UPDATE_CHANNELS, normalizeChannelPreference, installedChannel, resolveUpdaterFlags };
+// Numeric compare of the major.minor.patch part, ignoring any prerelease
+// suffix. Returns -1, 0, or 1.
+function compareBaseVersions(a, b) {
+  const parse = (version) => String(version || "").split("-")[0].split(".").map((part) => Number.parseInt(part, 10) || 0);
+  const left = parse(a);
+  const right = parse(b);
+  for (let i = 0; i < 3; i += 1) {
+    const diff = (left[i] || 0) - (right[i] || 0);
+    if (diff !== 0) return diff < 0 ? -1 : 1;
+  }
+  return 0;
+}
+
+// A download begun before a channel switch can complete after it; decides
+// whether that payload may still be offered under the current preference.
+// Stable preference never accepts a beta payload. Beta preference accepts a
+// stable payload only when it is a genuinely newer release, not the remnant
+// of a downgrade the user abandoned by switching back. No preference accepts
+// everything: the updater was never pointed anywhere it shouldn't have been.
+function isStalePayload(preference, payloadVersion, currentVersion) {
+  const channel = normalizeChannelPreference(preference);
+  const payloadChannel = installedChannel(payloadVersion);
+  if (channel === "stable") return payloadChannel === "beta";
+  if (channel === "beta") return payloadChannel === "stable" && compareBaseVersions(payloadVersion, currentVersion) < 0;
+  return false;
+}
+
+module.exports = { UPDATE_CHANNELS, normalizeChannelPreference, installedChannel, resolveUpdaterFlags, isStalePayload };

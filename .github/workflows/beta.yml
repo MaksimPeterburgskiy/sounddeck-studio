@@ -11,7 +11,9 @@ on:
   workflow_dispatch:
 
 # Queue overlapping runs instead of cancelling: killing a near-finished
-# notarization is worse than waiting.
+# notarization is worse than waiting. queue is valid concurrency syntax since
+# May 2026 (max lets up to 100 runs wait FIFO in the group):
+# https://github.blog/changelog/2026-05-07-github-actions-concurrency-groups-now-allow-larger-queues/
 concurrency:
   group: release
   cancel-in-progress: false
