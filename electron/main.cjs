@@ -863,10 +863,18 @@ function setupAutoUpdates() {
   autoUpdater.on("update-available", (info) => sendStatus({ state: "downloading", version: info.version, percent: 0 }));
   autoUpdater.on("update-not-available", () => sendStatus({ state: "up-to-date" }));
   autoUpdater.on("download-progress", (progress) => sendStatus({ state: "downloading", percent: progress.percent }));
+  // macOS hands a completed payload to the native Squirrel updater as soon
+  // as autoInstallOnAppQuit is set, and a staged Squirrel update installs at
+  // quit with no way to cancel — a later channel switch couldn't retract it.
+  // So on macOS a payload goes native only on an explicit install; Windows
+  // keeps install-on-quit, whose flag is read at quit time and can still be
+  // disarmed by a switch.
+  const canArmInstallOnQuit = process.platform !== "darwin";
+  autoUpdater.autoInstallOnAppQuit = false;
   // In-memory mirror of the persisted preference, so the update-downloaded
   // listener can decide synchronously: macOS's updater consults
   // autoInstallOnAppQuit the moment this listener yields, so the staleness
-  // decision and the re-arm can't sit behind an await.
+  // decision and the arming can't sit behind an await.
   let channelPreference = null;
   // Version of the payload currently offered by the ready toast, or null when
   // nothing downloaded is installable (including after a channel switch
@@ -885,9 +893,10 @@ function setupAutoUpdates() {
       setTimeout(() => void check(), 0);
       return;
     }
-    // Re-arm install-on-quit: a channel switch may have disarmed it to keep a
-    // payload downloaded from the old channel from installing at quit.
-    autoUpdater.autoInstallOnAppQuit = true;
+    // Re-arm install-on-quit where that's revocable (Windows); a channel
+    // switch may have disarmed it to keep an old-channel payload from
+    // installing at quit.
+    if (canArmInstallOnQuit) autoUpdater.autoInstallOnAppQuit = true;
     readyPayloadVersion = info.version;
     sendStatus({ state: "ready", version: info.version });
   });
@@ -899,29 +908,36 @@ function setupAutoUpdates() {
     // Silent install with auto-relaunch: no installer pages, no "run app?" prompt.
     updateInstallLifecycle.requestInstall(() => autoUpdater.quitAndInstall(true, true));
   });
+  // Every metadata check — manual or automatic — funnels through
+  // pendingCheck so a channel switch can wait out an in-flight old-channel
+  // check (electron-updater hands concurrent callers the same cached
+  // promise) before querying anew.
+  let pendingCheck = null;
+  const trackCheck = (run) => {
+    const tracked = run.catch(() => undefined).finally(() => {
+      if (pendingCheck === tracked) pendingCheck = null;
+    });
+    pendingCheck = tracked;
+    return run;
+  };
   handleTrustedIpc("update:check", async () => {
     if (shutdownLifecycle.isShuttingDown()) return;
     try {
-      const result = await autoUpdater.checkForUpdates();
+      const result = await trackCheck(autoUpdater.checkForUpdates());
       await result?.downloadPromise;
     } catch (error) {
       console.error("Manual update check failed:", error);
       throw error;
     }
   });
-  let pendingCheck = null;
   const check = () => {
     if (shutdownLifecycle.isShuttingDown()) return Promise.resolve();
-    const run = autoUpdater.checkForUpdates().catch((error) => {
+    return trackCheck(autoUpdater.checkForUpdates()).catch((error) => {
       console.error("Auto-update check failed:", error);
-    }).finally(() => {
-      if (pendingCheck === run) pendingCheck = null;
     });
-    pendingCheck = run;
-    return run;
   };
   const applyChannelFlags = (preference) => {
-    const flags = resolveUpdaterFlags(preference);
+    const flags = resolveUpdaterFlags(preference, app.getVersion());
     if (!flags) return;
     autoUpdater.channel = flags.channel;
     autoUpdater.allowPrerelease = flags.allowPrerelease;

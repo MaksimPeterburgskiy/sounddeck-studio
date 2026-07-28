@@ -18,13 +18,17 @@ function installedChannel(version) {
 // provider requests (latest.yml vs beta.yml) and must override the channel
 // baked into the build's app-update.yml: a beta build ships channel=beta, so
 // without the override a stable switch asks the stable release for beta.yml
-// and 404s instead of downgrading. stable needs allowDowngrade because the
-// current stable release is semver-older than any installed beta of the next
-// version.
-function resolveUpdaterFlags(preference) {
+// and 404s instead of downgrading. stable grants allowDowngrade only while
+// the running build is itself a beta — that's the downgrade onto the current
+// stable release, which is semver-older than any beta of the next version.
+// Once a stable build is installed the permission drops, so a withdrawn or
+// re-pointed latest release can never downgrade stable users.
+function resolveUpdaterFlags(preference, currentVersion) {
   const channel = normalizeChannelPreference(preference);
   if (channel === "beta") return { channel: "beta", allowPrerelease: true, allowDowngrade: false };
-  if (channel === "stable") return { channel: "latest", allowPrerelease: false, allowDowngrade: true };
+  if (channel === "stable") {
+    return { channel: "latest", allowPrerelease: false, allowDowngrade: installedChannel(currentVersion) === "beta" };
+  }
   return null;
 }
 

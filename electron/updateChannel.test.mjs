@@ -34,11 +34,15 @@ describe("resolveUpdaterFlags", () => {
   });
 
   it("opts a stable install into prereleases and the beta feed", () => {
-    expect(resolveUpdaterFlags("beta")).toEqual({ channel: "beta", allowPrerelease: true, allowDowngrade: false });
+    expect(resolveUpdaterFlags("beta", "0.1.17")).toEqual({ channel: "beta", allowPrerelease: true, allowDowngrade: false });
   });
 
   it("points a beta install back at the stable feed and allows the downgrade", () => {
-    expect(resolveUpdaterFlags("stable")).toEqual({ channel: "latest", allowPrerelease: false, allowDowngrade: true });
+    expect(resolveUpdaterFlags("stable", "0.1.18-beta.7")).toEqual({ channel: "latest", allowPrerelease: false, allowDowngrade: true });
+  });
+
+  it("drops the downgrade permission once a stable build is installed", () => {
+    expect(resolveUpdaterFlags("stable", "0.1.17")).toEqual({ channel: "latest", allowPrerelease: false, allowDowngrade: false });
   });
 });
 
