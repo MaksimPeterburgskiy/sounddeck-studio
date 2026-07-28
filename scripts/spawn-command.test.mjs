@@ -1,13 +1,11 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import test from "node:test";
+import { test } from "vitest";
 import { resolveSpawnCommand } from "./spawn-command.mjs";
 
 // The mapping itself is trivial; what can actually break is whether the shim we
 // synthesise is one Windows will really execute.
-test("the resolved Windows pnpm command executes the installed shim", {
-  skip: process.platform !== "win32"
-}, () => {
+test.skipIf(process.platform !== "win32")("the resolved Windows pnpm command executes the installed shim", () => {
   const resolved = resolveSpawnCommand("pnpm", ["--version"]);
   const result = spawnSync(resolved.command, resolved.args, {
     encoding: "utf8",

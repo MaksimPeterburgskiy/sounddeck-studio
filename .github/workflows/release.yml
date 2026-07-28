@@ -181,55 +181,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         run: |
-          shopt -s nullglob
-          pkg_artifacts=(release/*.pkg)
-          zip_artifacts=(release/*.zip)
-          blockmap_artifacts=(release/*.zip.blockmap)
-
-          if (( ${#pkg_artifacts[@]} == 0 )); then
-            echo "No macOS pkg artifact found in release/."
-            exit 1
-          fi
-          if (( ${#zip_artifacts[@]} == 0 )); then
-            echo "No macOS zip updater artifact found in release/."
-            exit 1
-          fi
-          if [[ ! -f release/latest-mac.yml ]]; then
-            echo "No latest-mac.yml updater feed found in release/."
-            exit 1
-          fi
-
-          sanitize_artifact_names() {
-            local artifact
-            local base
-            local dir
-            local sanitized
-
-            for artifact in "$@"; do
-              base="$(basename "$artifact")"
-              dir="$(dirname "$artifact")"
-              sanitized="${base// /.}"
-              if [[ "$base" != "$sanitized" ]]; then
-                mv "$artifact" "$dir/$sanitized"
-              fi
-            done
-          }
-
-          sanitize_artifact_names "${pkg_artifacts[@]}" "${zip_artifacts[@]}" "${blockmap_artifacts[@]}"
-
-          pkg_artifacts=(release/*.pkg)
-          zip_artifacts=(release/*.zip)
-          blockmap_artifacts=(release/*.zip.blockmap)
-
-          mac_zip_name="$(basename "${zip_artifacts[0]}")"
-          node -e 'const fs = require("fs"); const file = "release/latest-mac.yml"; const zip = process.argv[1]; const feed = fs.readFileSync(file, "utf8").replace(/url: .+\.zip/g, `url: ${zip}`).replace(/path: .+\.zip/g, `path: ${zip}`); fs.writeFileSync(file, feed);' "$mac_zip_name"
-
-          gh release upload "${{ needs.version.outputs.tag }}" \
-            "${pkg_artifacts[@]}" \
-            "${zip_artifacts[@]}" \
-            "${blockmap_artifacts[@]}" \
-            release/latest-mac.yml \
-            --clobber
+          # macOS runners default to bash 3.2, which lacks mapfile.
+          assets=()
+          while IFS= read -r asset; do
+            assets+=("$asset")
+          done < <(node scripts/prepare-mac-release-assets.mjs --channel latest)
+          gh release upload "${{ needs.version.outputs.tag }}" "${assets[@]}" --clobber
 
   release-notes:
     needs: [version, windows-package, macos-package]
@@ -253,7 +210,9 @@ jobs:
           $repo = "${{ github.repository }}"
           $version = "${{ needs.version.outputs.version }}"
           $tag = "${{ needs.version.outputs.tag }}"
-          $prev = git describe --tags --abbrev=0 "$tag^" 2>$null
+          # Prerelease tags (betas, rc, ...) land on main too; notes must diff
+          # against the previous *stable*, so skip every dashed tag.
+          $prev = git describe --tags --abbrev=0 --exclude "*-*" "$tag^" 2>$null
           $release = gh release view $tag --repo $repo --json assets | ConvertFrom-Json
           $assetNames = @($release.assets | ForEach-Object { $_.name })
           $windowsInstaller = $assetNames | Where-Object { $_ -eq "SoundDeck-Studio-Setup-$version.exe" } | Select-Object -First 1

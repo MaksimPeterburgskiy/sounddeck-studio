@@ -43,6 +43,9 @@ jobs:
   release-build:
     # Pinned so the check context stays stable if the matrix gains keys later.
     name: release-build (${{ matrix.runner }})
+    # PRs only: pushes to main get full-packaging coverage from the nightly
+    # beta build, so rebuilding (and discarding) artifacts here is wasted work.
+    if: github.event_name == 'pull_request'
     needs: build-and-test
     strategy:
       fail-fast: false
@@ -72,6 +75,15 @@ jobs:
       - name: Build Windows release artifacts
         if: runner.os == 'Windows'
         run: pnpm run dist:win
+
+      # Reuses the verified payload the build above already fetched into
+      # build/vbcable. Confirms the installer-time verifier rejects a hostile
+      # PowerShell module, an unapproved execution target, a tampered manifest,
+      # an unlisted companion file, and a tampered payload file.
+      - name: Exercise VB-CABLE runtime verifier against hostile inputs
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: .\scripts\test-vbcable-runtime-verifier.ps1 -PayloadDirectory .\build\vbcable
 
       - name: Build unsigned macOS release artifact
         if: runner.os == 'macOS'

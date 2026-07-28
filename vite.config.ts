@@ -10,7 +10,7 @@ export default defineConfig({
   },
   test: {
     environment: "node",
-    include: ["src/**/*.test.ts", "electron/**/*.test.mjs"],
+    include: ["src/**/*.test.ts", "electron/**/*.test.mjs", "scripts/**/*.test.mjs"],
     coverage: {
       provider: "v8",
       // Coverage is scoped to the tested library and electron helper modules;
@@ -24,6 +24,7 @@ export default defineConfig({
         "electron/processTree.cjs",
         "electron/security.cjs",
         "electron/shutdownLifecycle.cjs",
+        "electron/updateChannel.cjs",
         "electron/updateInstallLifecycle.cjs"
       ],
       // devBridge is the browser-only stub bridge; its API surface is pinned

@@ -5,7 +5,22 @@ import { promisify } from "node:util";
 import { verifyNativeToolHashes, verifyPackagedProvenance } from "./native-tools.mjs";
 
 const execFileAsync = promisify(execFile);
-const appOutDir = process.argv[2] || path.join("release", "win-unpacked");
+const argv = process.argv.slice(2);
+const positionals = [];
+let channel = "latest";
+for (let index = 0; index < argv.length; index += 1) {
+  if (argv[index] === "--channel") {
+    channel = argv[index + 1];
+    index += 1;
+  } else {
+    positionals.push(argv[index]);
+  }
+}
+if (!/^[a-z][a-z0-9-]*$/.test(channel || "")) {
+  throw new Error("--channel requires a lowercase channel name such as latest or beta.");
+}
+const updaterFeedName = `${channel}.yml`;
+const appOutDir = positionals[0] || path.join("release", "win-unpacked");
 const releaseDir = path.dirname(appOutDir);
 const toolsDir = path.join(appOutDir, "resources", "native-tools");
 const assets = await verifyPackagedProvenance(toolsDir, "win32-x64");
@@ -25,11 +40,11 @@ for (const fileName of [
   installerName,
   `${installerName}.blockmap`,
   portableName,
-  "latest.yml"
+  updaterFeedName
 ]) {
   await access(path.join(releaseDir, fileName));
 }
-const updaterFeed = await readFile(path.join(releaseDir, "latest.yml"), "utf8");
+const updaterFeed = await readFile(path.join(releaseDir, updaterFeedName), "utf8");
 if (
   !updaterFeed.includes(`url: ${installerName}`) ||
   !updaterFeed.includes(`path: ${installerName}`)

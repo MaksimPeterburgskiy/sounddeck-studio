@@ -34,6 +34,8 @@ contextBridge.exposeInMainWorld("sounddeck", {
   },
   checkForUpdates: () => ipcRenderer.invoke("update:check"),
   installUpdate: () => ipcRenderer.invoke("update:install"),
+  getUpdateChannel: () => ipcRenderer.invoke("update:getChannel"),
+  setUpdateChannel: (channel) => ipcRenderer.invoke("update:setChannel", channel),
   onUpdateStatus: (callback) => {
     const listener = (_event, status) => callback(status);
     ipcRenderer.on("update-status", listener);

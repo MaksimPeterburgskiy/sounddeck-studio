@@ -19,8 +19,8 @@
     "fetch:native-tools": "node scripts/fetch-native-tools.mjs",
     "build:blackhole": "node scripts/build-blackhole.mjs",
     "fix:macos-dev-signatures": "node scripts/codesign-macos-dev-deps.mjs",
-    "test": "vitest run && node --test scripts/*.test.mjs",
-    "test:coverage": "vitest run --coverage && node --test scripts/*.test.mjs",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
     "validate:security": "node scripts/validate-security.mjs"
   },
   "build": {
@@ -38,10 +38,6 @@
     "win": {
       "icon": "build/icon.ico",
       "extraResources": [
-        {
-          "from": "build/vbcable",
-          "to": "vbcable"
-        },
         {
           "from": "build/icon.ico",
           "to": "icon.ico"

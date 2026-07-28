@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 import { stageMacosDevelopmentNativeTools } from "./stage-macos-dev-native-tools.mjs";
 
 test("macOS development signing mutates only disposable tool copies", async () => {

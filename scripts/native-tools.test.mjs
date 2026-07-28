@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 import { gzipSync } from "node:zlib";
 import { canUseDevelopmentHostTools } from "./development-native-tools.mjs";
 import {

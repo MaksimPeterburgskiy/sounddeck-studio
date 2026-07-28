@@ -35,6 +35,7 @@ Useful commands:
 
 - **`main`** is the base branch; all pull requests target `main`.
 - **`prod`** is the release branch. Maintainers release by running the *Release* workflow, which versions `main`, fast-forwards `prod`, and assembles a draft GitHub Release. After every packaging job passes, inspect the draft artifacts and updater metadata, then publish it manually. Never open PRs against `prod`.
+- **Betas** are published from `main` by the *Beta* workflow: a nightly cron builds a prerelease whenever `main` has changed since the last build, and maintainers can dispatch it manually for an on-demand build. Betas never touch `prod`, the Release workflow, or `package.json` on `main` (the beta version is written only inside the build).
 
 ## Pull request guidelines
 

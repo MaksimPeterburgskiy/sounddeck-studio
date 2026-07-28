@@ -3,8 +3,15 @@ import os from "node:os";
 import path from "node:path";
 import { runStep } from "./spawn-command.mjs";
 
-const args = new Set(process.argv.slice(2));
+const argv = process.argv.slice(2);
+const args = new Set(argv);
 const unsigned = args.has("--unsigned");
+const channelIndex = argv.indexOf("--channel");
+const channel = channelIndex === -1 ? null : argv[channelIndex + 1];
+
+if (channel !== null && !["latest", "beta"].includes(channel)) {
+  throw new Error(`Unknown update channel "${channel || ""}"; expected latest or beta.`);
+}
 
 if (process.platform !== "darwin") {
   throw new Error([
@@ -48,12 +55,14 @@ const electronBuilderArgs = unsigned
       "exec", "electron-builder", "--mac", "dir", "--universal", "--publish", "never",
       "-c.mac.identity=null",
       "-c.mac.notarize=false",
-      "-c.mac.hardenedRuntime=false"
+      "-c.mac.hardenedRuntime=false",
+      ...(channel ? [`-c.publish.channel=${channel}`] : [])
     ]
   : [
       "exec", "electron-builder", "--mac", "--universal", "--publish", "never",
       `-c.mac.identity=${electronBuilderIdentity(signingEnv.CSC_NAME)}`,
-      `-c.pkg.identity=${electronBuilderIdentity(signingEnv.MACOS_INSTALLER_IDENTITY)}`
+      `-c.pkg.identity=${electronBuilderIdentity(signingEnv.MACOS_INSTALLER_IDENTITY)}`,
+      ...(channel ? [`-c.publish.channel=${channel}`] : [])
     ];
 
 const steps = [
