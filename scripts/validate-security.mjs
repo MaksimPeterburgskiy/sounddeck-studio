@@ -39,6 +39,26 @@ const release = requiredWorkflow("release.yml");
 assert(/^permissions:\s*\n\s+contents:\s*read/m.test(release), "Release workflow must default to contents: read.");
 assert(!/--publish\s+always/.test(release), "Release builds must not publish directly.");
 assert(/gh release create[\s\S]{0,200}--draft/.test(release), "Release workflow must create a draft release.");
+assert(/--draft=false/.test(release), "Release workflow must publish the draft once packaging succeeds.");
+
+// Publishing is the irreversible step: whichever job flips the draft must wait
+// on every packaging job, or a half-uploaded release reaches updaters.
+for (const [name, source] of workflows) {
+  if (!source.includes("--draft=false")) continue;
+  const jobsSection = source.slice(source.indexOf("\njobs:\n"));
+  const jobs = [...jobsSection.matchAll(/\n {2}([\w-]+):\n([\s\S]*?)(?=\n {2}[\w-]+:\n|$)/g)];
+  const packagingJobs = jobs.map(([, job]) => job).filter((job) => job.endsWith("-package"));
+  assert(packagingJobs.length > 0, `${name} publishes a release but has no packaging jobs.`);
+  for (const [, job, body] of jobs) {
+    if (!body.includes("--draft=false")) continue;
+    for (const packagingJob of packagingJobs) {
+      assert(
+        new RegExp(`needs:.*\\b${packagingJob}\\b`).test(body),
+        `${name}: the ${job} job publishes without waiting on ${packagingJob}.`
+      );
+    }
+  }
+}
 
 // The workflows delegate packaging to the dist scripts, so the builder publish
 // flags are only meaningful there. Every electron-builder invocation must carry
