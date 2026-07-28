@@ -51,6 +51,30 @@ jobs:
           echo "version=$(node -p "JSON.parse(require('node:fs').readFileSync('config/native-tools.json', 'utf8')).targets.darwin['yt-dlp'].version")" >> "$GITHUB_OUTPUT"
           echo "manifest=$(base64 < config/native-tools.json | tr -d '\n')" >> "$GITHUB_OUTPUT"
 
+  # When upstream is already at the pinned version again (for example a newer
+  # release was deleted after a bump PR opened), any open bump PR points at
+  # dead assets and must not stay mergeable.
+  close-stale:
+    needs: check
+    if: needs.check.outputs.updated == 'false'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Close a stale yt-dlp bump pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          stale_pr="$(gh api "repos/${{ github.repository }}/pulls?state=open&head=${{ github.repository_owner }}:automation/update-yt-dlp&base=main" --jq '.[0].number // empty')"
+          if [[ -n "$stale_pr" ]]; then
+            gh api --method PATCH "repos/${{ github.repository }}/pulls/$stale_pr" \
+              --raw-field state=closed \
+              >/dev/null
+            echo "Closed stale yt-dlp bump pull request #$stale_pr."
+          else
+            echo "No stale yt-dlp bump pull request to close."
+          fi
+
   propose:
     needs: check
     if: needs.check.outputs.updated == 'true'

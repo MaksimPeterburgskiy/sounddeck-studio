@@ -25,6 +25,25 @@ const ytDlpAssets = {
   "win32-x64": "yt-dlp.exe"
 };
 
+// yt-dlp tags are dotted numbers (2026.07.04, occasionally 2023.12.30.1).
+// Returns -1/0/1; throws on anything else so oddities fail closed.
+export function compareYtDlpVersions(a, b) {
+  const parse = (version) => {
+    const segments = String(version).split(".");
+    if (!segments.length || segments.some((segment) => !/^\d+$/.test(segment))) {
+      throw new Error(`Unexpected yt-dlp version format: ${version}`);
+    }
+    return segments.map(Number);
+  };
+  const left = parse(a);
+  const right = parse(b);
+  for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
+    const difference = (left[index] ?? 0) - (right[index] ?? 0);
+    if (difference !== 0) return difference < 0 ? -1 : 1;
+  }
+  return 0;
+}
+
 export function parseSha256Sums(sums, assetName) {
   const escaped = assetName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const match = sums.match(new RegExp(`^([a-f0-9]{64})\\s+\\*?${escaped}$`, "im"));
@@ -126,6 +145,17 @@ async function main() {
   if (current.every((existing) => existing === version)) {
     console.log(`yt-dlp ${version} is already pinned; nothing to update.`);
     return;
+  }
+  // /releases/latest moves backward when the pinned release is deleted or
+  // drafted upstream; proposing that as an update would downgrade both
+  // packaged binaries. Fail so the scheduled run turns red instead.
+  for (const existing of current) {
+    if (compareYtDlpVersions(version, existing) < 0) {
+      throw new Error(
+        `Latest yt-dlp release ${version} is older than the pinned ${existing}; ` +
+        "refusing to propose a downgrade. Was the pinned release removed upstream?"
+      );
+    }
   }
 
   const sums = await verifySignedSums(version);

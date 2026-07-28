@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { readNativeToolsManifest, validateManifest } from "./native-tools.mjs";
-import { parseSha256Sums, withUpdatedYtDlp } from "./update-ytdlp-manifest.mjs";
+import { compareYtDlpVersions, parseSha256Sums, withUpdatedYtDlp } from "./update-ytdlp-manifest.mjs";
 
 const sums = [
   "52fe3c26dcf71fbdc85b528589020bb0b8e383155cfa81b64dd447bbe35e24b8  yt-dlp.exe",
@@ -43,6 +43,17 @@ test("a yt-dlp bump rewrites both targets and still satisfies the manifest polic
   // ffmpeg entries and the on-disk manifest are untouched.
   assert.deepEqual(updated.targets.darwin["ffmpeg-x64"], manifest.targets.darwin["ffmpeg-x64"]);
   assert.notEqual(manifest.targets.darwin["yt-dlp"].version, version);
+});
+
+test("version comparison orders dotted date tags and rejects other formats", () => {
+  assert.equal(compareYtDlpVersions("2026.07.04", "2026.07.04"), 0);
+  assert.equal(compareYtDlpVersions("2026.07.10", "2026.07.04"), 1);
+  assert.equal(compareYtDlpVersions("2025.12.30", "2026.07.04"), -1);
+  // A fourth hotfix segment outranks the plain date, and missing segments are zero.
+  assert.equal(compareYtDlpVersions("2023.12.30.1", "2023.12.30"), 1);
+  assert.equal(compareYtDlpVersions("2023.12.30", "2023.12.30.0"), 0);
+  assert.throws(() => compareYtDlpVersions("latest", "2026.07.04"), /Unexpected yt-dlp version format/);
+  assert.throws(() => compareYtDlpVersions("2026.07.04", "v2026.07.04"), /Unexpected yt-dlp version format/);
 });
 
 test("the committed signing key pins the audited yt-dlp fingerprint source", async () => {
