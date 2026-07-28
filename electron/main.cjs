@@ -863,7 +863,12 @@ function setupAutoUpdates() {
   autoUpdater.on("update-available", (info) => sendStatus({ state: "downloading", version: info.version, percent: 0 }));
   autoUpdater.on("update-not-available", () => sendStatus({ state: "up-to-date" }));
   autoUpdater.on("download-progress", (progress) => sendStatus({ state: "downloading", percent: progress.percent }));
-  autoUpdater.on("update-downloaded", (info) => {
+  autoUpdater.on("update-downloaded", async (info) => {
+    // A download started on the beta channel can finish after the user
+    // switched to stable; never offer or arm that stale payload. (The other
+    // direction is fine: a stable payload is acceptable on every channel.)
+    const preference = await readUpdateChannelPreference();
+    if (preference === "stable" && installedChannel(info.version) === "beta") return;
     // Re-arm install-on-quit: a channel switch may have disarmed it to keep a
     // payload downloaded from the old channel from installing at quit.
     autoUpdater.autoInstallOnAppQuit = true;
