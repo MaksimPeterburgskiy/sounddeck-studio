@@ -2,9 +2,18 @@ allowBuilds:
   cue-sdk: true
   electron-winstaller: true
   uiohook-napi: true
+minimumReleaseAgeExclude:
+  # Security backport published inside the normal release-age window.
+  - brace-expansion@2.1.3
 overrides:
   "@electron/get@5.0.0>undici": 7.28.0
   "node-gyp@12.4.0>undici": 6.27.0
+  # 2.1.3 backports GHSA-mh99-v99m-4gvg and keeps the CommonJS API used by older minimatch releases.
+  "brace-expansion@<3.0.0": 2.1.3
+  "brace-expansion@>=3.0.0 <=5.0.7": 5.0.8
+  "fast-uri@>=3.0.0 <=3.1.3": 3.1.4
+  "js-yaml@>=4.0.0 <4.3.0": 4.3.0
+  "tar@<=7.5.20": 7.5.22
 
 patchedDependencies:
   app-builder-lib@26.15.3: patches/app-builder-lib@26.15.3.patch
