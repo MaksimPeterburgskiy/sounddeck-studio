@@ -264,8 +264,6 @@ jobs:
             "| [$macInstaller]($(AssetUrl $macInstaller)) | **Recommended for macOS.** Signed and notarized package with auto-update; installs SoundDeck Studio and the bundled BlackHole 2ch virtual audio driver. |",
             "| [$windowsPortable]($(AssetUrl $windowsPortable)) | Windows portable. No installation, but no auto-update either. |",
             "",
-            "> macOS auto-update metadata and zip artifacts are attached to the release for the app updater.",
-            "",
             "> On macOS, microphone passthrough, recording, and global hotkeys may require approving SoundDeck Studio in System Settings -> Privacy & Security.",
             "",
             "> Windows builds are unsigned, so SmartScreen may warn on first run: *More info -> Run anyway*.",

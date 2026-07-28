@@ -102,8 +102,6 @@ jobs:
 
           prev_tag="$(git describe --tags --abbrev=0 --match "v*" 2>/dev/null || true)"
           {
-            echo "> **Beta build**, published automatically from \`main\`. Expect rough edges. Betas auto-update to newer betas and move back onto the next stable release."
-            echo
             if [[ -n "$prev_tag" ]]; then
               echo "### Changes since $prev_tag"
               echo
