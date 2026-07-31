@@ -117,13 +117,58 @@ export class FakeConvolverNode {
 }
 
 export class FakeMediaStreamAudioSourceNode {
+  connections: unknown[] = [];
+
   constructor(
     public context: FakeAudioContext,
     public stream: MediaStream
   ) {}
 
-  connect = vi.fn((destination: unknown) => destination);
+  connect = vi.fn((destination: unknown) => {
+    this.connections.push(destination);
+    return destination;
+  });
   disconnect = vi.fn();
+}
+
+export class FakeMediaStreamAudioDestinationNode {
+  connections: unknown[] = [];
+  stream = fakeStream().stream;
+
+  constructor(public context: FakeAudioContext) {}
+
+  connect = vi.fn((destination: unknown) => {
+    this.connections.push(destination);
+    return destination;
+  });
+  disconnect = vi.fn();
+}
+
+export class FakeAudioWorkletNode {
+  connections: unknown[] = [];
+  port = { postMessage: vi.fn(), onmessage: null as ((event: MessageEvent) => void) | null };
+
+  constructor(public context: FakeAudioContext, public name: string, public options?: AudioWorkletNodeOptions) {
+    context.workletNodes.push(this);
+  }
+
+  connect = vi.fn((destination: unknown) => {
+    this.connections.push(destination);
+    return destination;
+  });
+  disconnect = vi.fn();
+}
+
+export class FakeWorker {
+  static instances: FakeWorker[] = [];
+  onmessage: ((event: MessageEvent) => void) | null = null;
+  onerror: ((event: ErrorEvent) => void) | null = null;
+  postMessage = vi.fn();
+  terminate = vi.fn();
+
+  constructor(public url: URL, public options?: WorkerOptions) {
+    FakeWorker.instances.push(this);
+  }
 }
 
 export class FakeAudioContext {
@@ -137,12 +182,15 @@ export class FakeAudioContext {
   compressors: FakeDynamicsCompressorNode[] = [];
   convolvers: FakeConvolverNode[] = [];
   mediaSources: FakeMediaStreamAudioSourceNode[] = [];
+  mediaDestinations: FakeMediaStreamAudioDestinationNode[] = [];
+  workletNodes: FakeAudioWorkletNode[] = [];
+  audioWorklet = { addModule: vi.fn(async () => undefined) };
   sinkId = "";
   setSinkId = vi.fn(async (sinkId: string) => {
     this.sinkId = sinkId;
   });
 
-  constructor() {
+  constructor(public options?: AudioContextOptions) {
     FakeAudioContext.instances.push(this);
   }
 
@@ -186,6 +234,12 @@ export class FakeAudioContext {
     return source as unknown as MediaStreamAudioSourceNode;
   }
 
+  createMediaStreamDestination() {
+    const destination = new FakeMediaStreamAudioDestinationNode(this);
+    this.mediaDestinations.push(destination);
+    return destination as unknown as MediaStreamAudioDestinationNode;
+  }
+
   close = vi.fn(async () => undefined);
   decodeAudioData = vi.fn(async () => new FakeAudioBuffer() as unknown as AudioBuffer);
   resume = vi.fn(async () => undefined);
@@ -212,9 +266,16 @@ export function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-export function fakeStream() {
-  const track = { stop: vi.fn() };
-  const stream = { getTracks: () => [track] } as unknown as MediaStream;
+export function fakeStream(initialSettings: MediaTrackSettings = {}) {
+  let settings = { ...initialSettings };
+  const track = {
+    stop: vi.fn(),
+    applyConstraints: vi.fn(async (constraints: MediaTrackConstraints) => {
+      if (typeof constraints.echoCancellation === "boolean") settings.echoCancellation = constraints.echoCancellation;
+    }),
+    getSettings: vi.fn(() => ({ ...settings }))
+  };
+  const stream = { getTracks: () => [track], getAudioTracks: () => [track] } as unknown as MediaStream;
   return { stream, track };
 }
 
@@ -228,6 +289,9 @@ export async function waitForMockCalls(mock: ReturnType<typeof vi.fn>, count: nu
 
 const baseSettings: AudioSettings = {
   micPassthrough: true,
+  echoCancellationEnabled: false,
+  noiseSuppressionEnabled: false,
+  noiseSuppressionAttenuationDb: 18,
   soundboardToVirtualMic: true,
   monitorToHeadphones: false,
   monitorMicToHeadphones: false,

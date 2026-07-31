@@ -45,6 +45,26 @@ describe("model helpers", () => {
     expect(library.settings.virtualOutputDeviceId).toBe("");
     expect(library.settings.virtualOutputMode).toBe("managed");
     expect(library.settings.virtualBackend).toBe("windows-vbcable");
+    expect(library.settings.echoCancellationEnabled).toBe(false);
+    expect(library.settings.noiseSuppressionEnabled).toBe(false);
+    expect(library.settings.noiseSuppressionAttenuationDb).toBe(18);
+  });
+
+  it("normalizes microphone processing settings", () => {
+    const library = normalizeLibrary({
+      version: 1,
+      activeBoardId: "a",
+      settings: {
+        echoCancellationEnabled: true,
+        noiseSuppressionEnabled: "yes",
+        noiseSuppressionAttenuationDb: 99
+      } as unknown as SoundLibrary["settings"],
+      boards: [{ id: "a", name: "A", color: "#fff", icon: "zap", createdAt: "", updatedAt: "", sounds: [] }]
+    });
+
+    expect(library.settings.echoCancellationEnabled).toBe(true);
+    expect(library.settings.noiseSuppressionEnabled).toBe(false);
+    expect(library.settings.noiseSuppressionAttenuationDb).toBe(30);
   });
 
   it("creates a default board when a library has no boards", () => {

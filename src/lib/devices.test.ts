@@ -18,12 +18,20 @@ describe("microphone constraints", () => {
   });
 
   it("pins selectable microphone ids exactly", () => {
-    expect(makeMicrophoneConstraints("mic-1")).toEqual({
+    expect(makeMicrophoneConstraints("mic-1", { echoCancellation: true })).toEqual({
       deviceId: { exact: "mic-1" },
-      echoCancellation: false,
+      echoCancellation: true,
       noiseSuppression: false,
       autoGainControl: false
     });
+  });
+
+  it("keeps Chromium noise suppression disabled when app noise suppression is enabled", () => {
+    const constraints = makeMicrophoneConstraints("mic-1", { echoCancellation: true });
+
+    expect(constraints.echoCancellation).toBe(true);
+    expect(constraints.noiseSuppression).toBe(false);
+    expect(constraints.autoGainControl).toBe(false);
   });
 });
 

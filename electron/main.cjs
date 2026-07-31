@@ -144,6 +144,11 @@ function mediaRoot() {
   return path.join(appRoot(), "media");
 }
 
+function deepFilterResourcePath(fileName) {
+  const root = app.isPackaged ? process.resourcesPath : path.join(__dirname, "..");
+  return path.join(root, "deepfilter", fileName);
+}
+
 function bundledYtDlpCandidates() {
   if (app.isPackaged) {
     return [packagedNativeToolPath({
@@ -396,6 +401,9 @@ async function ensureLibrary() {
         activeBoardId: "board-default",
         settings: {
           micPassthrough: false,
+          echoCancellationEnabled: false,
+          noiseSuppressionEnabled: false,
+          noiseSuppressionAttenuationDb: 18,
           soundboardToVirtualMic: false,
           monitorToHeadphones: true,
           monitorMicToHeadphones: false,
@@ -1142,6 +1150,17 @@ handleTrustedIpc("media:read", async (_event, mediaPath) => {
   }
   const data = await fs.readFile(resolved);
   return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+});
+
+handleTrustedIpc("audio:getNoiseSuppressionAssets", async () => {
+  const [wasm, model] = await Promise.all([
+    fs.readFile(deepFilterResourcePath("deep_filter_bg.wasm")),
+    fs.readFile(deepFilterResourcePath("DeepFilterNet3_onnx.tar.gz"))
+  ]);
+  return {
+    wasm: wasm.buffer.slice(wasm.byteOffset, wasm.byteOffset + wasm.byteLength),
+    model: model.buffer.slice(model.byteOffset, model.byteOffset + model.byteLength)
+  };
 });
 
 handleTrustedIpc("media:saveRecording", async (_event, payload) => {

@@ -55,7 +55,25 @@ interface PreviewVoice {
   cleanedUp?: boolean;
 }
 
+interface NoiseSuppressionGraph {
+  context: AudioContext;
+  source: MediaStreamAudioSourceNode;
+  node: AudioWorkletNode;
+  destination: MediaStreamAudioDestinationNode;
+  worker: Worker;
+}
+
 type EngineStatus = "idle" | "playing" | "paused";
+
+export interface MicrophoneProcessingStatus {
+  echoCancellation: "disabled" | "active" | "unavailable";
+  noiseSuppression: "disabled" | "standby" | "loading" | "active" | "unavailable";
+}
+
+const disabledMicrophoneProcessingStatus: MicrophoneProcessingStatus = {
+  echoCancellation: "disabled",
+  noiseSuppression: "disabled"
+};
 
 export class AudioEngine {
   private monitorContext: AudioContext;
@@ -71,6 +89,7 @@ export class AudioEngine {
   private previewGeneration = 0;
   private micStream?: MediaStream;
   private micNodes: Array<{ source: MediaStreamAudioSourceNode; gain: GainNode; context: AudioContext }> = [];
+  private noiseSuppressionGraph?: NoiseSuppressionGraph;
   private micConfigureGeneration = 0;
   private configureGeneration = 0;
   private disposed = false;
@@ -78,10 +97,17 @@ export class AudioEngine {
   private virtualSinkId = "";
   private virtualSinkReady = false;
   private statusCallback: (status: EngineStatus, activeSoundIds: string[]) => void;
+  private processingStatusCallback: (status: MicrophoneProcessingStatus) => void;
+  private processingStatus: MicrophoneProcessingStatus = disabledMicrophoneProcessingStatus;
 
-  constructor(settings: AudioSettings, statusCallback: (status: EngineStatus, activeSoundIds: string[]) => void) {
+  constructor(
+    settings: AudioSettings,
+    statusCallback: (status: EngineStatus, activeSoundIds: string[]) => void,
+    processingStatusCallback: (status: MicrophoneProcessingStatus) => void = () => undefined
+  ) {
     this.settings = settings;
     this.statusCallback = statusCallback;
+    this.processingStatusCallback = processingStatusCallback;
     this.monitorContext = new AudioContext({ latencyHint: "interactive" });
     this.virtualContext = new AudioContext({ latencyHint: "interactive" });
     this.decodeContext = new AudioContext({ latencyHint: "interactive" });
@@ -98,6 +124,8 @@ export class AudioEngine {
     this.configureGeneration = generation;
     const previousVirtualSinkId = this.virtualSinkId;
     const previousVirtualSinkReady = this.virtualSinkReady;
+    const echoCancellationChanged = this.settings.echoCancellationEnabled !== settings.echoCancellationEnabled;
+    const attenuationChanged = this.settings.noiseSuppressionAttenuationDb !== settings.noiseSuppressionAttenuationDb;
     const shouldConfigureMicForSettings = this.shouldConfigureMic(settings);
     this.settings = settings;
     this.virtualSinkId = virtualSinkId;
@@ -117,8 +145,19 @@ export class AudioEngine {
       previousVirtualSinkId !== virtualSinkId ||
       previousVirtualSinkReady !== this.virtualSinkReady;
     this.applyBusVolumes();
-    if (shouldConfigureMic) await this.configureMic();
-    else this.applyMicVolumes();
+    if (shouldConfigureMic) {
+      await this.configureMic();
+    } else if (echoCancellationChanged) {
+      const updatedInPlace = await this.applyEchoCancellationConstraint();
+      if (!updatedInPlace) await this.configureMic();
+      else {
+        this.applyMicVolumes();
+        if (attenuationChanged) this.noiseSuppressionGraph?.worker.postMessage({ type: "attenuation", value: this.settings.noiseSuppressionAttenuationDb });
+      }
+    } else {
+      this.applyMicVolumes();
+      if (attenuationChanged) this.noiseSuppressionGraph?.worker.postMessage({ type: "attenuation", value: this.settings.noiseSuppressionAttenuationDb });
+    }
   }
 
   async preload(sound: SoundSlot) {
@@ -549,6 +588,7 @@ export class AudioEngine {
       (nextSettings.micPassthrough && !this.micStream) ||
       this.settings.micPassthrough !== nextSettings.micPassthrough ||
       this.settings.microphoneDeviceId !== nextSettings.microphoneDeviceId ||
+      this.settings.noiseSuppressionEnabled !== nextSettings.noiseSuppressionEnabled ||
       this.settings.soundboardToVirtualMic !== nextSettings.soundboardToVirtualMic ||
       this.settings.monitorToHeadphones !== nextSettings.monitorToHeadphones ||
       this.settings.monitorMicToHeadphones !== nextSettings.monitorMicToHeadphones
@@ -599,10 +639,16 @@ export class AudioEngine {
     const generation = this.micConfigureGeneration + 1;
     this.micConfigureGeneration = generation;
     this.stopMic();
-    if (!this.settings.micPassthrough) return;
+    if (!this.settings.micPassthrough) {
+      this.setProcessingStatus({
+        echoCancellation: "disabled",
+        noiseSuppression: this.settings.noiseSuppressionEnabled ? "standby" : "disabled"
+      });
+      return;
+    }
     const microphoneDeviceId = normalizeSelectableDeviceId(this.settings.microphoneDeviceId);
     const constraints: MediaStreamConstraints = {
-      audio: makeMicrophoneConstraints(microphoneDeviceId)
+      audio: makeMicrophoneConstraints(microphoneDeviceId, { echoCancellation: this.settings.echoCancellationEnabled })
     };
     let stream: MediaStream;
     try {
@@ -614,7 +660,9 @@ export class AudioEngine {
       }
       if (generation === this.micConfigureGeneration) console.warn("Selected microphone failed; retrying with system default", error);
       try {
-        stream = await navigator.mediaDevices.getUserMedia({ audio: makeMicrophoneConstraints("") });
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: makeMicrophoneConstraints("", { echoCancellation: this.settings.echoCancellationEnabled })
+        });
       } catch (fallbackError) {
         if (generation === this.micConfigureGeneration) console.warn("Microphone passthrough fallback failed", fallbackError);
         return;
@@ -626,12 +674,17 @@ export class AudioEngine {
       return;
     }
     this.micStream = stream;
+    this.updateEchoCancellationStatus(stream);
 
     try {
+      const routedStream = this.settings.noiseSuppressionEnabled
+        ? await this.createNoiseSuppressionStream(stream, generation)
+        : stream;
+      if (generation !== this.micConfigureGeneration || !this.settings.micPassthrough) return;
       const contexts = this.contextsForTarget("both");
       for (const route of contexts) {
         if (route.context === this.monitorContext && !this.settings.monitorMicToHeadphones) continue;
-        const source = route.context.createMediaStreamSource(stream);
+        const source = route.context.createMediaStreamSource(routedStream);
         const gain = route.context.createGain();
         gain.gain.value = route.context === this.monitorContext ? this.settings.micMonitorVolume : this.settings.micVirtualVolume;
         source.connect(gain).connect(route.context.destination);
@@ -648,8 +701,129 @@ export class AudioEngine {
       node.gain.disconnect();
     }
     this.micNodes = [];
+    this.stopNoiseSuppression();
     this.micStream?.getTracks().forEach((track) => track.stop());
     this.micStream = undefined;
+    this.setProcessingStatus({ echoCancellation: "disabled" });
+  }
+
+  private async applyEchoCancellationConstraint() {
+    const track = this.micStream?.getAudioTracks?.()[0] ?? this.micStream?.getTracks()[0];
+    if (!track || !track.applyConstraints) return false;
+    const microphoneDeviceId = normalizeSelectableDeviceId(this.settings.microphoneDeviceId);
+    try {
+      await track.applyConstraints(makeMicrophoneConstraints(microphoneDeviceId, {
+        echoCancellation: this.settings.echoCancellationEnabled
+      }));
+      const actual = track.getSettings?.().echoCancellation;
+      if (typeof actual === "boolean" && actual !== this.settings.echoCancellationEnabled) return false;
+      this.setProcessingStatus({ echoCancellation: this.settings.echoCancellationEnabled ? "active" : "disabled" });
+      return true;
+    } catch (error) {
+      console.warn("Echo cancellation update failed; reopening the microphone", error);
+      return false;
+    }
+  }
+
+  private updateEchoCancellationStatus(stream: MediaStream) {
+    if (!this.settings.echoCancellationEnabled) {
+      this.setProcessingStatus({ echoCancellation: "disabled" });
+      return;
+    }
+    const track = stream.getAudioTracks?.()[0] ?? stream.getTracks()[0];
+    const actual = track?.getSettings?.().echoCancellation;
+    this.setProcessingStatus({ echoCancellation: actual === false ? "unavailable" : "active" });
+  }
+
+  private async createNoiseSuppressionStream(stream: MediaStream, generation: number) {
+    this.setProcessingStatus({ noiseSuppression: "loading" });
+    let context: AudioContext | undefined;
+    try {
+      context = new AudioContext({ latencyHint: "interactive", sampleRate: 48000 });
+      await context.audioWorklet.addModule(new URL("./deepFilterWorklet.js", import.meta.url));
+      if (generation !== this.micConfigureGeneration || this.disposed) {
+        await context.close();
+        return stream;
+      }
+      const source = context.createMediaStreamSource(stream);
+      const node = new AudioWorkletNode(context, "sounddeck-deep-filter", {
+        channelCount: 1,
+        channelCountMode: "explicit",
+        channelInterpretation: "speakers",
+        numberOfInputs: 1,
+        numberOfOutputs: 1,
+        outputChannelCount: [1]
+      });
+      const destination = context.createMediaStreamDestination();
+      const worker = new Worker(new URL("./deepFilterWorker.ts", import.meta.url), { type: "module", name: "sounddeck-deep-filter" });
+      const channel = new MessageChannel();
+      node.port.postMessage({ type: "connect", port: channel.port1 }, [channel.port1]);
+      source.connect(node).connect(destination);
+      node.port.onmessage = (event: MessageEvent<{ type: "error" | "underrun"; message?: string }>) => {
+        if (event.data?.type === "error") console.warn("DeepFilterNet audio worklet failed", event.data.message);
+        if (event.data?.type === "error" || event.data?.type === "underrun") this.setProcessingStatus({ noiseSuppression: "unavailable" });
+      };
+      worker.onmessage = (event: MessageEvent<{ type: "ready" | "error"; message?: string }>) => {
+        if (this.noiseSuppressionGraph?.worker !== worker) return;
+        if (event.data?.type === "ready") this.setProcessingStatus({ noiseSuppression: "active" });
+        if (event.data?.type === "error") {
+          console.warn("DeepFilterNet worker failed", event.data.message);
+          this.setProcessingStatus({ noiseSuppression: "unavailable" });
+        }
+      };
+      worker.onerror = (event) => {
+        if (this.noiseSuppressionGraph?.worker !== worker) return;
+        console.warn("DeepFilterNet worker crashed", event.message);
+        this.setProcessingStatus({ noiseSuppression: "unavailable" });
+      };
+      this.noiseSuppressionGraph = { context, source, node, destination, worker };
+      void window.sounddeck.getNoiseSuppressionAssets().then(({ wasm, model }) => {
+        if (this.noiseSuppressionGraph?.worker !== worker || generation !== this.micConfigureGeneration) {
+          channel.port2.close();
+          return;
+        }
+        worker.postMessage({
+          type: "init",
+          port: channel.port2,
+          wasm,
+          model,
+          attenuationDb: this.settings.noiseSuppressionAttenuationDb
+        }, [channel.port2, wasm, model]);
+      }).catch((error) => {
+        if (this.noiseSuppressionGraph?.worker !== worker) return;
+        console.warn("DeepFilterNet assets could not be loaded", error);
+        this.setProcessingStatus({ noiseSuppression: "unavailable" });
+      });
+      await context.resume();
+      return destination.stream;
+    } catch (error) {
+      console.warn("Noise suppression could not be started", error);
+      this.setProcessingStatus({ noiseSuppression: "unavailable" });
+      if (context) await context.close().catch(() => undefined);
+      return stream;
+    }
+  }
+
+  private stopNoiseSuppression() {
+    const graph = this.noiseSuppressionGraph;
+    this.noiseSuppressionGraph = undefined;
+    if (graph) {
+      graph.worker.postMessage({ type: "dispose" });
+      graph.worker.terminate();
+      graph.source.disconnect();
+      graph.node.disconnect();
+      graph.destination.disconnect();
+      graph.destination.stream.getTracks().forEach((track) => track.stop());
+      void graph.context.close();
+    }
+    this.setProcessingStatus({ noiseSuppression: this.settings.noiseSuppressionEnabled ? "standby" : "disabled" });
+  }
+
+  private setProcessingStatus(patch: Partial<MicrophoneProcessingStatus>) {
+    const next = { ...this.processingStatus, ...patch };
+    if (next.echoCancellation === this.processingStatus.echoCancellation && next.noiseSuppression === this.processingStatus.noiseSuppression) return;
+    this.processingStatus = next;
+    this.processingStatusCallback(next);
   }
 
   private stopVoice(voice: ActiveVoice, fadeSeconds: number) {
