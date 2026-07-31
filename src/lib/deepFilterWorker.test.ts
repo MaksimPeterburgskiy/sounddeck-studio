@@ -36,7 +36,7 @@ describe("DeepFilter worker", () => {
     vi.unstubAllGlobals();
   });
 
-  it("uses an attenuation change received while the model is loading", async () => {
+  it("runs the worker lifecycle while preserving attenuation changes during loading", async () => {
     let finishLoading!: () => void;
     deepFilter.init.mockReturnValue(new Promise<void>((resolve) => {
       finishLoading = resolve;
@@ -52,9 +52,16 @@ describe("DeepFilter worker", () => {
       postMessage: vi.fn()
     };
     vi.stubGlobal("self", workerScope);
+    const closeWorker = vi.fn();
+    vi.stubGlobal("close", closeWorker);
     await import("./deepFilterWorker");
 
-    const port = { close: vi.fn(), onmessage: null, postMessage: vi.fn(), start: vi.fn() };
+    const port = {
+      close: vi.fn(),
+      onmessage: null as ((event: MessageEvent<{ type: "process"; sequence: number; buffer: ArrayBuffer }>) => void) | null,
+      postMessage: vi.fn(),
+      start: vi.fn()
+    };
     const initialization = workerScope.onmessage!({
       data: {
         type: "init",
@@ -69,5 +76,18 @@ describe("DeepFilter worker", () => {
     await initialization;
 
     expect(deepFilter.create).toHaveBeenCalledWith(expect.any(Uint8Array), 24);
+
+    const frame = new Float32Array(480).fill(0.25).buffer;
+    port.onmessage!({ data: { type: "process", sequence: 7, buffer: frame } } as MessageEvent<{ type: "process"; sequence: number; buffer: ArrayBuffer }>);
+    expect(deepFilter.processFrame).toHaveBeenCalledWith(1);
+    expect(port.postMessage).toHaveBeenCalledWith({ type: "processed", sequence: 7, buffer: frame }, [frame]);
+
+    await workerScope.onmessage!({ data: { type: "attenuation", value: 12 } } as MessageEvent);
+    expect(deepFilter.setAttenuation).toHaveBeenCalledWith(1, 12);
+
+    await workerScope.onmessage!({ data: { type: "dispose" } } as MessageEvent);
+    expect(deepFilter.destroy).toHaveBeenCalledWith(1);
+    expect(port.close).toHaveBeenCalledOnce();
+    expect(closeWorker).toHaveBeenCalledOnce();
   });
 });
