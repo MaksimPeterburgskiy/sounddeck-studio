@@ -759,9 +759,11 @@ export class AudioEngine {
       const channel = new MessageChannel();
       node.port.postMessage({ type: "connect", port: channel.port1 }, [channel.port1]);
       source.connect(node).connect(destination);
-      node.port.onmessage = (event: MessageEvent<{ type: "error" | "underrun"; message?: string }>) => {
+      node.port.onmessage = (event: MessageEvent<{ type: "error" | "underrun" | "recovered"; message?: string }>) => {
+        if (this.noiseSuppressionGraph?.worker !== worker) return;
         if (event.data?.type === "error") console.warn("DeepFilterNet audio worklet failed", event.data.message);
         if (event.data?.type === "error" || event.data?.type === "underrun") this.setProcessingStatus({ noiseSuppression: "unavailable" });
+        if (event.data?.type === "recovered") this.setProcessingStatus({ noiseSuppression: "active" });
       };
       worker.onmessage = (event: MessageEvent<{ type: "ready" | "error"; message?: string }>) => {
         if (this.noiseSuppressionGraph?.worker !== worker) return;

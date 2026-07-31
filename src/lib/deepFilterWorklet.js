@@ -87,10 +87,12 @@ class DeepFilterProcessor extends AudioWorkletProcessor {
     const processed = this.processedFrames.get(outputSequence);
     this.processedFrames.delete(outputSequence);
     if (processed) {
+      const recovered = this.consecutiveFallbacks >= 20 && !this.failed;
       this.outputFrame = processed;
       this.outputFrameKind = "processed";
       this.rawPool.push(fallback);
       this.consecutiveFallbacks = 0;
+      if (recovered) this.port.postMessage({ type: "recovered" });
     } else {
       this.outputFrame = fallback;
       this.outputFrameKind = "raw";

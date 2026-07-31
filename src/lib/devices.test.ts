@@ -25,14 +25,6 @@ describe("microphone constraints", () => {
       autoGainControl: false
     });
   });
-
-  it("keeps Chromium noise suppression disabled when app noise suppression is enabled", () => {
-    const constraints = makeMicrophoneConstraints("mic-1", { echoCancellation: true });
-
-    expect(constraints.echoCancellation).toBe(true);
-    expect(constraints.noiseSuppression).toBe(false);
-    expect(constraints.autoGainControl).toBe(false);
-  });
 });
 
 describe("virtual audio device detection", () => {

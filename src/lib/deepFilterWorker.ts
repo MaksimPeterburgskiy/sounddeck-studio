@@ -26,6 +26,7 @@ let memory: WebAssembly.Memory;
 let inputView: Float32Array;
 let outputView: Float32Array;
 let framePort: MessagePort | undefined;
+let attenuationDb: number | undefined;
 
 function refreshViews() {
   inputView = new Float32Array(memory.buffer, inputPointer, frameLength);
@@ -45,6 +46,7 @@ function reportError(error: unknown) {
 self.onmessage = async (event: MessageEvent<InitMessage | { type: "attenuation"; value: number } | { type: "dispose" }>) => {
   const message = event.data;
   if (message.type === "attenuation") {
+    attenuationDb = message.value;
     if (state) df_set_atten_lim(state, message.value);
     return;
   }
@@ -57,8 +59,9 @@ self.onmessage = async (event: MessageEvent<InitMessage | { type: "attenuation";
   }
   try {
     framePort = message.port;
+    attenuationDb ??= message.attenuationDb;
     await initDeepFilter({ module_or_path: message.wasm });
-    state = df_create(new Uint8Array(message.model), message.attenuationDb);
+    state = df_create(new Uint8Array(message.model), attenuationDb);
     frameLength = df_get_frame_length(state);
     inputPointer = df_get_input_ptr(state);
     outputPointer = df_get_output_ptr(state);

@@ -157,7 +157,8 @@ describe("AudioEngine mic routing", () => {
       monitorMicToHeadphones: true,
       noiseSuppressionEnabled: true
     });
-    const engine = new AudioEngine(processedSettings, vi.fn());
+    const processingStatus = vi.fn();
+    const engine = new AudioEngine(processedSettings, vi.fn(), processingStatus);
 
     await engine.configure(processedSettings, "cable-device");
     await Promise.resolve();
@@ -172,8 +173,11 @@ describe("AudioEngine mic routing", () => {
     expect(FakeWorker.instances).toHaveLength(1);
     expect(monitorContext.mediaSources.map((source) => source.stream)).toEqual([processedStream]);
     expect(virtualContext.mediaSources.map((source) => source.stream)).toEqual([processedStream]);
-    expect(monitorContext.mediaSources[0].stream).not.toBe(captured.stream);
-    expect(virtualContext.mediaSources[0].stream).not.toBe(captured.stream);
+
+    processingContext.workletNodes[0].port.onmessage?.({ data: { type: "underrun" } } as MessageEvent);
+    expect(processingStatus).toHaveBeenLastCalledWith(expect.objectContaining({ noiseSuppression: "unavailable" }));
+    processingContext.workletNodes[0].port.onmessage?.({ data: { type: "recovered" } } as MessageEvent);
+    expect(processingStatus).toHaveBeenLastCalledWith(expect.objectContaining({ noiseSuppression: "active" }));
 
     await engine.configure({ ...processedSettings, noiseSuppressionAttenuationDb: 24 }, "cable-device");
     expect(getUserMedia).toHaveBeenCalledTimes(1);
