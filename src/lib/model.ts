@@ -6,6 +6,9 @@ const palette = ["#1db7a6", "#ffcf5c", "#ff6b6b", "#8f7cff", "#4ba3ff", "#74d66b
 const icons = ["zap", "radio", "music", "mic", "laugh", "siren", "sparkles", "gamepad"];
 const defaultSettings: SoundLibrary["settings"] = {
   micPassthrough: false,
+  echoCancellationEnabled: false,
+  noiseSuppressionEnabled: false,
+  noiseSuppressionAttenuationDb: 18,
   soundboardToVirtualMic: false,
   monitorToHeadphones: true,
   monitorMicToHeadphones: false,
@@ -195,7 +198,10 @@ export function normalizeLibrary(library: SoundLibrary): SoundLibrary {
     micVirtualVolume: volumeOr(currentSettings.micVirtualVolume, defaultSettings.micVirtualVolume),
     micMonitorVolume: volumeOr(currentSettings.micMonitorVolume, defaultSettings.micMonitorVolume),
     soundboardVirtualVolume: volumeOr(currentSettings.soundboardVirtualVolume, defaultSettings.soundboardVirtualVolume),
-    soundboardMonitorVolume: volumeOr(currentSettings.soundboardMonitorVolume, defaultSettings.soundboardMonitorVolume)
+    soundboardMonitorVolume: volumeOr(currentSettings.soundboardMonitorVolume, defaultSettings.soundboardMonitorVolume),
+    echoCancellationEnabled: boolOr(currentSettings.echoCancellationEnabled, defaultSettings.echoCancellationEnabled),
+    noiseSuppressionEnabled: boolOr(currentSettings.noiseSuppressionEnabled, defaultSettings.noiseSuppressionEnabled),
+    noiseSuppressionAttenuationDb: Math.round(numberIn(currentSettings.noiseSuppressionAttenuationDb, defaultSettings.noiseSuppressionAttenuationDb, 6, 30))
   };
   settings.stopAllHotkey = normalizeAccelerator(settings.stopAllHotkey);
   settings.cycleBoardsHotkey = normalizeAccelerator(settings.cycleBoardsHotkey);

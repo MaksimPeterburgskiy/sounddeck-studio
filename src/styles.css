@@ -1484,6 +1484,34 @@ input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent);
 
 .buttonLine { display: flex; flex-wrap: wrap; gap: 10px; }
 
+.microphoneProcessing {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg-deep);
+}
+.microphoneProcessingHeader div, .processingToggle label span { display: grid; gap: 3px; }
+.processingToggle { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; }
+.processingToggle label { display: flex; align-items: center; gap: 10px; cursor: pointer; }
+.processingToggle label.disabled, .attenuationControl.disabled { cursor: not-allowed; opacity: 0.55; }
+.processingToggle em {
+  padding: 4px 8px;
+  border: 1px solid var(--line-bright);
+  border-radius: 999px;
+  color: var(--text-faint);
+  font-size: 10px;
+  font-style: normal;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.processingToggle em[data-state="active"] { border-color: var(--accent); color: var(--accent); }
+.processingToggle em[data-state="unavailable"] { border-color: var(--danger); color: var(--danger); }
+.attenuationControl { display: grid !important; grid-template-columns: auto minmax(120px, 1fr) 48px; align-items: center; gap: 10px; }
+.attenuationControl > span, .attenuationControl output { color: var(--text-dim); font-size: 11px; }
+.attenuationControl output { text-align: right; font-family: var(--font-mono); }
+
 .managedRoute, .permissionNotice {
   display: grid;
   grid-template-columns: 22px minmax(0, 1fr) auto;

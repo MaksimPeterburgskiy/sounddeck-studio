@@ -78,11 +78,14 @@ export function getDefaultDeviceLabel(devices: MediaDeviceInfo[], kind: MediaDev
   return label.replace(/^default\s*[-:]\s*/i, "");
 }
 
-export function makeMicrophoneConstraints(deviceId: string | undefined | null): MediaTrackConstraints {
+export function makeMicrophoneConstraints(
+  deviceId: string | undefined | null,
+  options: { echoCancellation?: boolean } = {}
+): MediaTrackConstraints {
   const selectableDeviceId = normalizeSelectableDeviceId(deviceId);
   return {
     ...(selectableDeviceId ? { deviceId: { exact: selectableDeviceId } } : {}),
-    echoCancellation: false,
+    echoCancellation: options.echoCancellation ?? false,
     noiseSuppression: false,
     autoGainControl: false
   };

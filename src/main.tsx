@@ -34,6 +34,7 @@ import {
   X
 } from "lucide-react";
 import { AudioEngine } from "./lib/audioEngine";
+import type { MicrophoneProcessingStatus } from "./lib/audioEngine";
 import { findVirtualAudioCandidates, getDefaultDeviceLabel, isSelectableMediaDevice, makeMicrophoneConstraints, normalizeSelectableDeviceId } from "./lib/devices";
 import type { VirtualAudioCandidate } from "./lib/devices";
 import { acceleratorLooksReserved, formatBytes, formatDuration, getDefaultSoundEffects, makeBoard, normalizeLibrary, normalizeSoundEffects, now, soundEffectsAreActive, soundEffectsAreDefault, soundFromImport } from "./lib/model";
@@ -50,6 +51,7 @@ type View = "board" | "devices" | "settings" | "hotkeys" | "recorder";
 type EngineStatus = "idle" | "playing" | "paused";
 type UpdateCheckStatus = "idle" | "checking" | "up-to-date" | "error";
 type StartupUpdateStatus = "idle" | "saving" | "error";
+const defaultMicrophoneProcessingStatus: MicrophoneProcessingStatus = { echoCancellation: "disabled", noiseSuppression: "disabled" };
 
 function App() {
   const [library, setLibrary] = useState<SoundLibrary | null>(null);
@@ -59,6 +61,7 @@ function App() {
   const [hotkeyResults, setHotkeyResults] = useState<HotkeyResult[]>([]);
   const [engineStatus, setEngineStatus] = useState<EngineStatus>("idle");
   const [playingIds, setPlayingIds] = useState<string[]>([]);
+  const [microphoneProcessingStatus, setMicrophoneProcessingStatus] = useState<MicrophoneProcessingStatus>(defaultMicrophoneProcessingStatus);
   const [editingClipId, setEditingClipId] = useState<string>("");
   const [urlImportOpen, setUrlImportOpen] = useState(false);
   const [dropActive, setDropActive] = useState(false);
@@ -225,10 +228,14 @@ function App() {
 
   useEffect(() => {
     if (!library) return;
-    if (!engineRef.current) engineRef.current = new AudioEngine(library.settings, (status, activeIds) => {
-      setEngineStatus(status);
-      setPlayingIds(activeIds);
-    });
+    if (!engineRef.current) engineRef.current = new AudioEngine(
+      library.settings,
+      (status, activeIds) => {
+        setEngineStatus(status);
+        setPlayingIds(activeIds);
+      },
+      setMicrophoneProcessingStatus
+    );
     void engineRef.current.configure(library.settings, library.settings.virtualOutputDeviceId);
   }, [library?.settings]);
 
@@ -1001,6 +1008,7 @@ function App() {
             platform={platform}
             candidate={recommendedVirtualAudio}
             capabilities={capabilities}
+            processingStatus={microphoneProcessingStatus}
             onRefresh={refreshDevices}
             onChange={changeSettings}
           />
@@ -2120,7 +2128,7 @@ function SettingsPanel({ startupSettings, startupUpdateStatus, capabilities, upd
   );
 }
 
-function DevicePanel({ library, inputDevices, outputDevices, defaultInputLabel, defaultOutputLabel, platform, candidate, capabilities, onRefresh, onChange }: {
+function DevicePanel({ library, inputDevices, outputDevices, defaultInputLabel, defaultOutputLabel, platform, candidate, capabilities, processingStatus, onRefresh, onChange }: {
   library: SoundLibrary;
   inputDevices: MediaDeviceInfo[];
   outputDevices: MediaDeviceInfo[];
@@ -2129,6 +2137,7 @@ function DevicePanel({ library, inputDevices, outputDevices, defaultInputLabel, 
   platform: SoundDeckPlatform;
   candidate: VirtualAudioCandidate | null;
   capabilities: AppCapabilities | null;
+  processingStatus: MicrophoneProcessingStatus;
   onRefresh: () => void;
   onChange: (patch: Partial<SoundLibrary["settings"]>) => void;
 }) {
@@ -2144,6 +2153,13 @@ function DevicePanel({ library, inputDevices, outputDevices, defaultInputLabel, 
     : outputSelected
       ? `${candidate?.outputLabel || route.title} is selected, but ${route.inputLabel} is not visible as an input yet.`
       : route.missing;
+  const echoCancellationSupported = navigator.mediaDevices?.getSupportedConstraints?.().echoCancellation === true;
+  const echoStatus = settings.echoCancellationEnabled
+    ? processingStatus.echoCancellation === "active" ? "Active" : processingStatus.echoCancellation === "unavailable" ? "Unavailable" : "Waiting for mic"
+    : "Off";
+  const suppressionStatus = settings.noiseSuppressionEnabled
+    ? processingStatus.noiseSuppression === "active" ? "Active" : processingStatus.noiseSuppression === "unavailable" ? "Unavailable" : processingStatus.noiseSuppression === "loading" ? "Loading model" : "Waiting for mic"
+    : "Off";
   return (
     <div className="panel">
       <section>
@@ -2157,6 +2173,30 @@ function DevicePanel({ library, inputDevices, outputDevices, defaultInputLabel, 
           </div>
         </div>
         <label><Mic size={16} /> Microphone<select value={settings.microphoneDeviceId} onChange={(event) => onChange({ microphoneDeviceId: event.target.value })}><option value="">{defaultInputOption}</option>{inputDevices.map((device) => <option key={device.deviceId} value={device.deviceId}>{device.label || `Input ${device.deviceId.slice(0, 6)}`}</option>)}</select></label>
+        <div className="microphoneProcessing">
+          <div className="microphoneProcessingHeader">
+            <div><strong>Microphone processing</strong></div>
+          </div>
+          <div className="processingToggle">
+            <label className={!echoCancellationSupported ? "disabled" : ""}>
+              <input type="checkbox" checked={settings.echoCancellationEnabled} disabled={!echoCancellationSupported} onChange={(event) => onChange({ echoCancellationEnabled: event.target.checked })} />
+              <span><strong>Echo cancellation</strong></span>
+            </label>
+            <em data-state={processingStatus.echoCancellation}>{echoCancellationSupported ? echoStatus : "Unsupported"}</em>
+          </div>
+          <div className="processingToggle">
+            <label>
+              <input type="checkbox" checked={settings.noiseSuppressionEnabled} onChange={(event) => onChange({ noiseSuppressionEnabled: event.target.checked })} />
+              <span><strong>Noise suppression</strong></span>
+            </label>
+            <em data-state={processingStatus.noiseSuppression}>{suppressionStatus}</em>
+          </div>
+          <label className={settings.noiseSuppressionEnabled ? "attenuationControl" : "attenuationControl disabled"}>
+            <span>Maximum attenuation</span>
+            <input type="range" min="6" max="30" step="1" disabled={!settings.noiseSuppressionEnabled} value={settings.noiseSuppressionAttenuationDb} onChange={(event) => onChange({ noiseSuppressionAttenuationDb: Number(event.target.value) })} />
+            <output>{settings.noiseSuppressionAttenuationDb} dB</output>
+          </label>
+        </div>
         <label><Headphones size={16} /> Headphones / monitor<select value={settings.monitorDeviceId} onChange={(event) => onChange({ monitorDeviceId: event.target.value })}><option value="">{defaultOutputOption}</option>{outputDevices.map((device) => <option key={device.deviceId} value={device.deviceId}>{device.label || `Output ${device.deviceId.slice(0, 6)}`}</option>)}</select></label>
         <VolumeField label="Mic volume (virtual mic)" value={settings.micVirtualVolume} onChange={(micVirtualVolume) => onChange({ micVirtualVolume })} />
         <VolumeField label="Mic volume (monitoring)" value={settings.micMonitorVolume} onChange={(micMonitorVolume) => onChange({ micMonitorVolume })} />

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AudioEngine } from "./audioEngine";
 import type { AudioSettings } from "../types";
-import { FakeAudioContext, deferred, fakeStream, makeAudioSettings, makeSound, waitForMockCalls } from "./testing/webAudioFakes";
+import { FakeAudioContext, FakeAudioWorkletNode, FakeWorker, deferred, fakeStream, makeAudioSettings, makeSound, waitForMockCalls } from "./testing/webAudioFakes";
 
 const settings: AudioSettings = makeAudioSettings();
 
@@ -15,6 +15,7 @@ const playbackSettings: AudioSettings = makeAudioSettings({
 describe("AudioEngine mic routing", () => {
   beforeEach(() => {
     FakeAudioContext.instances = [];
+    FakeWorker.instances = [];
     vi.stubGlobal("AudioContext", FakeAudioContext);
   });
 
@@ -101,6 +102,129 @@ describe("AudioEngine mic routing", () => {
     expect(virtualContext.setSinkId).toHaveBeenLastCalledWith("cable-device");
     expect(getUserMedia).toHaveBeenCalledTimes(1);
     expect(stream.track.stop).not.toHaveBeenCalled();
+
+    await engine.dispose();
+  });
+
+  it("requests Chromium echo cancellation for live routing", async () => {
+    const captured = fakeStream({ echoCancellation: true });
+    const getUserMedia = vi.fn().mockResolvedValue(captured.stream);
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+    const engine = new AudioEngine(makeAudioSettings({ echoCancellationEnabled: true }), vi.fn());
+
+    await engine.configure(makeAudioSettings({ echoCancellationEnabled: true }), "cable-device");
+
+    expect(getUserMedia).toHaveBeenCalledWith({
+      audio: expect.objectContaining({
+        echoCancellation: true,
+        noiseSuppression: false,
+        autoGainControl: false
+      })
+    });
+
+    await engine.dispose();
+  });
+
+  it("updates echo cancellation in place when the track supports constraints", async () => {
+    const captured = fakeStream({ echoCancellation: false });
+    const getUserMedia = vi.fn().mockResolvedValue(captured.stream);
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+    const engine = new AudioEngine(makeAudioSettings({ echoCancellationEnabled: false }), vi.fn());
+    await engine.configure(makeAudioSettings({ echoCancellationEnabled: false }), "cable-device");
+
+    await engine.configure(makeAudioSettings({ echoCancellationEnabled: true }), "cable-device");
+
+    expect(getUserMedia).toHaveBeenCalledTimes(1);
+    expect(captured.track.applyConstraints).toHaveBeenCalledWith(expect.objectContaining({ echoCancellation: true }));
+    expect(captured.track.stop).not.toHaveBeenCalled();
+
+    await engine.dispose();
+  });
+
+  it("processes the microphone once and shares that stream with monitor and virtual routes", async () => {
+    const captured = fakeStream();
+    const getUserMedia = vi.fn().mockResolvedValue(captured.stream);
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+    vi.stubGlobal("AudioWorkletNode", FakeAudioWorkletNode);
+    vi.stubGlobal("Worker", FakeWorker);
+    vi.stubGlobal("window", {
+      sounddeck: {
+        getNoiseSuppressionAssets: vi.fn(async () => ({ wasm: new ArrayBuffer(8), model: new ArrayBuffer(8) }))
+      }
+    });
+    const processedSettings = makeAudioSettings({
+      monitorToHeadphones: true,
+      monitorMicToHeadphones: true,
+      noiseSuppressionEnabled: true
+    });
+    const processingStatus = vi.fn();
+    const engine = new AudioEngine(processedSettings, vi.fn(), processingStatus);
+
+    await engine.configure(processedSettings, "cable-device");
+    await Promise.resolve();
+
+    const monitorContext = FakeAudioContext.instances[0];
+    const virtualContext = FakeAudioContext.instances[1];
+    const processingContext = FakeAudioContext.instances[3];
+    const processedStream = processingContext.mediaDestinations[0].stream;
+    expect(processingContext.options).toEqual({ latencyHint: "interactive", sampleRate: 48000 });
+    expect(processingContext.mediaSources.map((source) => source.stream)).toEqual([captured.stream]);
+    expect(processingContext.workletNodes).toHaveLength(1);
+    expect(FakeWorker.instances).toHaveLength(1);
+    expect(monitorContext.mediaSources.map((source) => source.stream)).toEqual([processedStream]);
+    expect(virtualContext.mediaSources.map((source) => source.stream)).toEqual([processedStream]);
+
+    processingContext.workletNodes[0].port.onmessage?.({ data: { type: "underrun" } } as MessageEvent);
+    expect(processingStatus).toHaveBeenLastCalledWith(expect.objectContaining({ noiseSuppression: "unavailable" }));
+    processingContext.workletNodes[0].port.onmessage?.({ data: { type: "recovered" } } as MessageEvent);
+    expect(processingStatus).toHaveBeenLastCalledWith(expect.objectContaining({ noiseSuppression: "active" }));
+
+    await engine.configure({ ...processedSettings, noiseSuppressionAttenuationDb: 24 }, "cable-device");
+    expect(getUserMedia).toHaveBeenCalledTimes(1);
+    expect(FakeWorker.instances[0].postMessage).toHaveBeenCalledWith({ type: "attenuation", value: 24 });
+
+    await engine.dispose();
+  });
+
+  it("tears down suppression and routes raw audio when its context cannot start", async () => {
+    class FailingProcessingAudioContext extends FakeAudioContext {
+      constructor(options?: AudioContextOptions) {
+        super(options);
+        if (options?.sampleRate === 48000) this.resume.mockRejectedValue(new DOMException("cannot start", "InvalidStateError"));
+      }
+    }
+    vi.stubGlobal("AudioContext", FailingProcessingAudioContext);
+    vi.stubGlobal("AudioWorkletNode", FakeAudioWorkletNode);
+    vi.stubGlobal("Worker", FakeWorker);
+    const assets = deferred<{ wasm: ArrayBuffer; model: ArrayBuffer }>();
+    vi.stubGlobal("window", { sounddeck: { getNoiseSuppressionAssets: vi.fn(() => assets.promise) } });
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia: vi.fn(async () => fakeStream().stream) } });
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const failedSettings = makeAudioSettings({
+      monitorToHeadphones: true,
+      monitorMicToHeadphones: true,
+      noiseSuppressionEnabled: true
+    });
+    const processingStatus = vi.fn();
+    const engine = new AudioEngine(failedSettings, vi.fn(), processingStatus);
+
+    await engine.configure(failedSettings, "cable-device");
+
+    const monitorContext = FakeAudioContext.instances[0];
+    const virtualContext = FakeAudioContext.instances[1];
+    const processingContext = FakeAudioContext.instances[3];
+    const rawStream = monitorContext.mediaSources[0].stream;
+    expect(virtualContext.mediaSources[0].stream).toBe(rawStream);
+    expect(FakeWorker.instances[0].terminate).toHaveBeenCalledOnce();
+    expect(processingContext.mediaSources[0].disconnect).toHaveBeenCalledOnce();
+    expect(processingContext.workletNodes[0].disconnect).toHaveBeenCalledOnce();
+    expect(processingContext.close).toHaveBeenCalledOnce();
+    expect(processingStatus).toHaveBeenLastCalledWith(expect.objectContaining({ noiseSuppression: "unavailable" }));
+
+    assets.resolve({ wasm: new ArrayBuffer(8), model: new ArrayBuffer(8) });
+    await assets.promise;
+    await Promise.resolve();
+    expect(FakeWorker.instances[0].postMessage).not.toHaveBeenCalledWith(expect.objectContaining({ type: "init" }), expect.anything());
 
     await engine.dispose();
   });

@@ -15,6 +15,9 @@ export function installDevBridge() {
         activeBoardId: "board-default",
         settings: {
           micPassthrough: false,
+          echoCancellationEnabled: false,
+          noiseSuppressionEnabled: false,
+          noiseSuppressionAttenuationDb: 18,
           soundboardToVirtualMic: false,
           monitorToHeadphones: true,
           monitorMicToHeadphones: false,
@@ -54,6 +57,9 @@ export function installDevBridge() {
     },
     async readMedia() {
       throw new Error("Run in Electron to read app-managed media");
+    },
+    async getNoiseSuppressionAssets() {
+      throw new Error("Noise suppression requires the Electron app");
     },
     async deleteMedia() {
       return { ok: true };

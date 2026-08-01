@@ -18,9 +18,9 @@ describe("microphone constraints", () => {
   });
 
   it("pins selectable microphone ids exactly", () => {
-    expect(makeMicrophoneConstraints("mic-1")).toEqual({
+    expect(makeMicrophoneConstraints("mic-1", { echoCancellation: true })).toEqual({
       deviceId: { exact: "mic-1" },
-      echoCancellation: false,
+      echoCancellation: true,
       noiseSuppression: false,
       autoGainControl: false
     });

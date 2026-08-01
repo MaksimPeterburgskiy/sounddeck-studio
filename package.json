@@ -39,6 +39,10 @@
       "icon": "build/icon.ico",
       "extraResources": [
         {
+          "from": "deepfilter",
+          "to": "deepfilter"
+        },
+        {
           "from": "build/icon.ico",
           "to": "icon.ico"
         }
@@ -63,6 +67,10 @@
         "zip"
       ],
       "extraResources": [
+        {
+          "from": "deepfilter",
+          "to": "deepfilter"
+        },
         {
           "from": "build/icon.png",
           "to": "icon.png"
