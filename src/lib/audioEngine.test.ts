@@ -185,6 +185,49 @@ describe("AudioEngine mic routing", () => {
 
     await engine.dispose();
   });
+
+  it("tears down suppression and routes raw audio when its context cannot start", async () => {
+    class FailingProcessingAudioContext extends FakeAudioContext {
+      constructor(options?: AudioContextOptions) {
+        super(options);
+        if (options?.sampleRate === 48000) this.resume.mockRejectedValue(new DOMException("cannot start", "InvalidStateError"));
+      }
+    }
+    vi.stubGlobal("AudioContext", FailingProcessingAudioContext);
+    vi.stubGlobal("AudioWorkletNode", FakeAudioWorkletNode);
+    vi.stubGlobal("Worker", FakeWorker);
+    const assets = deferred<{ wasm: ArrayBuffer; model: ArrayBuffer }>();
+    vi.stubGlobal("window", { sounddeck: { getNoiseSuppressionAssets: vi.fn(() => assets.promise) } });
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia: vi.fn(async () => fakeStream().stream) } });
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const failedSettings = makeAudioSettings({
+      monitorToHeadphones: true,
+      monitorMicToHeadphones: true,
+      noiseSuppressionEnabled: true
+    });
+    const processingStatus = vi.fn();
+    const engine = new AudioEngine(failedSettings, vi.fn(), processingStatus);
+
+    await engine.configure(failedSettings, "cable-device");
+
+    const monitorContext = FakeAudioContext.instances[0];
+    const virtualContext = FakeAudioContext.instances[1];
+    const processingContext = FakeAudioContext.instances[3];
+    const rawStream = monitorContext.mediaSources[0].stream;
+    expect(virtualContext.mediaSources[0].stream).toBe(rawStream);
+    expect(FakeWorker.instances[0].terminate).toHaveBeenCalledOnce();
+    expect(processingContext.mediaSources[0].disconnect).toHaveBeenCalledOnce();
+    expect(processingContext.workletNodes[0].disconnect).toHaveBeenCalledOnce();
+    expect(processingContext.close).toHaveBeenCalledOnce();
+    expect(processingStatus).toHaveBeenLastCalledWith(expect.objectContaining({ noiseSuppression: "unavailable" }));
+
+    assets.resolve({ wasm: new ArrayBuffer(8), model: new ArrayBuffer(8) });
+    await assets.promise;
+    await Promise.resolve();
+    expect(FakeWorker.instances[0].postMessage).not.toHaveBeenCalledWith(expect.objectContaining({ type: "init" }), expect.anything());
+
+    await engine.dispose();
+  });
 });
 
 describe("AudioEngine live effects", () => {

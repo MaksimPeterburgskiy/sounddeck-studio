@@ -801,7 +801,13 @@ export class AudioEngine {
     } catch (error) {
       console.warn("Noise suppression could not be started", error);
       this.setProcessingStatus({ noiseSuppression: "unavailable" });
-      if (context) await context.close().catch(() => undefined);
+      const graph = this.noiseSuppressionGraph;
+      if (graph && graph.context === context) {
+        this.noiseSuppressionGraph = undefined;
+        this.disposeNoiseSuppressionGraph(graph);
+      } else if (context) {
+        await context.close().catch(() => undefined);
+      }
       return stream;
     }
   }
@@ -809,16 +815,18 @@ export class AudioEngine {
   private stopNoiseSuppression() {
     const graph = this.noiseSuppressionGraph;
     this.noiseSuppressionGraph = undefined;
-    if (graph) {
-      graph.worker.postMessage({ type: "dispose" });
-      graph.worker.terminate();
-      graph.source.disconnect();
-      graph.node.disconnect();
-      graph.destination.disconnect();
-      graph.destination.stream.getTracks().forEach((track) => track.stop());
-      void graph.context.close();
-    }
+    if (graph) this.disposeNoiseSuppressionGraph(graph);
     this.setProcessingStatus({ noiseSuppression: this.settings.noiseSuppressionEnabled ? "standby" : "disabled" });
+  }
+
+  private disposeNoiseSuppressionGraph(graph: NoiseSuppressionGraph) {
+    graph.worker.postMessage({ type: "dispose" });
+    graph.worker.terminate();
+    graph.source.disconnect();
+    graph.node.disconnect();
+    graph.destination.disconnect();
+    graph.destination.stream.getTracks().forEach((track) => track.stop());
+    void graph.context.close().catch(() => undefined);
   }
 
   private setProcessingStatus(patch: Partial<MicrophoneProcessingStatus>) {
