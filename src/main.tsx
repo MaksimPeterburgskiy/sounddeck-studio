@@ -2175,19 +2175,19 @@ function DevicePanel({ library, inputDevices, outputDevices, defaultInputLabel, 
         <label><Mic size={16} /> Microphone<select value={settings.microphoneDeviceId} onChange={(event) => onChange({ microphoneDeviceId: event.target.value })}><option value="">{defaultInputOption}</option>{inputDevices.map((device) => <option key={device.deviceId} value={device.deviceId}>{device.label || `Input ${device.deviceId.slice(0, 6)}`}</option>)}</select></label>
         <div className="microphoneProcessing">
           <div className="microphoneProcessingHeader">
-            <div><strong>Microphone processing</strong><span>Echo cancellation runs first, followed by DeepFilterNet noise suppression.</span></div>
+            <div><strong>Microphone processing</strong></div>
           </div>
           <div className="processingToggle">
             <label className={!echoCancellationSupported ? "disabled" : ""}>
               <input type="checkbox" checked={settings.echoCancellationEnabled} disabled={!echoCancellationSupported} onChange={(event) => onChange({ echoCancellationEnabled: event.target.checked })} />
-              <span><strong>Echo cancellation</strong><small>Reduces speaker audio picked up by the microphone.</small></span>
+              <span><strong>Echo cancellation</strong></span>
             </label>
             <em data-state={processingStatus.echoCancellation}>{echoCancellationSupported ? echoStatus : "Unsupported"}</em>
           </div>
           <div className="processingToggle">
             <label>
               <input type="checkbox" checked={settings.noiseSuppressionEnabled} onChange={(event) => onChange({ noiseSuppressionEnabled: event.target.checked })} />
-              <span><strong>Noise suppression</strong><small>Uses DeepFilterNet3 on the live microphone.</small></span>
+              <span><strong>Noise suppression</strong></span>
             </label>
             <em data-state={processingStatus.noiseSuppression}>{suppressionStatus}</em>
           </div>
