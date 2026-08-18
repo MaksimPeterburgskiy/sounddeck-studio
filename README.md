@@ -11,7 +11,7 @@
 [![Latest downloads](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FMaksimPeterburgskiy%2Fsounddeck-studio%2Fmain%2Fdocs%2Fdownloads-badge.json)](https://github.com/MaksimPeterburgskiy/sounddeck-studio/releases/latest)
 [![License: GPLv3](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
 
-Build boards from local audio files, trigger sounds with global hotkeys, and send the mix to Discord, OBS, or games through a virtual microphone.
+Build boards from local audio files, trigger sounds with global hotkeys, and send the mix to Discord, OBS, or games through a virtual microphone, with built-in AI noise suppression and echo cancellation for your mic.
 
 <img src="docs/screenshot.png" alt="SoundDeck Studio main window" width="800" />
 
@@ -57,6 +57,10 @@ A new beta is published every night whenever `main` has changed, as a prerelease
 - Mix your physical microphone into the virtual mic (passthrough)
 - Independent volume controls for mic, soundboard, and headphone monitoring
 - Choose the output device for each audio bus
+
+### Microphone processing
+- Live AI noise suppression powered by [DeepFilterNet3](https://github.com/Rikorose/DeepFilterNet)
+- Echo cancellation to keep speaker output from feeding back into your mic
 
 ### Hotkeys
 - Global OS-level hotkeys that work while you're in-game
