@@ -77,6 +77,126 @@ describe("AudioEngine mic routing", () => {
     await engine.dispose();
   });
 
+  it("routes the microphone to the virtual sink even when soundboard virtual output starts disabled", async () => {
+    const captured = fakeStream();
+    const getUserMedia = vi.fn().mockResolvedValue(captured.stream);
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+    const micSettings = makeAudioSettings({
+      soundboardToVirtualMic: false,
+      monitorMicToHeadphones: false
+    });
+    const engine = new AudioEngine(micSettings, vi.fn());
+
+    await engine.configure(micSettings, "cable-device");
+
+    const monitorContext = FakeAudioContext.instances[0];
+    const virtualContext = FakeAudioContext.instances[1];
+    expect(getUserMedia).toHaveBeenCalledOnce();
+    expect(virtualContext.mediaSources.map((source) => source.stream)).toEqual([captured.stream]);
+    const micGain = virtualContext.mediaSources[0].connect.mock.calls[0][0];
+    expect(virtualContext.gains).toContain(micGain);
+    expect(virtualContext.gains.find((gain) => gain === micGain)?.connections).toContain(virtualContext.destination);
+    expect(monitorContext.mediaSources).toHaveLength(0);
+
+    await engine.dispose();
+  });
+
+  it("keeps the active virtual microphone route while soundboard virtual output is toggled", async () => {
+    const captured = fakeStream();
+    const getUserMedia = vi.fn().mockResolvedValue(captured.stream);
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+    const enabled = makeAudioSettings({ soundboardToVirtualMic: true });
+    const disabled = { ...enabled, soundboardToVirtualMic: false };
+    const engine = new AudioEngine(enabled, vi.fn());
+
+    await engine.configure(enabled, "cable-device");
+    const virtualContext = FakeAudioContext.instances[1];
+    const virtualMicSource = virtualContext.mediaSources[0];
+
+    await engine.configure(disabled, "cable-device");
+    await engine.configure({ ...disabled, monitorToHeadphones: true }, "cable-device");
+    await engine.configure(enabled, "cable-device");
+
+    // Fake disconnects are recorded but deliberately leave their source arrays intact.
+    expect(getUserMedia).toHaveBeenCalledOnce();
+    expect(virtualContext.mediaSources).toEqual([virtualMicSource]);
+    expect(virtualMicSource.disconnect).not.toHaveBeenCalled();
+    expect(captured.track.stop).not.toHaveBeenCalled();
+
+    await engine.dispose();
+  });
+
+  it.each([
+    [false, false],
+    [false, true],
+    [true, false],
+    [true, true]
+  ])("monitors the microphone independently of soundboard monitoring (%s) and virtual output (%s)", async (monitorToHeadphones, soundboardToVirtualMic) => {
+    const captured = fakeStream();
+    const getUserMedia = vi.fn().mockResolvedValue(captured.stream);
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+    const micSettings = makeAudioSettings({
+      monitorToHeadphones,
+      monitorMicToHeadphones: true,
+      soundboardToVirtualMic
+    });
+    const engine = new AudioEngine(micSettings, vi.fn());
+
+    await engine.configure(micSettings, "cable-device");
+
+    const monitorContext = FakeAudioContext.instances[0];
+    const virtualContext = FakeAudioContext.instances[1];
+    expect(monitorContext.mediaSources.map((source) => source.stream)).toEqual([captured.stream]);
+    expect(virtualContext.mediaSources.map((source) => source.stream)).toEqual([captured.stream]);
+
+    await engine.dispose();
+  });
+
+  it("does not route a microphone to headphones when its virtual sink is unavailable and mic monitoring is off", async () => {
+    const captured = fakeStream();
+    const getUserMedia = vi.fn().mockResolvedValue(captured.stream);
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const micSettings = makeAudioSettings({
+      monitorToHeadphones: true,
+      monitorMicToHeadphones: false
+    });
+    const engine = new AudioEngine(micSettings, vi.fn());
+    const virtualContext = FakeAudioContext.instances[1];
+    virtualContext.setSinkId.mockRejectedValueOnce(new DOMException("cable unavailable", "NotFoundError"));
+
+    await engine.configure(micSettings, "cable-device");
+
+    const monitorContext = FakeAudioContext.instances[0];
+    expect(getUserMedia).toHaveBeenCalledOnce();
+    expect(virtualContext.mediaSources).toHaveLength(0);
+    expect(monitorContext.mediaSources).toHaveLength(0);
+
+    await engine.dispose();
+  });
+
+  it("stops microphone capture and routes when microphone passthrough is disabled", async () => {
+    const captured = fakeStream();
+    const getUserMedia = vi.fn().mockResolvedValue(captured.stream);
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+    const enabled = makeAudioSettings({ monitorMicToHeadphones: true });
+    const engine = new AudioEngine(enabled, vi.fn());
+
+    await engine.configure(enabled, "cable-device");
+    const monitorContext = FakeAudioContext.instances[0];
+    const virtualContext = FakeAudioContext.instances[1];
+    const micSources = [...monitorContext.mediaSources, ...virtualContext.mediaSources];
+
+    await engine.configure({ ...enabled, micPassthrough: false }, "cable-device");
+
+    expect(getUserMedia).toHaveBeenCalledOnce();
+    expect(captured.track.stop).toHaveBeenCalledOnce();
+    expect(micSources).toHaveLength(2);
+    expect(micSources.every((source) => source.disconnect.mock.calls.length === 1)).toBe(true);
+
+    await engine.dispose();
+  });
+
   it("ignores stale configure results when cable detection changes during sink switching", async () => {
     const delayedMonitorSwitch = deferred<void>();
     const stream = fakeStream();

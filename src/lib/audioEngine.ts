@@ -589,8 +589,6 @@ export class AudioEngine {
       this.settings.micPassthrough !== nextSettings.micPassthrough ||
       this.settings.microphoneDeviceId !== nextSettings.microphoneDeviceId ||
       this.settings.noiseSuppressionEnabled !== nextSettings.noiseSuppressionEnabled ||
-      this.settings.soundboardToVirtualMic !== nextSettings.soundboardToVirtualMic ||
-      this.settings.monitorToHeadphones !== nextSettings.monitorToHeadphones ||
       this.settings.monitorMicToHeadphones !== nextSettings.monitorMicToHeadphones
     );
   }
@@ -681,14 +679,16 @@ export class AudioEngine {
         ? await this.createNoiseSuppressionStream(stream, generation)
         : stream;
       if (generation !== this.micConfigureGeneration || !this.settings.micPassthrough) return;
-      const contexts = this.contextsForTarget("both");
-      for (const route of contexts) {
-        if (route.context === this.monitorContext && !this.settings.monitorMicToHeadphones) continue;
-        const source = route.context.createMediaStreamSource(routedStream);
-        const gain = route.context.createGain();
-        gain.gain.value = route.context === this.monitorContext ? this.settings.micMonitorVolume : this.settings.micVirtualVolume;
-        source.connect(gain).connect(route.context.destination);
-        this.micNodes.push({ source, gain, context: route.context });
+      // Microphone routes are independent of the soundboard's output toggles.
+      const contexts: AudioContext[] = [];
+      if (this.settings.monitorMicToHeadphones) contexts.push(this.monitorContext);
+      if (this.virtualSinkReady) contexts.push(this.virtualContext);
+      for (const context of contexts) {
+        const source = context.createMediaStreamSource(routedStream);
+        const gain = context.createGain();
+        gain.gain.value = context === this.monitorContext ? this.settings.micMonitorVolume : this.settings.micVirtualVolume;
+        source.connect(gain).connect(context.destination);
+        this.micNodes.push({ source, gain, context });
       }
     } catch (error) {
       if (generation === this.micConfigureGeneration) console.warn("Microphone passthrough failed", error);

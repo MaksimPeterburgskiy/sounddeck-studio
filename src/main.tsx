@@ -2164,7 +2164,7 @@ function DevicePanel({ library, inputDevices, outputDevices, defaultInputLabel, 
     <div className="panel">
       <section>
         <h2>Audio Routing</h2>
-        <div className="toggleRow"><label><input type="checkbox" checked={settings.micPassthrough} onChange={(event) => onChange({ micPassthrough: event.target.checked })} /> Mic passthrough</label><label><input type="checkbox" checked={settings.soundboardToVirtualMic} onChange={(event) => onChange({ soundboardToVirtualMic: event.target.checked })} /> Soundboard to virtual mic</label><label><input type="checkbox" checked={settings.monitorToHeadphones} onChange={(event) => onChange({ monitorToHeadphones: event.target.checked })} /> Monitor soundboard</label><label><input type="checkbox" checked={settings.monitorMicToHeadphones} onChange={(event) => onChange({ monitorMicToHeadphones: event.target.checked })} /> Monitor microphone</label></div>
+        <div className="toggleRow"><label><input type="checkbox" checked={settings.micPassthrough} onChange={(event) => onChange({ micPassthrough: event.target.checked })} /> Microphone to virtual mic</label><label><input type="checkbox" checked={settings.soundboardToVirtualMic} onChange={(event) => onChange({ soundboardToVirtualMic: event.target.checked })} /> Soundboard to virtual mic</label><label><input type="checkbox" checked={settings.monitorToHeadphones} onChange={(event) => onChange({ monitorToHeadphones: event.target.checked })} /> Monitor soundboard</label><label><input type="checkbox" checked={settings.monitorMicToHeadphones} onChange={(event) => onChange({ monitorMicToHeadphones: event.target.checked })} /> Monitor microphone</label></div>
         <div className={routeReady ? "managedRoute ready" : "managedRoute warning"}>
           {routeReady ? <Radio size={18} /> : <AlertCircle size={18} />}
           <div>
@@ -2212,7 +2212,7 @@ function DevicePanel({ library, inputDevices, outputDevices, defaultInputLabel, 
         <p>{route.description}</p>
         <ol>
           <li>In Discord, OBS, or your game, pick <strong>{route.inputLabel}</strong> as the microphone.</li>
-          <li>Enable <strong>Soundboard to virtual mic</strong>, plus <strong>Mic passthrough</strong> if your voice should be mixed in with the sounds.</li>
+          <li>Enable <strong>Microphone to virtual mic</strong> to send your voice, <strong>Soundboard to virtual mic</strong> to send sounds, or both to mix them.</li>
           <li>Keep the headphones / monitor device above on your real headphones so you hear the soundboard without echo or feedback.</li>
         </ol>
         {platform === "darwin" && capabilities && !capabilities.managedVirtualMicAvailable && <p>Packaged macOS builds use the SoundDeck installer to place the bundled audio driver in the system HAL plug-ins folder.</p>}

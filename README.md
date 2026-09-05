@@ -73,7 +73,7 @@ A new beta is published every night whenever `main` has changed, as a prerelease
 
 1. Install SoundDeck Studio. Windows installs VB-CABLE if needed; macOS installs the bundled BlackHole 2ch driver.
 2. Open **Devices** and set **Virtual cable playback device** to `CABLE Input` on Windows or `BlackHole 2ch` on macOS.
-3. Enable **Soundboard to virtual mic** (and **Mic passthrough** if you want your voice mixed in).
+3. Enable **Microphone to virtual mic** to send your voice, **Soundboard to virtual mic** to send sounds, or both to mix them.
 4. In Discord/OBS/your game, set the input device to `CABLE Output` on Windows or `BlackHole 2ch` on macOS.
 5. Keep **Monitor soundboard** pointed at your real headphones so you hear what you play.
 
