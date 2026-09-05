@@ -583,14 +583,16 @@ export class AudioEngine {
     this.virtualBus.gain.setTargetAtTime(this.virtualSinkReady ? this.settings.soundboardVirtualVolume : 0, this.virtualContext.currentTime, 0.02);
   }
 
+  private needsMicrophone(settings: AudioSettings = this.settings) {
+    return settings.micPassthrough || settings.monitorMicToHeadphones;
+  }
+
   private shouldConfigureMic(nextSettings: AudioSettings) {
     return (
-      (nextSettings.micPassthrough && !this.micStream) ||
+      (this.needsMicrophone(nextSettings) && !this.micStream) ||
       this.settings.micPassthrough !== nextSettings.micPassthrough ||
       this.settings.microphoneDeviceId !== nextSettings.microphoneDeviceId ||
       this.settings.noiseSuppressionEnabled !== nextSettings.noiseSuppressionEnabled ||
-      this.settings.soundboardToVirtualMic !== nextSettings.soundboardToVirtualMic ||
-      this.settings.monitorToHeadphones !== nextSettings.monitorToHeadphones ||
       this.settings.monitorMicToHeadphones !== nextSettings.monitorMicToHeadphones
     );
   }
@@ -639,7 +641,7 @@ export class AudioEngine {
     const generation = this.micConfigureGeneration + 1;
     this.micConfigureGeneration = generation;
     this.stopMic();
-    if (!this.settings.micPassthrough) {
+    if (!this.needsMicrophone()) {
       this.setProcessingStatus({
         echoCancellation: "disabled",
         noiseSuppression: this.settings.noiseSuppressionEnabled ? "standby" : "disabled"
@@ -669,7 +671,7 @@ export class AudioEngine {
       }
     }
 
-    if (generation !== this.micConfigureGeneration || !this.settings.micPassthrough) {
+    if (generation !== this.micConfigureGeneration || !this.needsMicrophone()) {
       stream.getTracks().forEach((track) => track.stop());
       return;
     }
@@ -680,15 +682,17 @@ export class AudioEngine {
       const routedStream = this.settings.noiseSuppressionEnabled
         ? await this.createNoiseSuppressionStream(stream, generation)
         : stream;
-      if (generation !== this.micConfigureGeneration || !this.settings.micPassthrough) return;
-      const contexts = this.contextsForTarget("both");
-      for (const route of contexts) {
-        if (route.context === this.monitorContext && !this.settings.monitorMicToHeadphones) continue;
-        const source = route.context.createMediaStreamSource(routedStream);
-        const gain = route.context.createGain();
-        gain.gain.value = route.context === this.monitorContext ? this.settings.micMonitorVolume : this.settings.micVirtualVolume;
-        source.connect(gain).connect(route.context.destination);
-        this.micNodes.push({ source, gain, context: route.context });
+      if (generation !== this.micConfigureGeneration || !this.needsMicrophone()) return;
+      // Microphone routes are independent of the soundboard's output toggles.
+      const contexts: AudioContext[] = [];
+      if (this.settings.monitorMicToHeadphones) contexts.push(this.monitorContext);
+      if (this.settings.micPassthrough && this.virtualSinkReady) contexts.push(this.virtualContext);
+      for (const context of contexts) {
+        const source = context.createMediaStreamSource(routedStream);
+        const gain = context.createGain();
+        gain.gain.value = context === this.monitorContext ? this.settings.micMonitorVolume : this.settings.micVirtualVolume;
+        source.connect(gain).connect(context.destination);
+        this.micNodes.push({ source, gain, context });
       }
     } catch (error) {
       if (generation === this.micConfigureGeneration) console.warn("Microphone passthrough failed", error);
