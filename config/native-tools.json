@@ -23,14 +23,14 @@
         "license": "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/darwin-arm64.LICENSE"
       },
       "yt-dlp": {
-        "version": "2026.07.04",
-        "url": "https://github.com/yt-dlp/yt-dlp/releases/download/2026.07.04/yt-dlp_macos",
+        "version": "2026.08.19",
+        "url": "https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp_macos",
         "compression": "none",
-        "downloadSha256": "498bd0dae17855c599d371d68ec5bafc439a9d8640e838be25c765a9792f261b",
-        "sha256": "498bd0dae17855c599d371d68ec5bafc439a9d8640e838be25c765a9792f261b",
+        "downloadSha256": "0f192b7ec147ab6288885d6351d9ab67367640029b4377576ef46dd79cf7b202",
+        "sha256": "0f192b7ec147ab6288885d6351d9ab67367640029b4377576ef46dd79cf7b202",
         "fileName": "yt-dlp",
         "source": "https://github.com/yt-dlp/yt-dlp",
-        "license": "https://raw.githubusercontent.com/yt-dlp/yt-dlp/2026.07.04/LICENSE"
+        "license": "https://raw.githubusercontent.com/yt-dlp/yt-dlp/2026.08.19/LICENSE"
       }
     },
     "win32-x64": {
@@ -45,14 +45,14 @@
         "license": "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/win32-x64.LICENSE"
       },
       "yt-dlp": {
-        "version": "2026.07.04",
-        "url": "https://github.com/yt-dlp/yt-dlp/releases/download/2026.07.04/yt-dlp.exe",
+        "version": "2026.08.19",
+        "url": "https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp.exe",
         "compression": "none",
-        "downloadSha256": "52fe3c26dcf71fbdc85b528589020bb0b8e383155cfa81b64dd447bbe35e24b8",
-        "sha256": "52fe3c26dcf71fbdc85b528589020bb0b8e383155cfa81b64dd447bbe35e24b8",
+        "downloadSha256": "66674953fe251b89f4d08c5f0e35e0728679bd67ab3d7d05c0562af101dd3e7a",
+        "sha256": "66674953fe251b89f4d08c5f0e35e0728679bd67ab3d7d05c0562af101dd3e7a",
         "fileName": "yt-dlp.exe",
         "source": "https://github.com/yt-dlp/yt-dlp",
-        "license": "https://raw.githubusercontent.com/yt-dlp/yt-dlp/2026.07.04/LICENSE"
+        "license": "https://raw.githubusercontent.com/yt-dlp/yt-dlp/2026.08.19/LICENSE"
       }
     }
   }
