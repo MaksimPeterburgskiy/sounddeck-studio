@@ -17,10 +17,12 @@ const defaultSettings: SoundLibrary["settings"] = {
   soundboardVirtualVolume: 1,
   soundboardMonitorVolume: 1,
   monitorDeviceId: "",
+  monitorDeviceLabel: "",
   virtualOutputDeviceId: "",
   virtualOutputMode: "managed",
   virtualBackend: "windows-vbcable",
   microphoneDeviceId: "",
+  microphoneDeviceLabel: "",
   stopAllHotkey: "Ctrl+Alt+Space",
   cycleBoardsHotkey: ""
 };
@@ -206,10 +208,12 @@ export function normalizeLibrary(library: SoundLibrary): SoundLibrary {
   settings.stopAllHotkey = normalizeAccelerator(settings.stopAllHotkey);
   settings.cycleBoardsHotkey = normalizeAccelerator(settings.cycleBoardsHotkey);
   settings.monitorDeviceId = normalizeSelectableDeviceId(settings.monitorDeviceId);
+  settings.monitorDeviceLabel = String(settings.monitorDeviceLabel ?? "");
   settings.virtualOutputDeviceId = normalizeSelectableDeviceId(settings.virtualOutputDeviceId);
   if (!settings.virtualOutputMode) settings.virtualOutputMode = defaultSettings.virtualOutputMode;
   if (!settings.virtualBackend) settings.virtualBackend = defaultSettings.virtualBackend;
   settings.microphoneDeviceId = normalizeSelectableDeviceId(settings.microphoneDeviceId);
+  settings.microphoneDeviceLabel = String(settings.microphoneDeviceLabel ?? "");
   return {
     ...library,
     activeBoardId,

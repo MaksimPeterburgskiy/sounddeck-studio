@@ -268,15 +268,31 @@ export function deferred<T>() {
 
 export function fakeStream(initialSettings: MediaTrackSettings = {}) {
   let settings = { ...initialSettings };
+  const listeners = new Map<string, Set<EventListenerOrEventListenerObject>>();
   const track = {
     stop: vi.fn(),
+    addEventListener: vi.fn((type: string, handler: EventListenerOrEventListenerObject) => {
+      const handlers = listeners.get(type) ?? new Set<EventListenerOrEventListenerObject>();
+      handlers.add(handler);
+      listeners.set(type, handlers);
+    }),
+    removeEventListener: vi.fn((type: string, handler: EventListenerOrEventListenerObject) => {
+      listeners.get(type)?.delete(handler);
+    }),
     applyConstraints: vi.fn(async (constraints: MediaTrackConstraints) => {
       if (typeof constraints.echoCancellation === "boolean") settings.echoCancellation = constraints.echoCancellation;
     }),
     getSettings: vi.fn(() => ({ ...settings }))
   };
   const stream = { getTracks: () => [track], getAudioTracks: () => [track] } as unknown as MediaStream;
-  return { stream, track };
+  const emit = (type: string) => {
+    const event = new Event(type);
+    for (const handler of listeners.get(type) ?? []) {
+      if (typeof handler === "function") handler(event);
+      else handler.handleEvent(event);
+    }
+  };
+  return { stream, track, endTrack: () => emit("ended") };
 }
 
 export async function waitForMockCalls(mock: ReturnType<typeof vi.fn>, count: number) {
@@ -300,10 +316,12 @@ const baseSettings: AudioSettings = {
   soundboardVirtualVolume: 1,
   soundboardMonitorVolume: 1,
   monitorDeviceId: "",
+  monitorDeviceLabel: "",
   virtualOutputDeviceId: "",
   virtualOutputMode: "managed",
   virtualBackend: "windows-vbcable",
   microphoneDeviceId: "device-1",
+  microphoneDeviceLabel: "",
   stopAllHotkey: "",
   cycleBoardsHotkey: ""
 };

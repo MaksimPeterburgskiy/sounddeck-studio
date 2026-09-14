@@ -34,7 +34,7 @@ import {
   X
 } from "lucide-react";
 import { AudioEngine } from "./lib/audioEngine";
-import type { MicrophoneProcessingStatus } from "./lib/audioEngine";
+import type { AudioDeviceStatus, MicrophoneProcessingStatus } from "./lib/audioEngine";
 import { findVirtualAudioCandidates, getDefaultDeviceLabel, isSelectableMediaDevice, makeMicrophoneConstraints, normalizeSelectableDeviceId } from "./lib/devices";
 import type { VirtualAudioCandidate } from "./lib/devices";
 import { acceleratorLooksReserved, formatBytes, formatDuration, getDefaultSoundEffects, makeBoard, normalizeLibrary, normalizeSoundEffects, now, soundEffectsAreActive, soundEffectsAreDefault, soundFromImport } from "./lib/model";
@@ -52,6 +52,26 @@ type EngineStatus = "idle" | "playing" | "paused";
 type UpdateCheckStatus = "idle" | "checking" | "up-to-date" | "error";
 type StartupUpdateStatus = "idle" | "saving" | "error";
 const defaultMicrophoneProcessingStatus: MicrophoneProcessingStatus = { echoCancellation: "disabled", noiseSuppression: "disabled" };
+const defaultAudioDeviceStatus: AudioDeviceStatus = {
+  microphone: { state: "closed", requestedDeviceId: "", activeDeviceId: "" },
+  monitor: { state: "selected", requestedDeviceId: "", activeDeviceId: "" }
+};
+
+function getPreferredMicrophoneLabel(inputDevices: MediaDeviceInfo[], requestedDeviceId: string, savedLabel: string) {
+  return inputDevices.find((device) => device.deviceId === requestedDeviceId)?.label || savedLabel || "your selected microphone";
+}
+
+function getActiveMicrophoneLabel(devices: MediaDeviceInfo[], activeDeviceId: string, defaultInputLabel: string) {
+  return devices.find((device) => device.kind === "audioinput" && device.deviceId === activeDeviceId)?.label || defaultInputLabel || "the system default microphone";
+}
+
+function getPreferredMonitorLabel(outputDevices: MediaDeviceInfo[], requestedDeviceId: string, savedLabel: string) {
+  return outputDevices.find((device) => device.deviceId === requestedDeviceId)?.label || savedLabel || "your selected headphones";
+}
+
+function getActiveMonitorLabel(devices: MediaDeviceInfo[], activeDeviceId: string, defaultOutputLabel: string) {
+  return devices.find((device) => device.kind === "audiooutput" && device.deviceId === activeDeviceId)?.label || defaultOutputLabel || "the system default output";
+}
 
 function App() {
   const [library, setLibrary] = useState<SoundLibrary | null>(null);
@@ -62,6 +82,7 @@ function App() {
   const [engineStatus, setEngineStatus] = useState<EngineStatus>("idle");
   const [playingIds, setPlayingIds] = useState<string[]>([]);
   const [microphoneProcessingStatus, setMicrophoneProcessingStatus] = useState<MicrophoneProcessingStatus>(defaultMicrophoneProcessingStatus);
+  const [deviceStatus, setDeviceStatus] = useState<AudioDeviceStatus>(defaultAudioDeviceStatus);
   const [editingClipId, setEditingClipId] = useState<string>("");
   const [urlImportOpen, setUrlImportOpen] = useState(false);
   const [dropActive, setDropActive] = useState(false);
@@ -90,6 +111,9 @@ function App() {
   const [startupUpdateStatus, setStartupUpdateStatus] = useState<StartupUpdateStatus>("idle");
   const startupSettingsRequestTokenRef = useRef(0);
   const engineRef = useRef<AudioEngine | null>(null);
+  const deviceStatusRef = useRef<AudioDeviceStatus>(defaultAudioDeviceStatus);
+  const previousMicrophoneDeviceStatusRef = useRef<AudioDeviceStatus["microphone"] | null>(null);
+  const previousMonitorDeviceStatusRef = useRef<AudioDeviceStatus["monitor"] | null>(null);
 
   useEffect(() => {
     void window.sounddeck.getVersion().then(setAppVersion).catch(() => undefined);
@@ -210,6 +234,29 @@ function App() {
 
   const virtualAudioCandidates = useMemo(() => findVirtualAudioCandidates(devices, platform), [devices, platform]);
   const recommendedVirtualAudio = useMemo(() => virtualAudioCandidates.find((candidate) => candidate.recommended) || null, [virtualAudioCandidates]);
+  const outputDevices = devices.filter((device) => device.kind === "audiooutput" && isSelectableMediaDevice(device));
+  const inputDevices = devices.filter((device) => device.kind === "audioinput" && isSelectableMediaDevice(device));
+  const defaultInputLabel = getDefaultDeviceLabel(devices, "audioinput");
+  const defaultOutputLabel = getDefaultDeviceLabel(devices, "audiooutput");
+  const microphoneDeviceStatus = deviceStatus.microphone;
+  const monitorDeviceStatus = deviceStatus.monitor;
+  const preferredMicrophoneLabel = getPreferredMicrophoneLabel(
+    inputDevices,
+    microphoneDeviceStatus.requestedDeviceId,
+    library?.settings.microphoneDeviceLabel || ""
+  );
+  const activeMicrophoneLabel = getActiveMicrophoneLabel(devices, microphoneDeviceStatus.activeDeviceId, defaultInputLabel);
+  const preferredMonitorLabel = getPreferredMonitorLabel(
+    outputDevices,
+    monitorDeviceStatus.requestedDeviceId,
+    library?.settings.monitorDeviceLabel || ""
+  );
+  const activeMonitorLabel = getActiveMonitorLabel(devices, monitorDeviceStatus.activeDeviceId, defaultOutputLabel);
+  const recorderMicrophoneLabel = getPreferredMicrophoneLabel(
+    inputDevices,
+    normalizeSelectableDeviceId(library?.settings.microphoneDeviceId),
+    library?.settings.microphoneDeviceLabel || ""
+  );
   const hasLibrary = Boolean(library);
   const { virtualOutputMode, virtualOutputDeviceId, virtualBackend } = library?.settings || {};
 
@@ -234,10 +281,76 @@ function App() {
         setEngineStatus(status);
         setPlayingIds(activeIds);
       },
-      setMicrophoneProcessingStatus
+      setMicrophoneProcessingStatus,
+      (status) => {
+        deviceStatusRef.current = status;
+        setDeviceStatus(status);
+      }
     );
     void engineRef.current.configure(library.settings, library.settings.virtualOutputDeviceId);
   }, [library?.settings]);
+
+  useEffect(() => {
+    const previous = previousMicrophoneDeviceStatusRef.current;
+    if (!previous) {
+      previousMicrophoneDeviceStatusRef.current = microphoneDeviceStatus;
+      return;
+    }
+
+    const wasRecoverable = previous.state === "fallback" || previous.state === "unavailable";
+    if (
+      microphoneDeviceStatus.state === "fallback" &&
+      (previous.state !== "fallback" || previous.requestedDeviceId !== microphoneDeviceStatus.requestedDeviceId)
+    ) {
+      setMessage(`Couldn't open ${preferredMicrophoneLabel}. Using ${activeMicrophoneLabel} for now.`);
+    } else if (
+      microphoneDeviceStatus.state === "selected" &&
+      wasRecoverable &&
+      microphoneDeviceStatus.requestedDeviceId !== "" &&
+      previous.requestedDeviceId === microphoneDeviceStatus.requestedDeviceId
+    ) {
+      setMessage(`Switched back to ${preferredMicrophoneLabel}.`);
+    } else if (
+      microphoneDeviceStatus.state === "unavailable" &&
+      (previous.state !== "unavailable" || previous.requestedDeviceId !== microphoneDeviceStatus.requestedDeviceId)
+    ) {
+      setMessage("No microphone could be opened. Check your input devices.");
+    }
+
+    if (microphoneDeviceStatus.state !== "closed" || !wasRecoverable) {
+      previousMicrophoneDeviceStatusRef.current = microphoneDeviceStatus;
+    }
+  }, [activeMicrophoneLabel, microphoneDeviceStatus, preferredMicrophoneLabel]);
+
+  useEffect(() => {
+    const previous = previousMonitorDeviceStatusRef.current;
+    if (!previous) {
+      previousMonitorDeviceStatusRef.current = monitorDeviceStatus;
+      return;
+    }
+
+    const wasRecoverable = previous.state === "fallback" || previous.state === "unavailable";
+    if (
+      monitorDeviceStatus.state === "fallback" &&
+      (previous.state !== "fallback" || previous.requestedDeviceId !== monitorDeviceStatus.requestedDeviceId)
+    ) {
+      setMessage(`Couldn't switch to ${preferredMonitorLabel}. Playing through ${activeMonitorLabel} for now.`);
+    } else if (
+      monitorDeviceStatus.state === "selected" &&
+      wasRecoverable &&
+      monitorDeviceStatus.requestedDeviceId !== "" &&
+      previous.requestedDeviceId === monitorDeviceStatus.requestedDeviceId
+    ) {
+      setMessage(`Switched back to ${preferredMonitorLabel}.`);
+    } else if (
+      monitorDeviceStatus.state === "unavailable" &&
+      (previous.state !== "unavailable" || previous.requestedDeviceId !== monitorDeviceStatus.requestedDeviceId)
+    ) {
+      setMessage("Could not switch the headphones output. Check your output devices.");
+    }
+
+    previousMonitorDeviceStatusRef.current = monitorDeviceStatus;
+  }, [activeMonitorLabel, monitorDeviceStatus, preferredMonitorLabel]);
 
   useEffect(() => {
     if (!hasLibrary || !recommendedVirtualAudio) return;
@@ -312,14 +425,32 @@ function App() {
     padRectsRef.current = next;
   }, [padOrderKey]);
 
-  const refreshDevices = useCallback(async () => {
+  const refreshDevices = useCallback(async (): Promise<MediaDeviceInfo[]> => {
     try {
       await navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => stream.getTracks().forEach((track) => track.stop())).catch(() => undefined);
-      setDevices(await navigator.mediaDevices.enumerateDevices());
+      const list = await navigator.mediaDevices.enumerateDevices();
+      setDevices(list);
+      return list;
     } catch {
-      setDevices(await navigator.mediaDevices.enumerateDevices());
+      const list = await navigator.mediaDevices.enumerateDevices();
+      setDevices(list);
+      return list;
     }
   }, []);
+
+  const refreshDevicesAndRetryPreferredDevices = useCallback(async () => {
+    const list = await refreshDevices();
+    const currentDeviceStatus = deviceStatusRef.current;
+    const micNeedsRetry = currentDeviceStatus.microphone.state === "fallback" || currentDeviceStatus.microphone.state === "unavailable";
+    const monitorNeedsRetry = currentDeviceStatus.monitor.state === "fallback" || currentDeviceStatus.monitor.state === "unavailable";
+    const monitorMissing =
+      currentDeviceStatus.monitor.state === "selected" &&
+      currentDeviceStatus.monitor.requestedDeviceId !== "" &&
+      !list.some((device) => device.kind === "audiooutput" && device.deviceId === currentDeviceStatus.monitor.requestedDeviceId);
+    if (micNeedsRetry || monitorNeedsRetry || monitorMissing) {
+      await engineRef.current?.retryPreferredDevices({ recheckMonitor: monitorMissing });
+    }
+  }, [refreshDevices]);
 
   useEffect(() => {
     void refreshDevices();
@@ -328,10 +459,20 @@ function App() {
   useEffect(() => {
     const mediaDevices = navigator.mediaDevices;
     if (!mediaDevices?.addEventListener) return;
-    const handleDeviceChange = () => void refreshDevices();
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    const handleDeviceChange = () => {
+      if (retryTimer !== null) clearTimeout(retryTimer);
+      retryTimer = setTimeout(() => {
+        retryTimer = null;
+        void refreshDevicesAndRetryPreferredDevices();
+      }, 600);
+    };
     mediaDevices.addEventListener("devicechange", handleDeviceChange);
-    return () => mediaDevices.removeEventListener("devicechange", handleDeviceChange);
-  }, [refreshDevices]);
+    return () => {
+      mediaDevices.removeEventListener("devicechange", handleDeviceChange);
+      if (retryTimer !== null) clearTimeout(retryTimer);
+    };
+  }, [refreshDevicesAndRetryPreferredDevices]);
 
   const registerHotkeys = useCallback(async (current: SoundLibrary) => {
     const bindings: HotkeyBinding[] = [];
@@ -779,8 +920,14 @@ function App() {
 
   function changeSettings(patch: Partial<SoundLibrary["settings"]>) {
     const normalizedPatch = { ...patch };
-    if ("microphoneDeviceId" in normalizedPatch) normalizedPatch.microphoneDeviceId = normalizeSelectableDeviceId(normalizedPatch.microphoneDeviceId);
-    if ("monitorDeviceId" in normalizedPatch) normalizedPatch.monitorDeviceId = normalizeSelectableDeviceId(normalizedPatch.monitorDeviceId);
+    if ("microphoneDeviceId" in normalizedPatch) {
+      normalizedPatch.microphoneDeviceId = normalizeSelectableDeviceId(normalizedPatch.microphoneDeviceId);
+      if (!normalizedPatch.microphoneDeviceId) normalizedPatch.microphoneDeviceLabel = "";
+    }
+    if ("monitorDeviceId" in normalizedPatch) {
+      normalizedPatch.monitorDeviceId = normalizeSelectableDeviceId(normalizedPatch.monitorDeviceId);
+      if (!normalizedPatch.monitorDeviceId) normalizedPatch.monitorDeviceLabel = "";
+    }
     if ("virtualOutputDeviceId" in normalizedPatch) normalizedPatch.virtualOutputDeviceId = normalizeSelectableDeviceId(normalizedPatch.virtualOutputDeviceId);
     updateLibrary((current) => ({ ...current, settings: { ...current.settings, ...normalizedPatch } }));
   }
@@ -829,10 +976,6 @@ function App() {
 
   if (!library || !activeBoard) return <div className="boot">Loading SoundDeck Studio...</div>;
 
-  const outputDevices = devices.filter((device) => device.kind === "audiooutput" && isSelectableMediaDevice(device));
-  const inputDevices = devices.filter((device) => device.kind === "audioinput" && isSelectableMediaDevice(device));
-  const defaultInputLabel = getDefaultDeviceLabel(devices, "audioinput");
-  const defaultOutputLabel = getDefaultDeviceLabel(devices, "audiooutput");
   const canCheckForUpdates = capabilities?.updateChecksSupported === true;
   const isGlobalView = view === "devices" || view === "settings" || view === "hotkeys";
   const globalViewTitle = view === "devices" ? "Devices" : view === "settings" ? "Settings" : "Hotkeys";
@@ -1009,7 +1152,12 @@ function App() {
             candidate={recommendedVirtualAudio}
             capabilities={capabilities}
             processingStatus={microphoneProcessingStatus}
-            onRefresh={refreshDevices}
+            deviceStatus={deviceStatus}
+            preferredMicrophoneLabel={preferredMicrophoneLabel}
+            activeMicrophoneLabel={activeMicrophoneLabel}
+            preferredMonitorLabel={preferredMonitorLabel}
+            activeMonitorLabel={activeMonitorLabel}
+            onRefresh={refreshDevicesAndRetryPreferredDevices}
             onChange={changeSettings}
           />
         )}
@@ -1041,6 +1189,8 @@ function App() {
           <RecorderPanel
             inputDevices={inputDevices}
             micDeviceId={library.settings.microphoneDeviceId}
+            preferredMicrophoneLabel={recorderMicrophoneLabel}
+            onNotice={setMessage}
             onImport={async (result) => {
               const sound = soundFromImport(result, activeBoard.sounds.length, "both");
               if (!sound) return;
@@ -2128,7 +2278,7 @@ function SettingsPanel({ startupSettings, startupUpdateStatus, capabilities, upd
   );
 }
 
-function DevicePanel({ library, inputDevices, outputDevices, defaultInputLabel, defaultOutputLabel, platform, candidate, capabilities, processingStatus, onRefresh, onChange }: {
+function DevicePanel({ library, inputDevices, outputDevices, defaultInputLabel, defaultOutputLabel, platform, candidate, capabilities, processingStatus, deviceStatus, preferredMicrophoneLabel, activeMicrophoneLabel, preferredMonitorLabel, activeMonitorLabel, onRefresh, onChange }: {
   library: SoundLibrary;
   inputDevices: MediaDeviceInfo[];
   outputDevices: MediaDeviceInfo[];
@@ -2138,12 +2288,23 @@ function DevicePanel({ library, inputDevices, outputDevices, defaultInputLabel, 
   candidate: VirtualAudioCandidate | null;
   capabilities: AppCapabilities | null;
   processingStatus: MicrophoneProcessingStatus;
-  onRefresh: () => void;
+  deviceStatus: AudioDeviceStatus;
+  preferredMicrophoneLabel: string;
+  activeMicrophoneLabel: string;
+  preferredMonitorLabel: string;
+  activeMonitorLabel: string;
+  onRefresh: () => void | Promise<void>;
   onChange: (patch: Partial<SoundLibrary["settings"]>) => void;
 }) {
   const settings = library.settings;
   const defaultInputOption = defaultInputLabel ? `System default (${defaultInputLabel})` : "System default";
   const defaultOutputOption = defaultOutputLabel ? `System default (${defaultOutputLabel})` : "System default";
+  const missingPreferredMicrophone = Boolean(
+    settings.microphoneDeviceId && !inputDevices.some((device) => device.deviceId === settings.microphoneDeviceId)
+  );
+  const missingPreferredMonitor = Boolean(
+    settings.monitorDeviceId && !outputDevices.some((device) => device.deviceId === settings.monitorDeviceId)
+  );
   const route = virtualRouteCopy(platform);
   const pairedInputVisible = inputDevices.some((device) => route.inputPattern.test(device.label));
   const routeReady = Boolean(candidate && settings.virtualOutputDeviceId === candidate.outputDeviceId && pairedInputVisible);
@@ -2160,6 +2321,22 @@ function DevicePanel({ library, inputDevices, outputDevices, defaultInputLabel, 
   const suppressionStatus = settings.noiseSuppressionEnabled
     ? processingStatus.noiseSuppression === "active" ? "Active" : processingStatus.noiseSuppression === "unavailable" ? "Unavailable" : processingStatus.noiseSuppression === "loading" ? "Loading model" : "Waiting for mic"
     : "Off";
+  const handleMicrophoneChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
+    const microphoneDeviceId = normalizeSelectableDeviceId(event.currentTarget.value);
+    const selectedOption = event.currentTarget.selectedOptions[0];
+    onChange({
+      microphoneDeviceId,
+      microphoneDeviceLabel: microphoneDeviceId ? selectedOption?.dataset.deviceLabel || selectedOption?.textContent || "" : ""
+    });
+  };
+  const handleMonitorChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
+    const monitorDeviceId = normalizeSelectableDeviceId(event.currentTarget.value);
+    const selectedOption = event.currentTarget.selectedOptions[0];
+    onChange({
+      monitorDeviceId,
+      monitorDeviceLabel: monitorDeviceId ? selectedOption?.dataset.deviceLabel || selectedOption?.textContent || "" : ""
+    });
+  };
   return (
     <div className="panel">
       <section>
@@ -2172,7 +2349,43 @@ function DevicePanel({ library, inputDevices, outputDevices, defaultInputLabel, 
             <span>{routeStatus}</span>
           </div>
         </div>
-        <label><Mic size={16} /> Microphone<select value={settings.microphoneDeviceId} onChange={(event) => onChange({ microphoneDeviceId: event.target.value })}><option value="">{defaultInputOption}</option>{inputDevices.map((device) => <option key={device.deviceId} value={device.deviceId}>{device.label || `Input ${device.deviceId.slice(0, 6)}`}</option>)}</select></label>
+        <label>
+          <Mic size={16} /> Microphone
+          <select value={settings.microphoneDeviceId} onChange={handleMicrophoneChange}>
+            <option value="" data-device-label="">{defaultInputOption}</option>
+            {missingPreferredMicrophone && (
+              <option value={settings.microphoneDeviceId} data-device-label={settings.microphoneDeviceLabel || "Selected microphone"}>
+                {settings.microphoneDeviceLabel || "Selected microphone"} (not connected)
+              </option>
+            )}
+            {inputDevices.map((device) => {
+              const label = device.label || `Input ${device.deviceId.slice(0, 6)}`;
+              return <option key={device.deviceId} value={device.deviceId} data-device-label={label}>{label}</option>;
+            })}
+          </select>
+        </label>
+        {deviceStatus.microphone.state === "fallback" && (
+          <div className="managedRoute warning">
+            <AlertCircle size={18} />
+            <div>
+              <strong>Selected microphone not available</strong>
+              <span>Using {activeMicrophoneLabel} until {preferredMicrophoneLabel} comes back. SoundDeck switches back automatically.</span>
+            </div>
+          </div>
+        )}
+        {deviceStatus.microphone.state === "unavailable" && (
+          <div className="managedRoute warning">
+            <AlertCircle size={18} />
+            <div>
+              <strong>No microphone available</strong>
+              <span>
+                {deviceStatus.microphone.requestedDeviceId
+                  ? `Neither ${preferredMicrophoneLabel} nor the system default could be opened. Check the device and click Refresh devices.`
+                  : "The system default microphone could not be opened. Check the device and click Refresh devices."}
+              </span>
+            </div>
+          </div>
+        )}
         <div className="microphoneProcessing">
           <div className="microphoneProcessingHeader">
             <div><strong>Microphone processing</strong></div>
@@ -2197,7 +2410,43 @@ function DevicePanel({ library, inputDevices, outputDevices, defaultInputLabel, 
             <output>{settings.noiseSuppressionAttenuationDb} dB</output>
           </label>
         </div>
-        <label><Headphones size={16} /> Headphones / monitor<select value={settings.monitorDeviceId} onChange={(event) => onChange({ monitorDeviceId: event.target.value })}><option value="">{defaultOutputOption}</option>{outputDevices.map((device) => <option key={device.deviceId} value={device.deviceId}>{device.label || `Output ${device.deviceId.slice(0, 6)}`}</option>)}</select></label>
+        <label>
+          <Headphones size={16} /> Headphones / monitor
+          <select value={settings.monitorDeviceId} onChange={handleMonitorChange}>
+            <option value="" data-device-label="">{defaultOutputOption}</option>
+            {missingPreferredMonitor && (
+              <option value={settings.monitorDeviceId} data-device-label={settings.monitorDeviceLabel || "Selected headphones"}>
+                {settings.monitorDeviceLabel || "Selected headphones"} (not connected)
+              </option>
+            )}
+            {outputDevices.map((device) => {
+              const label = device.label || `Output ${device.deviceId.slice(0, 6)}`;
+              return <option key={device.deviceId} value={device.deviceId} data-device-label={label}>{label}</option>;
+            })}
+          </select>
+        </label>
+        {deviceStatus.monitor.state === "fallback" && (
+          <div className="managedRoute warning">
+            <AlertCircle size={18} />
+            <div>
+              <strong>Selected headphones not available</strong>
+              <span>Playing through {activeMonitorLabel} until {preferredMonitorLabel} comes back. SoundDeck switches back automatically.</span>
+            </div>
+          </div>
+        )}
+        {deviceStatus.monitor.state === "unavailable" && (
+          <div className="managedRoute warning">
+            <AlertCircle size={18} />
+            <div>
+              <strong>Headphones output unavailable</strong>
+              <span>
+                {deviceStatus.monitor.requestedDeviceId
+                  ? `Neither ${preferredMonitorLabel} nor the system default could be selected. Check the device and click Refresh devices.`
+                  : "The system default output could not be selected. Check the device and click Refresh devices."}
+              </span>
+            </div>
+          </div>
+        )}
         <VolumeField label="Mic volume (virtual mic)" value={settings.micVirtualVolume} onChange={(micVirtualVolume) => onChange({ micVirtualVolume })} />
         <VolumeField label="Mic volume (monitoring)" value={settings.micMonitorVolume} onChange={(micMonitorVolume) => onChange({ micMonitorVolume })} />
         <VolumeField label="Soundboard volume (virtual mic)" value={settings.soundboardVirtualVolume} onChange={(soundboardVirtualVolume) => onChange({ soundboardVirtualVolume })} />
@@ -2345,7 +2594,13 @@ function HotkeyCapture({ value, onChange }: { value: string; onChange: (value: s
   );
 }
 
-function RecorderPanel({ inputDevices, micDeviceId, onImport }: { inputDevices: MediaDeviceInfo[]; micDeviceId: string; onImport: (result: Awaited<ReturnType<typeof window.sounddeck.saveRecording>>) => void }) {
+function RecorderPanel({ inputDevices, micDeviceId, preferredMicrophoneLabel, onNotice, onImport }: {
+  inputDevices: MediaDeviceInfo[];
+  micDeviceId: string;
+  preferredMicrophoneLabel: string;
+  onNotice?: (message: string) => void;
+  onImport: (result: Awaited<ReturnType<typeof window.sounddeck.saveRecording>>) => void;
+}) {
   const [recording, setRecording] = useState(false);
   const [recorder, setRecorder] = useState<MediaRecorder | null>(null);
   const chunks = useRef<BlobPart[]>([]);
@@ -2360,6 +2615,7 @@ function RecorderPanel({ inputDevices, micDeviceId, onImport }: { inputDevices: 
       if (!selectedMicId) throw error;
       console.warn("Selected recording microphone failed; retrying with system default", error);
       stream = await navigator.mediaDevices.getUserMedia({ audio: makeMicrophoneConstraints("") });
+      onNotice?.(`Couldn't open ${preferredMicrophoneLabel}. Recording with the system default microphone.`);
     }
     const next = new MediaRecorder(stream, { mimeType: "audio/webm" });
     next.ondataavailable = (event) => chunks.current.push(event.data);

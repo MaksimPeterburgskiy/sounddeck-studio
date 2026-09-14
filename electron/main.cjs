@@ -412,10 +412,12 @@ async function ensureLibrary() {
           soundboardVirtualVolume: 1,
           soundboardMonitorVolume: 1,
           monitorDeviceId: "",
+          monitorDeviceLabel: "",
           virtualOutputDeviceId: "",
           virtualOutputMode: "managed",
           virtualBackend: managedVirtualBackend(),
           microphoneDeviceId: "",
+          microphoneDeviceLabel: "",
           stopAllHotkey: "Ctrl+Alt+Space",
           cycleBoardsHotkey: ""
         },
