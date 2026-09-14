@@ -35,7 +35,7 @@ import {
 } from "lucide-react";
 import { AudioEngine } from "./lib/audioEngine";
 import type { AudioDeviceStatus, MicrophoneProcessingStatus } from "./lib/audioEngine";
-import { findVirtualAudioCandidates, getDefaultDeviceLabel, isSelectableMediaDevice, makeMicrophoneConstraints, normalizeSelectableDeviceId } from "./lib/devices";
+import { findVirtualAudioCandidates, getDefaultDeviceLabel, isSelectableMediaDevice, makeMicrophoneConstraints, normalizeMonitorDeviceId, normalizeSelectableDeviceId } from "./lib/devices";
 import type { VirtualAudioCandidate } from "./lib/devices";
 import { acceleratorLooksReserved, formatBytes, formatDuration, getDefaultSoundEffects, makeBoard, normalizeLibrary, normalizeSoundEffects, now, soundEffectsAreActive, soundEffectsAreDefault, soundFromImport } from "./lib/model";
 import { claimCaptureSlot, eventToToken, formatAccelerator, MODIFIER_TOKENS, normalizeAccelerator, orderTokens } from "./lib/hotkeys";
@@ -234,10 +234,17 @@ function App() {
 
   const virtualAudioCandidates = useMemo(() => findVirtualAudioCandidates(devices, platform), [devices, platform]);
   const recommendedVirtualAudio = useMemo(() => virtualAudioCandidates.find((candidate) => candidate.recommended) || null, [virtualAudioCandidates]);
-  const outputDevices = devices.filter((device) => device.kind === "audiooutput" && isSelectableMediaDevice(device));
+  const virtualSinkDeviceId = library?.settings.virtualOutputDeviceId || "";
+  // The virtual cable is never a valid headphones choice: it would feed the soundboard into the virtual mic twice.
+  const outputDevices = devices.filter((device) =>
+    device.kind === "audiooutput" &&
+    isSelectableMediaDevice(device) &&
+    device.deviceId !== virtualSinkDeviceId
+  );
   const inputDevices = devices.filter((device) => device.kind === "audioinput" && isSelectableMediaDevice(device));
   const defaultInputLabel = getDefaultDeviceLabel(devices, "audioinput");
   const defaultOutputLabel = getDefaultDeviceLabel(devices, "audiooutput");
+  const virtualOutputLabel = devices.find((device) => device.kind === "audiooutput" && device.deviceId === virtualSinkDeviceId)?.label || "";
   const microphoneDeviceStatus = deviceStatus.microphone;
   const monitorDeviceStatus = deviceStatus.monitor;
   const preferredMicrophoneLabel = getPreferredMicrophoneLabel(
@@ -275,8 +282,12 @@ function App() {
 
   useEffect(() => {
     if (!library) return;
+    const engineSettings = {
+      ...library.settings,
+      monitorDeviceId: normalizeMonitorDeviceId(library.settings.monitorDeviceId, library.settings.virtualOutputDeviceId)
+    };
     if (!engineRef.current) engineRef.current = new AudioEngine(
-      library.settings,
+      engineSettings,
       (status, activeIds) => {
         setEngineStatus(status);
         setPlayingIds(activeIds);
@@ -287,7 +298,7 @@ function App() {
         setDeviceStatus(status);
       }
     );
-    void engineRef.current.configure(library.settings, library.settings.virtualOutputDeviceId);
+    void engineRef.current.configure(engineSettings, library.settings.virtualOutputDeviceId);
   }, [library?.settings]);
 
   useEffect(() => {
@@ -505,8 +516,8 @@ function App() {
         setMessage(`Stopped ${sound.title}`);
         return;
       }
-      await engineRef.current?.play(sound);
-      setMessage(`Triggered ${sound.title}`);
+      const started = await engineRef.current?.play(sound);
+      setMessage(started === false ? `No output route enabled for ${sound.title}` : `Triggered ${sound.title}`);
       if (!sound.duration || !sound.waveform) {
         const buffer = await engineRef.current?.preload(sound);
         if (buffer) updateSound(sound.id, { duration: buffer.duration, waveform: makeWaveform(buffer), updatedAt: now() });
@@ -929,7 +940,12 @@ function App() {
       if (!normalizedPatch.monitorDeviceId) normalizedPatch.monitorDeviceLabel = "";
     }
     if ("virtualOutputDeviceId" in normalizedPatch) normalizedPatch.virtualOutputDeviceId = normalizeSelectableDeviceId(normalizedPatch.virtualOutputDeviceId);
-    updateLibrary((current) => ({ ...current, settings: { ...current.settings, ...normalizedPatch } }));
+    updateLibrary((current) => {
+      const settings = { ...current.settings, ...normalizedPatch };
+      settings.monitorDeviceId = normalizeMonitorDeviceId(settings.monitorDeviceId, settings.virtualOutputDeviceId);
+      if (!settings.monitorDeviceId) settings.monitorDeviceLabel = "";
+      return { ...current, settings };
+    });
   }
 
   async function changeUpdateChannel(channel: UpdateChannel) {
@@ -1148,6 +1164,7 @@ function App() {
             outputDevices={outputDevices}
             defaultInputLabel={defaultInputLabel}
             defaultOutputLabel={defaultOutputLabel}
+            virtualOutputLabel={virtualOutputLabel}
             platform={platform}
             candidate={recommendedVirtualAudio}
             capabilities={capabilities}
@@ -2278,12 +2295,13 @@ function SettingsPanel({ startupSettings, startupUpdateStatus, capabilities, upd
   );
 }
 
-function DevicePanel({ library, inputDevices, outputDevices, defaultInputLabel, defaultOutputLabel, platform, candidate, capabilities, processingStatus, deviceStatus, preferredMicrophoneLabel, activeMicrophoneLabel, preferredMonitorLabel, activeMonitorLabel, onRefresh, onChange }: {
+function DevicePanel({ library, inputDevices, outputDevices, defaultInputLabel, defaultOutputLabel, virtualOutputLabel, platform, candidate, capabilities, processingStatus, deviceStatus, preferredMicrophoneLabel, activeMicrophoneLabel, preferredMonitorLabel, activeMonitorLabel, onRefresh, onChange }: {
   library: SoundLibrary;
   inputDevices: MediaDeviceInfo[];
   outputDevices: MediaDeviceInfo[];
   defaultInputLabel: string;
   defaultOutputLabel: string;
+  virtualOutputLabel: string;
   platform: SoundDeckPlatform;
   candidate: VirtualAudioCandidate | null;
   capabilities: AppCapabilities | null;
@@ -2299,6 +2317,11 @@ function DevicePanel({ library, inputDevices, outputDevices, defaultInputLabel, 
   const settings = library.settings;
   const defaultInputOption = defaultInputLabel ? `System default (${defaultInputLabel})` : "System default";
   const defaultOutputOption = defaultOutputLabel ? `System default (${defaultOutputLabel})` : "System default";
+  const defaultOutputIsVirtual = Boolean(
+    defaultOutputLabel.trim() &&
+    virtualOutputLabel.trim() &&
+    defaultOutputLabel.trim().toLocaleLowerCase() === virtualOutputLabel.trim().toLocaleLowerCase()
+  );
   const missingPreferredMicrophone = Boolean(
     settings.microphoneDeviceId && !inputDevices.some((device) => device.deviceId === settings.microphoneDeviceId)
   );
@@ -2424,6 +2447,7 @@ function DevicePanel({ library, inputDevices, outputDevices, defaultInputLabel, 
               return <option key={device.deviceId} value={device.deviceId} data-device-label={label}>{label}</option>;
             })}
           </select>
+          {defaultOutputIsVirtual && <small className="deviceWarning">Your system default output is the virtual cable; pick your real headphones.</small>}
         </label>
         {deviceStatus.monitor.state === "fallback" && (
           <div className="managedRoute warning">

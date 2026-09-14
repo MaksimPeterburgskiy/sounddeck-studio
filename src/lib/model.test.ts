@@ -152,6 +152,21 @@ describe("model helpers", () => {
     expect(library.settings.virtualOutputDeviceId).toBe("");
   });
 
+  it("resets the monitor device when it is the virtual output device", () => {
+    const library = normalizeLibrary({
+      version: 1,
+      activeBoardId: "a",
+      settings: {
+        monitorDeviceId: "cable-device",
+        virtualOutputDeviceId: "cable-device"
+      } as SoundLibrary["settings"],
+      boards: [{ id: "a", name: "A", color: "#fff", icon: "zap", createdAt: "", updatedAt: "", sounds: [] }]
+    });
+
+    expect(library.settings.monitorDeviceId).toBe("");
+    expect(library.settings.virtualOutputDeviceId).toBe("cable-device");
+  });
+
   it("migrates legacy Electron accelerators to canonical tokens", () => {
     const library = normalizeLibrary({
       version: 1,

@@ -1,5 +1,5 @@
 import type { MediaImportResult, OutputTarget, SoundBoard, SoundEffects, SoundLibrary, SoundSlot } from "../types";
-import { normalizeSelectableDeviceId } from "./devices";
+import { normalizeMonitorDeviceId, normalizeSelectableDeviceId } from "./devices";
 import { normalizeAccelerator } from "./hotkeys";
 
 const palette = ["#1db7a6", "#ffcf5c", "#ff6b6b", "#8f7cff", "#4ba3ff", "#74d66b", "#ef7bd5", "#f6903d"];
@@ -207,9 +207,12 @@ export function normalizeLibrary(library: SoundLibrary): SoundLibrary {
   };
   settings.stopAllHotkey = normalizeAccelerator(settings.stopAllHotkey);
   settings.cycleBoardsHotkey = normalizeAccelerator(settings.cycleBoardsHotkey);
-  settings.monitorDeviceId = normalizeSelectableDeviceId(settings.monitorDeviceId);
-  settings.monitorDeviceLabel = String(settings.monitorDeviceLabel ?? "");
   settings.virtualOutputDeviceId = normalizeSelectableDeviceId(settings.virtualOutputDeviceId);
+  settings.monitorDeviceLabel = String(settings.monitorDeviceLabel ?? "");
+  const selectableMonitorDeviceId = normalizeSelectableDeviceId(settings.monitorDeviceId);
+  settings.monitorDeviceId = normalizeMonitorDeviceId(selectableMonitorDeviceId, settings.virtualOutputDeviceId);
+  // A saved headphones choice that is actually the virtual cable is dropped along with its label.
+  if (settings.monitorDeviceId !== selectableMonitorDeviceId) settings.monitorDeviceLabel = "";
   if (!settings.virtualOutputMode) settings.virtualOutputMode = defaultSettings.virtualOutputMode;
   if (!settings.virtualBackend) settings.virtualBackend = defaultSettings.virtualBackend;
   settings.microphoneDeviceId = normalizeSelectableDeviceId(settings.microphoneDeviceId);

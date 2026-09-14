@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { findCableInputDeviceId, findVirtualAudioCandidates, getDefaultDeviceLabel, isRoleDeviceId, isSelectableMediaDevice, makeMicrophoneConstraints } from "./devices";
+import { findCableInputDeviceId, findVirtualAudioCandidates, getDefaultDeviceLabel, isRoleDeviceId, isSelectableMediaDevice, makeMicrophoneConstraints, normalizeMonitorDeviceId } from "./devices";
 
 function device(kind: MediaDeviceKind, label: string, deviceId = label): MediaDeviceInfo {
   return { kind, label, deviceId, groupId: "", toJSON: () => ({}) } as MediaDeviceInfo;
@@ -145,6 +145,12 @@ describe("virtual audio device detection", () => {
 });
 
 describe("device labels and role ids", () => {
+  it("uses the system default when the monitor device is the virtual sink", () => {
+    expect(normalizeMonitorDeviceId("cable", "cable")).toBe("");
+    expect(normalizeMonitorDeviceId("headphones", "cable")).toBe("headphones");
+    expect(normalizeMonitorDeviceId("default", "cable")).toBe("");
+  });
+
   it("strips default device prefixes from labels", () => {
     expect(getDefaultDeviceLabel([
       device("audiooutput", "Default - Speakers (Realtek)", "default")

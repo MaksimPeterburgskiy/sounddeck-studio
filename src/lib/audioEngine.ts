@@ -63,7 +63,7 @@ interface NoiseSuppressionGraph {
   worker: Worker;
 }
 
-type EngineStatus = "idle" | "playing" | "paused";
+type EngineStatus = "idle" | "playing";
 
 export interface MicrophoneProcessingStatus {
   echoCancellation: "disabled" | "active" | "unavailable";
@@ -91,6 +91,7 @@ export class AudioEngine {
   private virtualContext: AudioContext;
   private decodeContext: AudioContext;
   private monitorBus: GainNode;
+  private previewBus: GainNode;
   private virtualBus: GainNode;
   private cache = new Map<string, AudioBuffer>();
   private active = new Map<string, ActiveVoice[]>();
@@ -103,6 +104,9 @@ export class AudioEngine {
   private noiseSuppressionGraph?: NoiseSuppressionGraph;
   private micConfigureGeneration = 0;
   private configureGeneration = 0;
+  private micAppliedSettings?: AudioSettings;
+  private micAppliedVirtualSinkId = "";
+  private micAppliedVirtualSinkReady = false;
   private disposed = false;
   private settings: AudioSettings;
   private virtualSinkId = "";
@@ -140,6 +144,8 @@ export class AudioEngine {
     this.decodeContext = new AudioContext({ latencyHint: "interactive" });
     this.monitorBus = this.monitorContext.createGain();
     this.monitorBus.connect(this.monitorContext.destination);
+    this.previewBus = this.monitorContext.createGain();
+    this.previewBus.connect(this.monitorContext.destination);
     this.virtualBus = this.virtualContext.createGain();
     this.virtualBus.connect(this.virtualContext.destination);
     this.applyBusVolumes();
@@ -149,10 +155,8 @@ export class AudioEngine {
     if (this.disposed) return;
     const generation = this.configureGeneration + 1;
     this.configureGeneration = generation;
-    const previousVirtualSinkId = this.virtualSinkId;
-    const previousVirtualSinkReady = this.virtualSinkReady;
-    const echoCancellationChanged = this.settings.echoCancellationEnabled !== settings.echoCancellationEnabled;
-    const attenuationChanged = this.settings.noiseSuppressionAttenuationDb !== settings.noiseSuppressionAttenuationDb;
+    const echoCancellationChanged = this.micAppliedSettings?.echoCancellationEnabled !== settings.echoCancellationEnabled;
+    const attenuationChanged = this.micAppliedSettings?.noiseSuppressionAttenuationDb !== settings.noiseSuppressionAttenuationDb;
     const shouldConfigureMicForSettings = this.shouldConfigureMic(settings);
     this.settings = settings;
     this.virtualSinkId = virtualSinkId;
@@ -169,21 +173,26 @@ export class AudioEngine {
     this.virtualSinkReady = virtualSinkResult === "selected";
     const shouldConfigureMic =
       shouldConfigureMicForSettings ||
-      previousVirtualSinkId !== virtualSinkId ||
-      previousVirtualSinkReady !== this.virtualSinkReady;
+      this.micAppliedVirtualSinkId !== virtualSinkId ||
+      this.micAppliedVirtualSinkReady !== this.virtualSinkReady;
     this.applyBusVolumes();
     if (shouldConfigureMic) {
-      await this.configureMic();
+      this.micAppliedSettings = undefined;
+      await this.configureMic(generation);
     } else if (echoCancellationChanged) {
+      this.micAppliedSettings = undefined;
       const updatedInPlace = await this.applyEchoCancellationConstraint();
-      if (!updatedInPlace) await this.configureMic();
+      if (generation !== this.configureGeneration || this.disposed) return;
+      if (!updatedInPlace) await this.configureMic(generation);
       else {
         this.applyMicVolumes();
         if (attenuationChanged) this.noiseSuppressionGraph?.worker.postMessage({ type: "attenuation", value: this.settings.noiseSuppressionAttenuationDb });
+        this.markMicApplied(generation);
       }
     } else {
       this.applyMicVolumes();
       if (attenuationChanged) this.noiseSuppressionGraph?.worker.postMessage({ type: "attenuation", value: this.settings.noiseSuppressionAttenuationDb });
+      this.markMicApplied(generation);
     }
   }
 
@@ -198,12 +207,16 @@ export class AudioEngine {
   }
 
   async play(sound: SoundSlot) {
+    if (!this.hasLiveRoute(sound.outputTarget)) return false;
     const buffer = await this.preload(sound);
+    // Settings may have changed while decoding; re-check before any side effects.
+    if (this.disposed || !this.hasLiveRoute(sound.outputTarget)) return false;
+    await Promise.all([this.monitorContext.resume(), this.virtualContext.resume()]);
+    if (this.disposed || !this.hasLiveRoute(sound.outputTarget)) return false;
+    // Only stop other voices once nothing else can bail out; a muted trigger must not silence what is playing.
     if (sound.soloPlay) this.stopAllExcept(sound.id);
     if (sound.retriggerMode === "restart") this.stop(sound.id);
-    await Promise.all([this.monitorContext.resume(), this.virtualContext.resume()]);
     const contexts = this.contextsForTarget(sound.outputTarget);
-    if (!contexts.length) return;
     const trimStart = Math.min(Math.max(0, sound.trimStartSec ?? 0), buffer.duration);
     const trimEnd = Math.min(Math.max(trimStart + 0.01, sound.trimEndSec ?? buffer.duration), buffer.duration);
     const clipDuration = Math.max(0.01, trimEnd - trimStart);
@@ -253,6 +266,7 @@ export class AudioEngine {
 
     this.active.set(sound.id, [...(this.active.get(sound.id) || []), voice]);
     this.emitStatus();
+    return true;
   }
 
   stop(soundId: string) {
@@ -284,16 +298,6 @@ export class AudioEngine {
     this.emitStatus();
   }
 
-  async pauseAll() {
-    await Promise.all([this.monitorContext.suspend(), this.virtualContext.suspend()]);
-    this.statusCallback("paused", [...this.active.keys()]);
-  }
-
-  async resumeAll() {
-    await Promise.all([this.monitorContext.resume(), this.virtualContext.resume()]);
-    this.emitStatus();
-  }
-
   isPlaying(soundId: string) {
     return (this.active.get(soundId) || []).length > 0;
   }
@@ -301,11 +305,10 @@ export class AudioEngine {
   /** Apply a new per-sound volume to any currently playing voices of that sound. */
   setSoundVolume(soundId: string, volume: number) {
     for (const voice of this.active.get(soundId) || []) {
-      for (const gain of voice.gains) {
-        const now = gain.context.currentTime;
-        gain.gain.cancelScheduledValues(now);
-        gain.gain.setTargetAtTime(Math.max(0.0001, volume), now, 0.02);
-      }
+      for (const gain of voice.gains) this.setGainVolume(gain, volume);
+    }
+    if (this.previewVoice?.soundId === soundId) {
+      for (const gain of this.previewVoice.gains) this.setGainVolume(gain, volume);
     }
   }
 
@@ -365,7 +368,7 @@ export class AudioEngine {
     source.playbackRate.value = safeRate;
     if (source.detune) source.detune.value = effects.pitchEnabled ? effects.pitchSemitones * 100 : 0;
     const chain = this.connectEffectChain(this.monitorContext, source, gain, effects, safeRate);
-    gain.connect(this.monitorBus);
+    gain.connect(this.previewBus);
     gain.gain.setValueAtTime(sound.volume, this.monitorContext.currentTime);
     const voice: PreviewVoice = {
       sources: [source],
@@ -615,21 +618,41 @@ export class AudioEngine {
 
   private contextsForTarget(target: OutputTarget) {
     const contexts: Array<{ context: AudioContext; bus: GainNode }> = [];
-    const wantsMonitor = (target === "monitor" || target === "both") && this.settings.monitorToHeadphones;
-    const wantsVirtual = (target === "virtual" || target === "both") && this.settings.soundboardToVirtualMic;
-    if (wantsMonitor) {
-      contexts.push({ context: this.monitorContext, bus: this.monitorBus });
-    }
-    if (wantsVirtual) {
-      if (this.virtualSinkReady) contexts.push({ context: this.virtualContext, bus: this.virtualBus });
-    }
-    if (!contexts.length && !wantsMonitor && !wantsVirtual) contexts.push({ context: this.monitorContext, bus: this.monitorBus });
+    if (target === "monitor" || target === "both") contexts.push({ context: this.monitorContext, bus: this.monitorBus });
+    if (target === "virtual" || target === "both") contexts.push({ context: this.virtualContext, bus: this.virtualBus });
     return contexts;
   }
 
+  private hasLiveRoute(target: OutputTarget) {
+    const monitorEnabled = (target === "monitor" || target === "both") && this.settings.monitorToHeadphones;
+    const virtualEnabled =
+      (target === "virtual" || target === "both") &&
+      this.settings.soundboardToVirtualMic &&
+      this.virtualSinkReady;
+    return monitorEnabled || virtualEnabled;
+  }
+
   private applyBusVolumes() {
-    this.monitorBus.gain.setTargetAtTime(this.settings.soundboardMonitorVolume, this.monitorContext.currentTime, 0.02);
-    this.virtualBus.gain.setTargetAtTime(this.virtualSinkReady ? this.settings.soundboardVirtualVolume : 0, this.virtualContext.currentTime, 0.02);
+    this.setBusGain(this.monitorBus, this.settings.monitorToHeadphones ? this.settings.soundboardMonitorVolume : 0);
+    this.setBusGain(this.previewBus, this.settings.soundboardMonitorVolume);
+    this.setBusGain(this.virtualBus, this.virtualSinkReady && this.settings.soundboardToVirtualMic ? this.settings.soundboardVirtualVolume : 0);
+  }
+
+  /**
+   * Bus gain is what enforces the global route toggles, so a disabled route must read zero
+   * immediately. Automation only advances while a context is running: on a suspended context a
+   * setTargetAtTime toward zero would still start from the default gain of 1 once play() resumes
+   * it, leaking the first slice of a sound through a disabled route.
+   */
+  private setBusGain(bus: GainNode, target: number) {
+    const context = bus.context;
+    const now = context.currentTime;
+    bus.gain.cancelScheduledValues(now);
+    if (target <= 0 || context.state !== "running") {
+      bus.gain.setValueAtTime(target, now);
+      return;
+    }
+    bus.gain.setTargetAtTime(target, now, 0.02);
   }
 
   private needsMicrophone(settings: AudioSettings = this.settings) {
@@ -637,13 +660,28 @@ export class AudioEngine {
   }
 
   private shouldConfigureMic(nextSettings: AudioSettings) {
+    const applied = this.micAppliedSettings;
     return (
+      !applied ||
       (this.needsMicrophone(nextSettings) && !this.micStream) ||
-      this.settings.micPassthrough !== nextSettings.micPassthrough ||
-      this.settings.microphoneDeviceId !== nextSettings.microphoneDeviceId ||
-      this.settings.noiseSuppressionEnabled !== nextSettings.noiseSuppressionEnabled ||
-      this.settings.monitorMicToHeadphones !== nextSettings.monitorMicToHeadphones
+      applied.micPassthrough !== nextSettings.micPassthrough ||
+      applied.microphoneDeviceId !== nextSettings.microphoneDeviceId ||
+      applied.noiseSuppressionEnabled !== nextSettings.noiseSuppressionEnabled ||
+      applied.monitorMicToHeadphones !== nextSettings.monitorMicToHeadphones
     );
+  }
+
+  private markMicApplied(generation: number) {
+    if (generation !== this.configureGeneration || this.disposed) return;
+    this.micAppliedSettings = { ...this.settings };
+    this.micAppliedVirtualSinkId = this.virtualSinkId;
+    this.micAppliedVirtualSinkReady = this.virtualSinkReady;
+  }
+
+  private setGainVolume(gain: GainNode, volume: number) {
+    const now = gain.context.currentTime;
+    gain.gain.cancelScheduledValues(now);
+    gain.gain.setTargetAtTime(Math.max(0.0001, volume), now, 0.02);
   }
 
   private applyMicVolumes() {
@@ -702,7 +740,8 @@ export class AudioEngine {
     }
   }
 
-  private async configureMic(preacquired?: MediaStream) {
+  private async configureMic(configureGeneration: number, preacquired?: MediaStream) {
+    this.micAppliedSettings = undefined;
     const generation = this.micConfigureGeneration + 1;
     this.micConfigureGeneration = generation;
     this.stopMic(generation);
@@ -712,6 +751,7 @@ export class AudioEngine {
         echoCancellation: "disabled",
         noiseSuppression: this.settings.noiseSuppressionEnabled ? "standby" : "disabled"
       });
+      this.markMicApplied(configureGeneration);
       return;
     }
     const microphoneDeviceId = normalizeSelectableDeviceId(this.settings.microphoneDeviceId);
@@ -747,7 +787,7 @@ export class AudioEngine {
       }
     }
 
-    if (generation !== this.micConfigureGeneration || !this.needsMicrophone()) {
+    if (generation !== this.micConfigureGeneration || configureGeneration !== this.configureGeneration || this.disposed || !this.needsMicrophone()) {
       stream.getTracks().forEach((track) => track.stop());
       return;
     }
@@ -755,7 +795,7 @@ export class AudioEngine {
     const track = stream.getAudioTracks?.()[0] ?? stream.getTracks()[0];
     track?.addEventListener?.("ended", () => {
       if (generation !== this.micConfigureGeneration || this.disposed || !this.needsMicrophone()) return;
-      void this.configureMic();
+      void this.configureMic(this.configureGeneration);
     });
     this.setMicrophoneDeviceStatus({
       state: usedFallback ? "fallback" : "selected",
@@ -766,7 +806,7 @@ export class AudioEngine {
       const updatedInPlace = await this.applyEchoCancellationConstraint();
       if (generation !== this.micConfigureGeneration || this.disposed || !this.needsMicrophone()) return;
       if (!updatedInPlace) {
-        await this.configureMic();
+        await this.configureMic(configureGeneration);
         return;
       }
     }
@@ -776,7 +816,7 @@ export class AudioEngine {
       const routedStream = this.settings.noiseSuppressionEnabled
         ? await this.createNoiseSuppressionStream(stream, generation)
         : stream;
-      if (generation !== this.micConfigureGeneration || !this.needsMicrophone()) return;
+      if (generation !== this.micConfigureGeneration || configureGeneration !== this.configureGeneration || this.disposed || !this.needsMicrophone()) return;
       // Microphone routes are independent of the soundboard's output toggles.
       const contexts: AudioContext[] = [];
       if (this.settings.monitorMicToHeadphones) contexts.push(this.monitorContext);
@@ -788,6 +828,7 @@ export class AudioEngine {
         source.connect(gain).connect(context.destination);
         this.micNodes.push({ source, gain, context });
       }
+      this.markMicApplied(configureGeneration);
     } catch (error) {
       if (generation === this.micConfigureGeneration) console.warn("Microphone passthrough failed", error);
     }
@@ -797,7 +838,7 @@ export class AudioEngine {
     if (this.disposed || !this.needsMicrophone()) return;
     const microphoneState = this.deviceStatus.microphone.state;
     if (microphoneState === "unavailable") {
-      await this.configureMic();
+      await this.configureMic(this.configureGeneration);
       return;
     }
     if (microphoneState !== "fallback") return;
@@ -822,7 +863,7 @@ export class AudioEngine {
       probeStream.getTracks().forEach((track) => track.stop());
       return;
     }
-    await this.configureMic(probeStream);
+    await this.configureMic(this.configureGeneration, probeStream);
   }
 
   private stopMic(generation = this.micConfigureGeneration) {
@@ -998,8 +1039,12 @@ export class AudioEngine {
   private stopVoice(voice: ActiveVoice, fadeSeconds: number) {
     voice.gains.forEach((gain) => {
       const now = gain.context.currentTime;
+      const currentGain = Math.max(0.0001, gain.gain.value);
       gain.gain.cancelScheduledValues(now);
-      if (fadeSeconds > 0) gain.gain.setTargetAtTime(0.0001, now, fadeSeconds);
+      if (fadeSeconds > 0) {
+        gain.gain.setValueAtTime(currentGain, now);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + fadeSeconds);
+      }
       else gain.gain.setValueAtTime(0.0001, now);
     });
     window.setTimeout(() => {

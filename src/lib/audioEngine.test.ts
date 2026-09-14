@@ -12,6 +12,10 @@ const playbackSettings: AudioSettings = makeAudioSettings({
   monitorMicToHeadphones: false
 });
 
+function liveMediaSources(context: FakeAudioContext) {
+  return context.mediaSources.filter((source) => source.disconnect.mock.calls.length === 0);
+}
+
 describe("AudioEngine mic routing", () => {
   beforeEach(() => {
     FakeAudioContext.instances = [];
@@ -249,6 +253,96 @@ describe("AudioEngine mic routing", () => {
     expect(captured.track.stop).toHaveBeenCalledOnce();
     expect(FakeAudioContext.instances[0].mediaSources).toHaveLength(0);
     expect(FakeAudioContext.instances[1].mediaSources).toHaveLength(0);
+
+    await engine.dispose();
+  });
+
+  it("applies the latest disabled mic-monitor route across overlapping configure calls", async () => {
+    const getUserMedia = vi.fn(async () => fakeStream().stream);
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+    const initial = makeAudioSettings({ micPassthrough: true, monitorMicToHeadphones: true });
+    const engine = new AudioEngine(initial, vi.fn());
+    await engine.configure(initial, "cable-device");
+    const staleSinkSwitch = deferred<void>();
+    const monitorContext = FakeAudioContext.instances[0];
+    monitorContext.setSinkId.mockReturnValueOnce(staleSinkSwitch.promise).mockResolvedValue(undefined);
+
+    const stale = engine.configure({ ...initial, monitorMicToHeadphones: false }, "cable-device");
+    const latest = engine.configure({ ...initial, monitorMicToHeadphones: false, micMonitorVolume: 0.5 }, "cable-device");
+    await latest;
+    staleSinkSwitch.resolve();
+    await stale;
+
+    expect(getUserMedia).toHaveBeenCalledTimes(2);
+    expect(liveMediaSources(monitorContext)).toHaveLength(0);
+
+    await engine.dispose();
+  });
+
+  it("applies the latest enabled mic-monitor route across overlapping configure calls", async () => {
+    const getUserMedia = vi.fn(async () => fakeStream().stream);
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+    const initial = makeAudioSettings({ micPassthrough: true, monitorMicToHeadphones: false });
+    const engine = new AudioEngine(initial, vi.fn());
+    await engine.configure(initial, "cable-device");
+    const staleSinkSwitch = deferred<void>();
+    const monitorContext = FakeAudioContext.instances[0];
+    monitorContext.setSinkId.mockReturnValueOnce(staleSinkSwitch.promise).mockResolvedValue(undefined);
+
+    const stale = engine.configure({ ...initial, monitorMicToHeadphones: true }, "cable-device");
+    const latest = engine.configure({ ...initial, monitorMicToHeadphones: true, micMonitorVolume: 0.5 }, "cable-device");
+    await latest;
+    staleSinkSwitch.resolve();
+    await stale;
+
+    expect(getUserMedia).toHaveBeenCalledTimes(2);
+    expect(liveMediaSources(monitorContext)).toHaveLength(1);
+
+    await engine.dispose();
+  });
+
+  it("applies the latest disabled virtual-mic route across overlapping configure calls", async () => {
+    const getUserMedia = vi.fn(async () => fakeStream().stream);
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+    const initial = makeAudioSettings({ micPassthrough: true, monitorMicToHeadphones: true });
+    const engine = new AudioEngine(initial, vi.fn());
+    await engine.configure(initial, "cable-device");
+    const staleSinkSwitch = deferred<void>();
+    const monitorContext = FakeAudioContext.instances[0];
+    const virtualContext = FakeAudioContext.instances[1];
+    monitorContext.setSinkId.mockReturnValueOnce(staleSinkSwitch.promise).mockResolvedValue(undefined);
+
+    const stale = engine.configure({ ...initial, micPassthrough: false }, "cable-device");
+    const latest = engine.configure({ ...initial, micPassthrough: false, micVirtualVolume: 0.5 }, "cable-device");
+    await latest;
+    staleSinkSwitch.resolve();
+    await stale;
+
+    expect(getUserMedia).toHaveBeenCalledTimes(2);
+    expect(liveMediaSources(virtualContext)).toHaveLength(0);
+
+    await engine.dispose();
+  });
+
+  it("applies the latest enabled virtual-mic route across overlapping configure calls", async () => {
+    const getUserMedia = vi.fn(async () => fakeStream().stream);
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+    const initial = makeAudioSettings({ micPassthrough: false, monitorMicToHeadphones: true });
+    const engine = new AudioEngine(initial, vi.fn());
+    await engine.configure(initial, "cable-device");
+    const staleSinkSwitch = deferred<void>();
+    const monitorContext = FakeAudioContext.instances[0];
+    const virtualContext = FakeAudioContext.instances[1];
+    monitorContext.setSinkId.mockReturnValueOnce(staleSinkSwitch.promise).mockResolvedValue(undefined);
+
+    const stale = engine.configure({ ...initial, micPassthrough: true }, "cable-device");
+    const latest = engine.configure({ ...initial, micPassthrough: true, micVirtualVolume: 0.5 }, "cable-device");
+    await latest;
+    staleSinkSwitch.resolve();
+    await stale;
+
+    expect(getUserMedia).toHaveBeenCalledTimes(2);
+    expect(liveMediaSources(virtualContext)).toHaveLength(1);
 
     await engine.dispose();
   });
@@ -802,6 +896,8 @@ describe("AudioEngine mic routing", () => {
     expect(internals.virtualSinkId).toBe("cable-device");
     expect(internals.virtualSinkReady).toBe(true);
     expect(virtualContext.setSinkId).toHaveBeenLastCalledWith("cable-device");
+    expect(monitorContext.gains[0].gain.value).toBe(0);
+    expect(virtualContext.gains[0].gain.value).toBe(1);
     expect(getUserMedia).toHaveBeenCalledTimes(1);
     expect(stream.track.stop).not.toHaveBeenCalled();
 
@@ -886,10 +982,39 @@ describe("AudioEngine mic routing", () => {
     await engine.configure(makeAudioSettings({ echoCancellationEnabled: false }), "cable-device");
 
     await engine.configure(makeAudioSettings({ echoCancellationEnabled: true }), "cable-device");
+    await engine.configure(makeAudioSettings({ echoCancellationEnabled: true }), "cable-device");
 
     expect(getUserMedia).toHaveBeenCalledTimes(1);
+    expect(captured.track.applyConstraints).toHaveBeenCalledOnce();
     expect(captured.track.applyConstraints).toHaveBeenCalledWith(expect.objectContaining({ echoCancellation: true }));
     expect(captured.track.stop).not.toHaveBeenCalled();
+
+    await engine.dispose();
+  });
+
+  it("rebuilds the mic when an echo-cancellation update is superseded", async () => {
+    const constraintUpdate = deferred<void>();
+    const first = fakeStream({ echoCancellation: false });
+    const second = fakeStream({ echoCancellation: false });
+    first.track.applyConstraints.mockReturnValueOnce(constraintUpdate.promise);
+    const getUserMedia = vi.fn()
+      .mockResolvedValueOnce(first.stream)
+      .mockResolvedValueOnce(second.stream);
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+    const disabled = makeAudioSettings({ echoCancellationEnabled: false });
+    const engine = new AudioEngine(disabled, vi.fn());
+    await engine.configure(disabled, "cable-device");
+
+    const stale = engine.configure({ ...disabled, echoCancellationEnabled: true }, "cable-device");
+    await waitForMockCalls(first.track.applyConstraints, 1);
+    const latest = engine.configure(disabled, "cable-device");
+    await latest;
+    constraintUpdate.resolve();
+    await stale;
+
+    expect(getUserMedia).toHaveBeenCalledTimes(2);
+    expect(first.track.stop).toHaveBeenCalledOnce();
+    expect(liveMediaSources(FakeAudioContext.instances[1]).map((source) => source.stream)).toEqual([second.stream]);
 
     await engine.dispose();
   });
@@ -933,8 +1058,10 @@ describe("AudioEngine mic routing", () => {
     expect(processingStatus).toHaveBeenLastCalledWith(expect.objectContaining({ noiseSuppression: "active" }));
 
     await engine.configure({ ...processedSettings, noiseSuppressionAttenuationDb: 24 }, "cable-device");
+    await engine.configure({ ...processedSettings, noiseSuppressionAttenuationDb: 24 }, "cable-device");
     expect(getUserMedia).toHaveBeenCalledTimes(1);
     expect(FakeWorker.instances[0].postMessage).toHaveBeenCalledWith({ type: "attenuation", value: 24 });
+    expect(FakeWorker.instances[0].postMessage.mock.calls.filter(([message]) => message.type === "attenuation")).toHaveLength(1);
 
     await engine.dispose();
   });

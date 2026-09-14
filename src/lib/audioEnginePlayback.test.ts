@@ -84,18 +84,62 @@ describe("AudioEngine output routing", () => {
     await engine.dispose();
   });
 
-  it("falls back to the monitor bus when both routes are disabled", async () => {
+  it("plays nothing when both routes are disabled", async () => {
+    const status = vi.fn();
     const engine = new AudioEngine(makeAudioSettings({
       micPassthrough: false,
       soundboardToVirtualMic: false,
       monitorToHeadphones: false,
       monitorMicToHeadphones: false
-    }), vi.fn());
+    }), status);
 
-    await engine.play(makeSound({ outputTarget: "both" }));
+    const started = await engine.play(makeSound({ outputTarget: "both" }));
+
+    expect(monitorContext().bufferSources).toHaveLength(0);
+    expect(virtualContext().bufferSources).toHaveLength(0);
+    expect(engine.isPlaying("sound-1")).toBe(false);
+    expect(status).not.toHaveBeenCalled();
+    expect(started).toBe(false);
+
+    await engine.dispose();
+  });
+
+  it("does not reroute a disabled monitor target to an enabled virtual route", async () => {
+    const monitorDisabled = makeAudioSettings({
+      micPassthrough: false,
+      soundboardToVirtualMic: true,
+      monitorToHeadphones: false,
+      monitorMicToHeadphones: false
+    });
+    const engine = new AudioEngine(monitorDisabled, vi.fn());
+    await engine.configure(monitorDisabled, "cable-device");
+
+    await engine.play(makeSound({ outputTarget: "monitor" }));
+
+    expect(monitorContext().bufferSources).toHaveLength(0);
+    expect(virtualContext().bufferSources).toHaveLength(0);
+    expect(engine.isPlaying("sound-1")).toBe(false);
+
+    await engine.dispose();
+  });
+
+  it("creates both-target routes while the disabled monitor bus stays muted", async () => {
+    const monitorDisabled = makeAudioSettings({
+      micPassthrough: false,
+      soundboardToVirtualMic: true,
+      monitorToHeadphones: false,
+      monitorMicToHeadphones: false
+    });
+    const engine = new AudioEngine(monitorDisabled, vi.fn());
+    await engine.configure(monitorDisabled, "cable-device");
+
+    const started = await engine.play(makeSound({ outputTarget: "both" }));
 
     expect(monitorContext().bufferSources).toHaveLength(1);
+    expect(virtualContext().bufferSources).toHaveLength(1);
+    expect(monitorContext().gains[0].gain.value).toBe(0);
     expect(engine.isPlaying("sound-1")).toBe(true);
+    expect(started).toBe(true);
 
     await engine.dispose();
   });
@@ -111,6 +155,100 @@ describe("AudioEngine output routing", () => {
     // One voice, two routes: stopping the sound silences both.
     engine.stop("sound-1");
     expect(engine.isPlaying("sound-1")).toBe(false);
+
+    await engine.dispose();
+  });
+
+  it("mutes the monitor bus when monitoring is disabled during playback", async () => {
+    const engine = new AudioEngine(playbackSettings, vi.fn());
+    await engine.play(makeSound({ outputTarget: "monitor" }));
+    const monitorBus = monitorContext().gains[0];
+
+    await engine.configure({ ...playbackSettings, monitorToHeadphones: false }, "");
+
+    expect(engine.isPlaying("sound-1")).toBe(true);
+    // Disabled routes are silenced with an immediate value, never a decaying target.
+    expect(monitorBus.gain.setValueAtTime).toHaveBeenLastCalledWith(0, monitorContext().currentTime);
+    expect(monitorBus.gain.value).toBe(0);
+
+    await engine.dispose();
+  });
+
+  it("silences a disabled route immediately even while its context is suspended", async () => {
+    const engine = new AudioEngine(makeAudioSettings({
+      micPassthrough: false,
+      soundboardToVirtualMic: true,
+      monitorToHeadphones: false,
+      monitorMicToHeadphones: false
+    }), vi.fn());
+    const context = monitorContext();
+    const monitorBus = context.gains[0];
+    context.state = "suspended";
+    monitorBus.gain.value = 1;
+    monitorBus.gain.setValueAtTime.mockClear();
+    monitorBus.gain.setTargetAtTime.mockClear();
+
+    await engine.configure(makeAudioSettings({ monitorToHeadphones: false, soundboardToVirtualMic: true }), "cable-device");
+
+    expect(monitorBus.gain.setValueAtTime).toHaveBeenCalledWith(0, context.currentTime);
+    expect(monitorBus.gain.setTargetAtTime).not.toHaveBeenCalled();
+    expect(monitorBus.gain.value).toBe(0);
+
+    await engine.dispose();
+  });
+
+  it("assigns an enabled route's volume directly while its context is suspended", async () => {
+    const engine = new AudioEngine(playbackSettings, vi.fn());
+    const context = monitorContext();
+    const monitorBus = context.gains[0];
+    context.state = "suspended";
+    monitorBus.gain.setValueAtTime.mockClear();
+
+    await engine.configure({ ...playbackSettings, soundboardMonitorVolume: 0.6 }, "");
+
+    expect(monitorBus.gain.setValueAtTime).toHaveBeenLastCalledWith(0.6, context.currentTime);
+    expect(monitorBus.gain.value).toBe(0.6);
+
+    await engine.dispose();
+  });
+
+  it("unmutes an existing both-target monitor voice when monitoring is enabled mid-play", async () => {
+    const monitorDisabled = makeAudioSettings({
+      micPassthrough: false,
+      soundboardToVirtualMic: true,
+      monitorToHeadphones: false,
+      monitorMicToHeadphones: false,
+      soundboardMonitorVolume: 0.7
+    });
+    const engine = new AudioEngine(monitorDisabled, vi.fn());
+    await engine.configure(monitorDisabled, "cable-device");
+    await engine.play(makeSound({ outputTarget: "both" }));
+    const monitorBus = monitorContext().gains[0];
+    const monitorSource = monitorContext().bufferSources[0];
+
+    await engine.configure({ ...monitorDisabled, monitorToHeadphones: true }, "cable-device");
+
+    expect(monitorBus.gain.value).toBe(0.7);
+    expect(monitorContext().bufferSources).toEqual([monitorSource]);
+    expect(monitorSource.stop).not.toHaveBeenCalled();
+    expect(engine.isPlaying("sound-1")).toBe(true);
+
+    await engine.dispose();
+  });
+
+  it("unmutes an existing both-target virtual voice when its sink becomes ready", async () => {
+    const engine = new AudioEngine(dualRouteSettings, vi.fn());
+    await engine.play(makeSound({ outputTarget: "both" }));
+    const virtualBus = virtualContext().gains[0];
+    const virtualSource = virtualContext().bufferSources[0];
+    expect(virtualBus.gain.value).toBe(0);
+
+    await engine.configure(dualRouteSettings, "cable-device");
+
+    expect(virtualBus.gain.value).toBe(1);
+    expect(virtualContext().bufferSources).toEqual([virtualSource]);
+    expect(virtualSource.stop).not.toHaveBeenCalled();
+    expect(engine.isPlaying("sound-1")).toBe(true);
 
     await engine.dispose();
   });
@@ -166,6 +304,94 @@ describe("AudioEngine solo and retrigger semantics", () => {
     expect(gains[0].gain.value).toBeCloseTo(0.0001);
     expect(gains[1].gain.value).toBe(1);
     expect(gains[2].gain.value).toBe(1);
+
+    await engine.dispose();
+  });
+
+  it("does not stop an active sound when a solo sound has no live route", async () => {
+    const status = vi.fn();
+    const engine = new AudioEngine(playbackSettings, status);
+    await engine.play(makeSound({ id: "active" }));
+    const activeSource = monitorContext().bufferSources[0];
+    const statusCallsBeforeTrigger = status.mock.calls.length;
+
+    const started = await engine.play(makeSound({
+      id: "muted-solo",
+      outputTarget: "virtual",
+      soloPlay: true
+    }));
+
+    expect(started).toBe(false);
+    expect(engine.isPlaying("active")).toBe(true);
+    expect(engine.isPlaying("muted-solo")).toBe(false);
+    expect(activeSource.stop).not.toHaveBeenCalled();
+    expect(status).toHaveBeenCalledTimes(statusCallsBeforeTrigger);
+
+    await engine.dispose();
+  });
+
+  it("does not stop other sounds or start a voice when the route is disabled while decoding", async () => {
+    const status = vi.fn();
+    const engine = new AudioEngine(playbackSettings, status);
+    await engine.play(makeSound({ id: "active" }));
+    const activeSource = monitorContext().bufferSources[0];
+    const statusCallsBeforeTrigger = status.mock.calls.length;
+    const media = deferred<ArrayBuffer>();
+    (window.sounddeck.readMedia as ReturnType<typeof vi.fn>).mockReturnValue(media.promise);
+
+    const pending = engine.play(makeSound({ id: "late-solo", mediaPath: "late.wav", outputTarget: "monitor", soloPlay: true }));
+    await engine.configure({ ...playbackSettings, monitorToHeadphones: false }, "");
+    media.resolve(new ArrayBuffer(8));
+    const started = await pending;
+
+    expect(started).toBe(false);
+    expect(engine.isPlaying("late-solo")).toBe(false);
+    expect(engine.isPlaying("active")).toBe(true);
+    expect(activeSource.stop).not.toHaveBeenCalled();
+    expect(monitorContext().bufferSources).toHaveLength(1);
+    expect(status).toHaveBeenCalledTimes(statusCallsBeforeTrigger);
+
+    await engine.dispose();
+  });
+
+  it("does not stop other sounds when the route is disabled while the contexts resume", async () => {
+    const status = vi.fn();
+    const engine = new AudioEngine(playbackSettings, status);
+    await engine.play(makeSound({ id: "active" }));
+    const activeSource = monitorContext().bufferSources[0];
+    const statusCallsBeforeTrigger = status.mock.calls.length;
+    const resumed = deferred<void>();
+    monitorContext().resume.mockReturnValueOnce(resumed.promise);
+
+    const pending = engine.play(makeSound({ id: "late-solo", outputTarget: "monitor", soloPlay: true }));
+    await Promise.resolve();
+    await engine.configure({ ...playbackSettings, monitorToHeadphones: false }, "");
+    resumed.resolve();
+    const started = await pending;
+
+    expect(started).toBe(false);
+    expect(engine.isPlaying("late-solo")).toBe(false);
+    expect(engine.isPlaying("active")).toBe(true);
+    expect(activeSource.stop).not.toHaveBeenCalled();
+    expect(monitorContext().bufferSources).toHaveLength(1);
+    expect(status).toHaveBeenCalledTimes(statusCallsBeforeTrigger);
+
+    await engine.dispose();
+  });
+
+  it("does not restart an active sound when its route is no longer live", async () => {
+    const engine = new AudioEngine(playbackSettings, vi.fn());
+    const sound = makeSound({ retriggerMode: "restart" });
+    await engine.play(sound);
+    const activeSource = monitorContext().bufferSources[0];
+    await engine.configure({ ...playbackSettings, monitorToHeadphones: false }, "");
+
+    const started = await engine.play(sound);
+
+    expect(started).toBe(false);
+    expect(engine.isPlaying(sound.id)).toBe(true);
+    expect(monitorContext().bufferSources).toEqual([activeSource]);
+    expect(activeSource.stop).not.toHaveBeenCalled();
 
     await engine.dispose();
   });
@@ -246,10 +472,12 @@ describe("AudioEngine fades", () => {
       await engine.play(makeSound({ fadeOutMs: 1000 }));
       const source = monitorContext().bufferSources[0];
       const gain = voiceGains(monitorContext())[0];
+      gain.gain.setValueAtTime.mockClear();
 
       engine.stop("sound-1");
 
-      expect(gain.gain.setTargetAtTime).toHaveBeenCalledWith(0.0001, 0, 1);
+      expect(gain.gain.setValueAtTime).toHaveBeenLastCalledWith(1, 0);
+      expect(gain.gain.exponentialRampToValueAtTime).toHaveBeenCalledWith(0.0001, 1);
       expect(source.stop).not.toHaveBeenCalled();
 
       await vi.advanceTimersByTimeAsync(1021);
@@ -263,6 +491,30 @@ describe("AudioEngine fades", () => {
 });
 
 describe("AudioEngine preview lifecycle", () => {
+  it("keeps editor preview audible when soundboard monitoring is disabled", async () => {
+    const previewSettings = makeAudioSettings({
+      micPassthrough: false,
+      soundboardToVirtualMic: false,
+      monitorToHeadphones: false,
+      monitorMicToHeadphones: false,
+      soundboardMonitorVolume: 0.65
+    });
+    const engine = new AudioEngine(previewSettings, vi.fn());
+
+    await engine.previewPlay(makeSound(), 0, 1);
+
+    const context = monitorContext();
+    const [monitorBus, previewBus] = context.gains;
+    const previewVoiceGain = context.gains.find((gain) => gain.connections.includes(previewBus));
+    expect(context.bufferSources).toHaveLength(1);
+    expect(monitorBus.gain.value).toBe(0);
+    expect(previewBus.gain.value).toBe(0.65);
+    expect(previewBus.connections).toContain(context.destination);
+    expect(previewVoiceGain).toBeDefined();
+
+    await engine.dispose();
+  });
+
   it("cancels a preview start that resolves after the preview was stopped", async () => {
     const engine = new AudioEngine(playbackSettings, vi.fn());
     const media = deferred<ArrayBuffer>();
@@ -303,6 +555,21 @@ describe("AudioEngine preview lifecycle", () => {
 
     await engine.dispose();
   });
+
+  it("applies live per-sound volume changes to the matching preview", async () => {
+    const engine = new AudioEngine(playbackSettings, vi.fn());
+    await engine.previewPlay(makeSound({ volume: 0.8 }), 0, 1);
+    const previewBus = monitorContext().gains[1];
+    const previewGain = monitorContext().gains.find((gain) => gain.connections.includes(previewBus));
+
+    engine.setSoundVolume("sound-1", 0.45);
+
+    expect(previewGain?.gain.cancelScheduledValues).toHaveBeenCalledWith(0);
+    expect(previewGain?.gain.setTargetAtTime).toHaveBeenCalledWith(0.45, 0, 0.02);
+    expect(previewGain?.gain.value).toBe(0.45);
+
+    await engine.dispose();
+  });
 });
 
 describe("AudioEngine lifecycle and cache", () => {
@@ -333,18 +600,11 @@ describe("AudioEngine lifecycle and cache", () => {
     await engine.dispose();
   });
 
-  it("reports playing, idle, and paused states through the status callback", async () => {
+  it("reports playing and idle states through the status callback", async () => {
     const status = vi.fn();
     const engine = new AudioEngine(playbackSettings, status);
 
     await engine.play(makeSound());
-    expect(status).toHaveBeenLastCalledWith("playing", ["sound-1"]);
-
-    await engine.pauseAll();
-    expect(status).toHaveBeenLastCalledWith("paused", ["sound-1"]);
-    expect(monitorContext().suspend).toHaveBeenCalled();
-
-    await engine.resumeAll();
     expect(status).toHaveBeenLastCalledWith("playing", ["sound-1"]);
 
     monitorContext().bufferSources[0].onended?.();
