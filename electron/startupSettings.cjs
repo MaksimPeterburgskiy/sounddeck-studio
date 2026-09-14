@@ -9,8 +9,10 @@ function hasStartupArg(argv = process.argv) {
 
 // Login-item payload for app.setLoginItemSettings. `platform`/`execPath`
 // default to the real process; tests inject both.
-function startupLoginItemOptions(openAtLogin, hideOnStartup = true, { platform = process.platform, execPath = process.execPath } = {}) {
-  if (platform !== "win32") return { openAtLogin, openAsHidden: hideOnStartup };
+function startupLoginItemOptions(openAtLogin, { platform = process.platform, execPath = process.execPath } = {}) {
+  // Electron 44 removed openAsHidden. Window visibility is controlled by the
+  // saved hideOnStartup preference when getLoginItemSettings reports a login launch.
+  if (platform !== "win32") return { openAtLogin };
   return {
     openAtLogin,
     enabled: openAtLogin,

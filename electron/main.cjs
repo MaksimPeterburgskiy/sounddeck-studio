@@ -269,9 +269,9 @@ function clearWindowsStartupItems() {
   clearLegacyWindowsStartupItems();
 }
 
-function setWindowsStartupItem(openAtLogin, hideOnStartup = true, approved = openAtLogin) {
+function setWindowsStartupItem(openAtLogin, approved = openAtLogin) {
   app.setLoginItemSettings({
-    ...startupLoginItemOptions(openAtLogin, hideOnStartup),
+    ...startupLoginItemOptions(openAtLogin),
     enabled: Boolean(approved)
   });
 }
@@ -345,7 +345,7 @@ async function getStartupSettings(argv = process.argv) {
     let settings = app.getLoginItemSettings(queryOptions);
     let windowsState = process.platform === "win32" ? windowsStartupState(settings) : null;
     if (process.platform === "win32" && preferences.runAtStartup !== false && !settings.openAtLogin && windowsState?.approved) {
-      app.setLoginItemSettings(startupLoginItemOptions(true, preferences.hideOnStartup));
+      app.setLoginItemSettings(startupLoginItemOptions(true));
       clearLegacyWindowsStartupItems();
       settings = app.getLoginItemSettings(queryOptions);
       windowsState = windowsStartupState(settings);
@@ -360,7 +360,7 @@ async function getStartupSettings(argv = process.argv) {
         : process.platform === "win32" ? Boolean(windowsState?.registered) : Boolean(settings.openAtLogin),
       hideOnStartup: preferences.hideOnStartup,
       wasOpenedAtLogin,
-      wasOpenedAsHidden: Boolean(settings.wasOpenedAsHidden || (wasOpenedAtLogin && preferences.hideOnStartup)),
+      wasOpenedAsHidden: Boolean(wasOpenedAtLogin && preferences.hideOnStartup),
       ...(typeof status === "string" ? { status } : {})
     };
   } catch (error) {
@@ -1294,19 +1294,19 @@ handleTrustedIpc("app:setRunAtStartup", async (_event, enabled, options = {}) =>
     if (process.platform === "win32") {
       const previousWindowsState = windowsStartupState(previousSettings);
       rollbackStartupSettings = () => {
-        if (previousWindowsState.registered) setWindowsStartupItem(true, currentPreferences.hideOnStartup, previousWindowsState.approved);
+        if (previousWindowsState.registered) setWindowsStartupItem(true, previousWindowsState.approved);
         else clearWindowsStartupItems();
       };
     } else {
-      rollbackStartupSettings = () => app.setLoginItemSettings(startupLoginItemOptions(Boolean(previousSettings.openAtLogin), currentPreferences.hideOnStartup));
+      rollbackStartupSettings = () => app.setLoginItemSettings(startupLoginItemOptions(Boolean(previousSettings.openAtLogin)));
     }
     if (openAtLogin) {
-      if (process.platform === "win32") setWindowsStartupItem(true, hideOnStartup);
-      else app.setLoginItemSettings(startupLoginItemOptions(true, hideOnStartup));
+      if (process.platform === "win32") setWindowsStartupItem(true);
+      else app.setLoginItemSettings(startupLoginItemOptions(true));
       clearLegacyWindowsStartupItems();
     } else {
       if (process.platform === "win32") clearWindowsStartupItems();
-      else app.setLoginItemSettings(startupLoginItemOptions(false, hideOnStartup));
+      else app.setLoginItemSettings(startupLoginItemOptions(false));
     }
     await writeStartupPreferences({ hideOnStartup, runAtStartup: openAtLogin });
     return { ok: true, ...(await getStartupSettings()) };

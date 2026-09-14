@@ -6,7 +6,7 @@ Thanks for helping improve SoundDeck Studio. This guide covers local setup, bran
 
 Requirements:
 
-- Windows 10/11 or macOS
+- Windows 10/11 (64-bit) or macOS 13 Ventura or later
 - Node.js 22.12+
 - pnpm 11.6+ via Corepack
 
@@ -30,6 +30,8 @@ Useful commands:
 | `pnpm run dist:mac:unsigned` | Build an unsigned macOS smoke-test app artifact |
 
 > Some features need real OS services, drivers, or hardware. Test VB-CABLE and NSIS packaging on Windows, BlackHole and notarized PKG packaging on macOS, and hardware-key integrations with the matching device.
+
+The macOS minimum in `package.json` (`build.mac.minimumSystemVersion`) uses the macOS version (`13.0.0`) for the app, installer, and BlackHole build. `scripts/prepare-mac-release-assets.mjs` writes the corresponding Darwin kernel version (`22.0.0`) into the update feeds because electron-updater compares it with `os.release()`. Keep both aligned so older Macs are not offered an incompatible update.
 
 ## Branch model
 

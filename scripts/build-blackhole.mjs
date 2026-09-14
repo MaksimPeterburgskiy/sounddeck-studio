@@ -53,12 +53,14 @@ async function ensureSourceCheckout() {
 
 async function buildFromSource() {
   await ensureSourceCheckout();
+  const { build } = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
   const buildDir = path.join(sourcePath, "build", "sounddeck-2ch");
   await rm(buildDir, { recursive: true, force: true });
   await run("xcodebuild", [
     "-project", "BlackHole.xcodeproj",
     "-configuration", "Release",
     "-target", "BlackHole",
+    `MACOSX_DEPLOYMENT_TARGET=${build.mac.minimumSystemVersion}`,
     `CONFIGURATION_BUILD_DIR=${buildDir}`,
     "PRODUCT_BUNDLE_IDENTIFIER=audio.existential.BlackHole2ch",
     "GCC_PREPROCESSOR_DEFINITIONS=$(inherited) kNumber_Of_Channels=2 kPlugIn_BundleID=\\\"audio.existential.BlackHole2ch\\\" kDriver_Name=\\\"BlackHole\\\"",

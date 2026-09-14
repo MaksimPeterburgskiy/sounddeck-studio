@@ -24,7 +24,7 @@ Build boards from local audio files, trigger sounds with global hotkeys, and sen
 **[Download the latest release](https://github.com/MaksimPeterburgskiy/sounddeck-studio/releases/latest)** and choose the installer for your platform.
 
 - **Windows:** download `SoundDeck-Studio-Setup-x.y.z.exe`. The installer sets up the [VB-CABLE](https://vb-audio.com/Cable/) virtual audio driver if you do not already have it. A portable `.exe` is also available, but portable builds do not auto-update.
-- **macOS:** download `SoundDeck.Studio-x.y.z.pkg`. The package is signed and notarized, installs SoundDeck Studio into `/Applications`, and includes the BlackHole 2ch audio driver for virtual microphone routing.
+- **macOS 13 Ventura or later:** download `SoundDeck.Studio-x.y.z.pkg`. The package is signed and notarized, installs SoundDeck Studio into `/Applications`, and includes the BlackHole 2ch audio driver for virtual microphone routing.
 
 Installed builds check for updates and apply them on restart.
 
@@ -85,7 +85,7 @@ A new beta is published every night whenever `main` has changed, as a prerelease
 
 Requirements:
 
-- Windows 10/11 or macOS
+- Windows 10/11 (64-bit) or macOS 13 Ventura or later
 - Node.js 22.12+
 - pnpm 11.6+ via Corepack
 
