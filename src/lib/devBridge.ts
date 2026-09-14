@@ -26,10 +26,12 @@ export function installDevBridge() {
           soundboardVirtualVolume: 1,
           soundboardMonitorVolume: 1,
           monitorDeviceId: "",
+          monitorDeviceLabel: "",
           virtualOutputDeviceId: "",
           virtualOutputMode: "managed",
           virtualBackend: "windows-vbcable",
           microphoneDeviceId: "",
+          microphoneDeviceLabel: "",
           stopAllHotkey: "Ctrl+Alt+Space",
           cycleBoardsHotkey: ""
         },

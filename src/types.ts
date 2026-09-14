@@ -84,10 +84,12 @@ export interface AudioSettings {
   soundboardVirtualVolume: number;
   soundboardMonitorVolume: number;
   monitorDeviceId: string;
+  monitorDeviceLabel: string;
   virtualOutputDeviceId: string;
   virtualOutputMode: VirtualOutputMode;
   virtualBackend: VirtualBackend;
   microphoneDeviceId: string;
+  microphoneDeviceLabel: string;
   stopAllHotkey: string;
   cycleBoardsHotkey: string;
 }
