@@ -15,27 +15,25 @@ describe("hasStartupArg", () => {
 
 describe("startupLoginItemOptions", () => {
   it("builds a named Windows login item pointing at the executable with the startup flag", () => {
-    expect(startupLoginItemOptions(true, true, { platform: "win32", execPath: executablePath })).toEqual({
+    expect(startupLoginItemOptions(true, { platform: "win32", execPath: executablePath })).toEqual({
       openAtLogin: true,
       enabled: true,
       name: WINDOWS_STARTUP_NAME,
       path: executablePath,
       args: [STARTUP_ARG]
     });
-    expect(startupLoginItemOptions(false, true, { platform: "win32", execPath: executablePath })).toMatchObject({
+    expect(startupLoginItemOptions(false, { platform: "win32", execPath: executablePath })).toMatchObject({
       openAtLogin: false,
       enabled: false
     });
   });
 
-  it("uses openAsHidden on non-Windows platforms", () => {
-    expect(startupLoginItemOptions(true, true, { platform: "darwin", execPath: "/Applications/SoundDeck.app" })).toEqual({
-      openAtLogin: true,
-      openAsHidden: true
+  it("registers and unregisters macOS login items without the removed openAsHidden option", () => {
+    expect(startupLoginItemOptions(true, { platform: "darwin", execPath: "/Applications/SoundDeck.app" })).toEqual({
+      openAtLogin: true
     });
-    expect(startupLoginItemOptions(true, false, { platform: "darwin", execPath: "/Applications/SoundDeck.app" })).toEqual({
-      openAtLogin: true,
-      openAsHidden: false
+    expect(startupLoginItemOptions(false, { platform: "darwin", execPath: "/Applications/SoundDeck.app" })).toEqual({
+      openAtLogin: false
     });
   });
 });

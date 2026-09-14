@@ -1,8 +1,9 @@
 // Prepares the macOS artifacts in release/ for `gh release upload`: verifies the
 // pkg, updater zip, and channel feed exist, renames spaces out of asset names
 // (GitHub mangles them otherwise), rewrites the feed's url/path fields to the
-// sanitized zip name, and prints the final upload list to stdout (one path per
-// line; diagnostics go to stderr so callers can pipe the list straight into gh).
+// sanitized zip name, sets the minimum OS version, and prints the final upload
+// list to stdout (one path per line; diagnostics go to stderr so callers can
+// pipe the list straight into gh).
 import { readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -18,6 +19,16 @@ export function rewriteFeedZipReferences(feed, zipName) {
   return feed
     .replace(/url: .+\.zip/g, `url: ${zipName}`)
     .replace(/path: .+\.zip/g, `path: ${zipName}`);
+}
+
+export function setFeedMinimumSystemVersion(feed) {
+  // Electron 44 requires macOS 13. electron-updater compares os.release(),
+  // so the feed must use Darwin 22 rather than the macOS product version.
+  // electron-builder 26's releaseInfo schema does not accept this field.
+  const entry = "minimumSystemVersion: 22.0.0";
+  return /^minimumSystemVersion:.*$/m.test(feed)
+    ? feed.replace(/^minimumSystemVersion:.*$/m, entry)
+    : `${feed.trimEnd()}\n${entry}\n`;
 }
 
 export function prepareMacReleaseAssets({ releaseDir, channel, log = () => undefined }) {
@@ -49,8 +60,8 @@ export function prepareMacReleaseAssets({ releaseDir, channel, log = () => undef
 
   const zipName = uploads.find((name) => name.endsWith(".zip"));
   const feedPath = path.join(releaseDir, feedName);
-  writeFileSync(feedPath, rewriteFeedZipReferences(readFileSync(feedPath, "utf8"), zipName));
-  log(`Rewrote ${feedName} zip references to ${zipName}`);
+  writeFileSync(feedPath, setFeedMinimumSystemVersion(rewriteFeedZipReferences(readFileSync(feedPath, "utf8"), zipName)));
+  log(`Rewrote ${feedName} zip references to ${zipName} and set the minimum system version`);
 
   return [...uploads, feedName].map((name) => path.join(releaseDir, name));
 }

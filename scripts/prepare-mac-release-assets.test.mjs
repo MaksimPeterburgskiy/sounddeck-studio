@@ -1,8 +1,14 @@
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { prepareMacReleaseAssets, rewriteFeedZipReferences, sanitizeAssetName } from "./prepare-mac-release-assets.mjs";
+import { createRequire } from "node:module";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { prepareMacReleaseAssets, rewriteFeedZipReferences, sanitizeAssetName, setFeedMinimumSystemVersion } from "./prepare-mac-release-assets.mjs";
+
+const require = createRequire(import.meta.url);
+const { AppUpdater } = require("electron-updater/out/AppUpdater");
+const updaterRequire = createRequire(require.resolve("electron-updater"));
+const { load: loadYaml } = updaterRequire("js-yaml");
 
 const tempDirs = [];
 
@@ -28,6 +34,7 @@ function feedFor(zipName) {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   while (tempDirs.length) rmSync(tempDirs.pop(), { recursive: true, force: true });
 });
 
@@ -68,6 +75,15 @@ describe("prepareMacReleaseAssets", () => {
     const feed = readFileSync(path.join(releaseDir, `${channel}-mac.yml`), "utf8");
     expect(feed).toContain("url: SoundDeck.Studio-0.1.18.zip");
     expect(feed).toContain("path: SoundDeck.Studio-0.1.18.zip");
+    const updateInfo = loadYaml(feed);
+    const updater = { _logger: { info: vi.fn(), warn: vi.fn() } };
+    const release = vi.spyOn(require("node:os"), "release");
+    // Exercise the installed updater's interpretation of the generated feed:
+    // Monterey must be rejected, while Ventura and newer remain eligible.
+    for (const [darwinVersion, supported] of [["21.6.0", false], ["22.0.0", true], ["23.0.0", true]]) {
+      release.mockReturnValue(darwinVersion);
+      expect(AppUpdater.prototype.checkIfUpdateSupported.call(updater, updateInfo)).toBe(supported);
+    }
   });
 
   it("leaves already-clean names untouched", () => {
@@ -95,5 +111,14 @@ describe("prepareMacReleaseAssets", () => {
   ])("fails when the %s is missing", (_missing, files, expected) => {
     const releaseDir = makeReleaseDir(files);
     expect(() => prepareMacReleaseAssets({ releaseDir, channel: "beta" })).toThrow(expected);
+  });
+});
+
+describe("setFeedMinimumSystemVersion", () => {
+  it("replaces an existing minimum and is idempotent without changing checksums", () => {
+    const feed = `${feedFor("SoundDeck.zip")}minimumSystemVersion: 13.0.0\n`;
+    const rewritten = setFeedMinimumSystemVersion(feed);
+    expect(loadYaml(rewritten)).toEqual({ ...loadYaml(feed), minimumSystemVersion: "22.0.0" });
+    expect(setFeedMinimumSystemVersion(rewritten)).toBe(rewritten);
   });
 });
