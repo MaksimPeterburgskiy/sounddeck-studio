@@ -48,6 +48,8 @@ describe("model helpers", () => {
     expect(library.settings.echoCancellationEnabled).toBe(false);
     expect(library.settings.noiseSuppressionEnabled).toBe(false);
     expect(library.settings.noiseSuppressionAttenuationDb).toBe(18);
+    expect(library.settings.monitorDeviceLabel).toBe("");
+    expect(library.settings.microphoneDeviceLabel).toBe("");
   });
 
   it("normalizes microphone processing settings", () => {
@@ -65,6 +67,18 @@ describe("model helpers", () => {
     expect(library.settings.echoCancellationEnabled).toBe(true);
     expect(library.settings.noiseSuppressionEnabled).toBe(false);
     expect(library.settings.noiseSuppressionAttenuationDb).toBe(30);
+  });
+
+  it("normalizes the saved audio device labels", () => {
+    const library = normalizeLibrary({
+      version: 1,
+      activeBoardId: "a",
+      settings: { monitorDeviceLabel: false, microphoneDeviceLabel: 42 } as unknown as SoundLibrary["settings"],
+      boards: [{ id: "a", name: "A", color: "#fff", icon: "zap", createdAt: "", updatedAt: "", sounds: [] }]
+    });
+
+    expect(library.settings.monitorDeviceLabel).toBe("false");
+    expect(library.settings.microphoneDeviceLabel).toBe("42");
   });
 
   it("creates a default board when a library has no boards", () => {

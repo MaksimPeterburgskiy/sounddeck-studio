@@ -17,10 +17,12 @@ const defaultSettings: SoundLibrary["settings"] = {
   soundboardVirtualVolume: 1,
   soundboardMonitorVolume: 1,
   monitorDeviceId: "",
+  monitorDeviceLabel: "",
   virtualOutputDeviceId: "",
   virtualOutputMode: "managed",
   virtualBackend: "windows-vbcable",
   microphoneDeviceId: "",
+  microphoneDeviceLabel: "",
   stopAllHotkey: "Ctrl+Alt+Space",
   cycleBoardsHotkey: ""
 };
@@ -206,10 +208,15 @@ export function normalizeLibrary(library: SoundLibrary): SoundLibrary {
   settings.stopAllHotkey = normalizeAccelerator(settings.stopAllHotkey);
   settings.cycleBoardsHotkey = normalizeAccelerator(settings.cycleBoardsHotkey);
   settings.virtualOutputDeviceId = normalizeSelectableDeviceId(settings.virtualOutputDeviceId);
-  settings.monitorDeviceId = normalizeMonitorDeviceId(settings.monitorDeviceId, settings.virtualOutputDeviceId);
+  settings.monitorDeviceLabel = String(settings.monitorDeviceLabel ?? "");
+  const selectableMonitorDeviceId = normalizeSelectableDeviceId(settings.monitorDeviceId);
+  settings.monitorDeviceId = normalizeMonitorDeviceId(selectableMonitorDeviceId, settings.virtualOutputDeviceId);
+  // A saved headphones choice that is actually the virtual cable is dropped along with its label.
+  if (settings.monitorDeviceId !== selectableMonitorDeviceId) settings.monitorDeviceLabel = "";
   if (!settings.virtualOutputMode) settings.virtualOutputMode = defaultSettings.virtualOutputMode;
   if (!settings.virtualBackend) settings.virtualBackend = defaultSettings.virtualBackend;
   settings.microphoneDeviceId = normalizeSelectableDeviceId(settings.microphoneDeviceId);
+  settings.microphoneDeviceLabel = String(settings.microphoneDeviceLabel ?? "");
   return {
     ...library,
     activeBoardId,
