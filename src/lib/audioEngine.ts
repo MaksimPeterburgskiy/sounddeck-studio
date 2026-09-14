@@ -688,14 +688,18 @@ export class AudioEngine {
   }
 
   private async restoreLatestSinks() {
-    if (this.disposed) return;
-    const generation = this.configureGeneration;
-    await this.applyMonitorSink(generation);
-    if (generation !== this.configureGeneration || this.disposed) return;
-    const virtualSinkResult = this.virtualSinkId ? await this.setSink(this.virtualContext, this.virtualSinkId, false) : "failed";
-    if (generation !== this.configureGeneration || this.disposed) return;
-    this.virtualSinkReady = virtualSinkResult === "selected";
-    this.applyBusVolumes();
+    while (!this.disposed) {
+      const generation = this.configureGeneration;
+      await this.applyMonitorSink(generation);
+      if (this.disposed) return;
+      if (generation !== this.configureGeneration) continue;
+      const virtualSinkResult = this.virtualSinkId ? await this.setSink(this.virtualContext, this.virtualSinkId, false) : "failed";
+      if (this.disposed) return;
+      if (generation !== this.configureGeneration) continue;
+      this.virtualSinkReady = virtualSinkResult === "selected";
+      this.applyBusVolumes();
+      return;
+    }
   }
 
   private async configureMic(preacquired?: MediaStream) {
@@ -758,6 +762,14 @@ export class AudioEngine {
       requestedDeviceId: microphoneDeviceId,
       activeDeviceId: track?.getSettings?.().deviceId ?? ""
     });
+    if (preacquired) {
+      const updatedInPlace = await this.applyEchoCancellationConstraint();
+      if (generation !== this.micConfigureGeneration || this.disposed || !this.needsMicrophone()) return;
+      if (!updatedInPlace) {
+        await this.configureMic();
+        return;
+      }
+    }
     this.updateEchoCancellationStatus(stream);
 
     try {
