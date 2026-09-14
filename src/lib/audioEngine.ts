@@ -457,7 +457,10 @@ export class AudioEngine {
       const generation = this.configureGeneration + 1;
       this.configureGeneration = generation;
       await this.applyMonitorSink(generation);
-      if (generation !== this.configureGeneration || this.disposed) return;
+      if (generation !== this.configureGeneration || this.disposed) {
+        if (!this.disposed) await this.restoreLatestSinks();
+        return;
+      }
     }
     await this.retryPreferredMicrophone();
   }
@@ -738,6 +741,10 @@ export class AudioEngine {
     }
     this.micStream = stream;
     const track = stream.getAudioTracks?.()[0] ?? stream.getTracks()[0];
+    track?.addEventListener?.("ended", () => {
+      if (generation !== this.micConfigureGeneration || this.disposed || !this.needsMicrophone()) return;
+      void this.configureMic();
+    });
     this.setMicrophoneDeviceStatus({
       state: usedFallback ? "fallback" : "selected",
       requestedDeviceId: microphoneDeviceId,

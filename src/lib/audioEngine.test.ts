@@ -347,6 +347,58 @@ describe("AudioEngine mic routing", () => {
     await engine.dispose();
   });
 
+  it("reopens the microphone when the active track ends", async () => {
+    const selected = fakeStream({ deviceId: "preferred-device" });
+    const fallback = fakeStream({ deviceId: "default-device" });
+    const getUserMedia = vi.fn()
+      .mockResolvedValueOnce(selected.stream)
+      .mockRejectedValueOnce(new DOMException("selected microphone unavailable", "NotFoundError"))
+      .mockResolvedValueOnce(fallback.stream);
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const selectedSettings = makeAudioSettings({ microphoneDeviceId: "preferred-device" });
+    const engine = new AudioEngine(selectedSettings, vi.fn(), vi.fn(), vi.fn());
+
+    await engine.configure(selectedSettings, "cable-device");
+    selected.endTrack();
+    await waitForMockCalls(getUserMedia, 3);
+    await Promise.resolve();
+
+    expect(selected.track.stop).toHaveBeenCalledOnce();
+    expect(FakeAudioContext.instances[1].mediaSources.at(-1)?.stream).toBe(fallback.stream);
+    expect(engine.getDeviceStatus().microphone).toEqual({
+      state: "fallback",
+      requestedDeviceId: "preferred-device",
+      activeDeviceId: "default-device"
+    });
+
+    await engine.dispose();
+  });
+
+  it("ignores ended events from stale microphone tracks", async () => {
+    const first = fakeStream({ deviceId: "first-device" });
+    const second = fakeStream({ deviceId: "second-device" });
+    const getUserMedia = vi.fn()
+      .mockResolvedValueOnce(first.stream)
+      .mockResolvedValueOnce(second.stream);
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+    const firstSettings = makeAudioSettings({ microphoneDeviceId: "first-device" });
+    const secondSettings = makeAudioSettings({ microphoneDeviceId: "second-device" });
+    const engine = new AudioEngine(firstSettings, vi.fn(), vi.fn(), vi.fn());
+
+    await engine.configure(firstSettings, "cable-device");
+    await engine.configure(secondSettings, "cable-device");
+    first.endTrack();
+    await Promise.resolve();
+
+    expect(getUserMedia).toHaveBeenCalledTimes(2);
+    expect(first.track.stop).toHaveBeenCalledOnce();
+    expect(second.track.stop).not.toHaveBeenCalled();
+    expect(FakeAudioContext.instances[1].mediaSources.at(-1)?.stream).toBe(second.stream);
+
+    await engine.dispose();
+  });
+
   it("does not retry the selected microphone while it is already active", async () => {
     const selected = fakeStream({ deviceId: "preferred-device" });
     const getUserMedia = vi.fn().mockResolvedValue(selected.stream);
@@ -447,6 +499,41 @@ describe("AudioEngine mic routing", () => {
       state: "selected",
       requestedDeviceId: "preferred-output",
       activeDeviceId: "preferred-output"
+    });
+
+    await engine.dispose();
+  });
+
+  it("restores the latest monitor sink when a retry is superseded", async () => {
+    const captured = fakeStream({ deviceId: "device-1" });
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia: vi.fn().mockResolvedValue(captured.stream) } });
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const selectedSettings = makeAudioSettings({ monitorDeviceId: "preferred-output" });
+    const latestSettings = makeAudioSettings({ monitorDeviceId: "new-output" });
+    const engine = new AudioEngine(selectedSettings, vi.fn(), vi.fn(), vi.fn());
+    const monitorContext = FakeAudioContext.instances[0];
+    monitorContext.setSinkId.mockRejectedValueOnce(new DOMException("output unavailable", "NotFoundError"));
+
+    await engine.configure(selectedSettings, "cable-device");
+    monitorContext.setSinkId.mockClear();
+    const delayedRetry = deferred<void>();
+    monitorContext.setSinkId.mockImplementationOnce(async (sinkId: string) => {
+      await delayedRetry.promise;
+      monitorContext.sinkId = sinkId;
+    });
+
+    const retry = engine.retryPreferredDevices();
+    await waitForMockCalls(monitorContext.setSinkId, 1);
+    await engine.configure(latestSettings, "cable-device");
+    delayedRetry.resolve();
+    await retry;
+
+    expect(monitorContext.setSinkId).toHaveBeenLastCalledWith("new-output");
+    expect(monitorContext.sinkId).toBe("new-output");
+    expect(engine.getDeviceStatus().monitor).toEqual({
+      state: "selected",
+      requestedDeviceId: "new-output",
+      activeDeviceId: "new-output"
     });
 
     await engine.dispose();
