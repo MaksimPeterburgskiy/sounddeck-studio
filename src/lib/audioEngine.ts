@@ -450,12 +450,15 @@ export class AudioEngine {
     await Promise.allSettled([this.monitorContext.close(), this.virtualContext.close(), this.decodeContext.close()]);
   }
 
-  async retryPreferredDevices(): Promise<void> {
+  async retryPreferredDevices(options: { recheckMonitor?: boolean } = {}): Promise<void> {
     if (this.disposed) return;
+    const generation = this.configureGeneration;
     const monitorState = this.deviceStatus.monitor.state;
-    if (monitorState === "fallback" || monitorState === "unavailable") {
-      const generation = this.configureGeneration + 1;
-      this.configureGeneration = generation;
+    const shouldReapplyMonitor =
+      monitorState === "fallback" ||
+      monitorState === "unavailable" ||
+      (options.recheckMonitor === true && this.deviceStatus.monitor.requestedDeviceId !== "");
+    if (shouldReapplyMonitor) {
       await this.applyMonitorSink(generation);
       if (generation !== this.configureGeneration || this.disposed) {
         if (!this.disposed) await this.restoreLatestSinks();
@@ -695,11 +698,12 @@ export class AudioEngine {
     this.applyBusVolumes();
   }
 
-  private async configureMic() {
+  private async configureMic(preacquired?: MediaStream) {
     const generation = this.micConfigureGeneration + 1;
     this.micConfigureGeneration = generation;
     this.stopMic(generation);
     if (!this.needsMicrophone()) {
+      preacquired?.getTracks().forEach((track) => track.stop());
       this.setProcessingStatus({
         echoCancellation: "disabled",
         noiseSuppression: this.settings.noiseSuppressionEnabled ? "standby" : "disabled"
@@ -712,26 +716,30 @@ export class AudioEngine {
     };
     let stream: MediaStream;
     let usedFallback = false;
-    try {
-      stream = await navigator.mediaDevices.getUserMedia(constraints);
-    } catch (error) {
-      if (generation !== this.micConfigureGeneration || !this.needsMicrophone()) return;
-      if (!microphoneDeviceId) {
-        console.warn("Microphone passthrough failed", error);
-        this.setMicrophoneDeviceStatus({ state: "unavailable", requestedDeviceId: microphoneDeviceId, activeDeviceId: "" });
-        return;
-      }
-      console.warn("Selected microphone failed; retrying with system default", error);
+    if (preacquired) {
+      stream = preacquired;
+    } else {
       try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          audio: makeMicrophoneConstraints("", { echoCancellation: this.settings.echoCancellationEnabled })
-        });
-        usedFallback = true;
-      } catch (fallbackError) {
+        stream = await navigator.mediaDevices.getUserMedia(constraints);
+      } catch (error) {
         if (generation !== this.micConfigureGeneration || !this.needsMicrophone()) return;
-        console.warn("Microphone passthrough fallback failed", fallbackError);
-        this.setMicrophoneDeviceStatus({ state: "unavailable", requestedDeviceId: microphoneDeviceId, activeDeviceId: "" });
-        return;
+        if (!microphoneDeviceId) {
+          console.warn("Microphone passthrough failed", error);
+          this.setMicrophoneDeviceStatus({ state: "unavailable", requestedDeviceId: microphoneDeviceId, activeDeviceId: "" });
+          return;
+        }
+        console.warn("Selected microphone failed; retrying with system default", error);
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            audio: makeMicrophoneConstraints("", { echoCancellation: this.settings.echoCancellationEnabled })
+          });
+          usedFallback = true;
+        } catch (fallbackError) {
+          if (generation !== this.micConfigureGeneration || !this.needsMicrophone()) return;
+          console.warn("Microphone passthrough fallback failed", fallbackError);
+          this.setMicrophoneDeviceStatus({ state: "unavailable", requestedDeviceId: microphoneDeviceId, activeDeviceId: "" });
+          return;
+        }
       }
     }
 
@@ -776,8 +784,33 @@ export class AudioEngine {
   private async retryPreferredMicrophone() {
     if (this.disposed || !this.needsMicrophone()) return;
     const microphoneState = this.deviceStatus.microphone.state;
-    if (microphoneState !== "fallback" && microphoneState !== "unavailable") return;
-    await this.configureMic();
+    if (microphoneState === "unavailable") {
+      await this.configureMic();
+      return;
+    }
+    if (microphoneState !== "fallback") return;
+    const probeGeneration = this.micConfigureGeneration;
+    const requested = normalizeSelectableDeviceId(this.settings.microphoneDeviceId);
+    if (requested === "") return;
+    let probeStream: MediaStream;
+    try {
+      probeStream = await navigator.mediaDevices.getUserMedia({
+        audio: makeMicrophoneConstraints(requested, { echoCancellation: this.settings.echoCancellationEnabled })
+      });
+    } catch (error) {
+      console.warn("Selected microphone is still unavailable", error);
+      return;
+    }
+    if (
+      probeGeneration !== this.micConfigureGeneration ||
+      this.disposed ||
+      !this.needsMicrophone() ||
+      requested !== normalizeSelectableDeviceId(this.settings.microphoneDeviceId)
+    ) {
+      probeStream.getTracks().forEach((track) => track.stop());
+      return;
+    }
+    await this.configureMic(probeStream);
   }
 
   private stopMic(generation = this.micConfigureGeneration) {

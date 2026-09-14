@@ -308,13 +308,44 @@ describe("AudioEngine mic routing", () => {
     await engine.dispose();
   });
 
-  it("retries the selected microphone from fallback and replaces the fallback route", async () => {
+  it("keeps the fallback microphone when the preferred device is still unavailable", async () => {
     const fallback = fakeStream({ deviceId: "default-device" });
-    const selected = fakeStream({ deviceId: "preferred-device" });
     const getUserMedia = vi.fn()
       .mockRejectedValueOnce(new DOMException("selected microphone unavailable", "NotFoundError"))
       .mockResolvedValueOnce(fallback.stream)
-      .mockResolvedValueOnce(selected.stream);
+      .mockRejectedValueOnce(new DOMException("selected microphone still unavailable", "NotFoundError"));
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const selectedSettings = makeAudioSettings({ microphoneDeviceId: "preferred-device" });
+    const engine = new AudioEngine(selectedSettings, vi.fn(), vi.fn(), vi.fn());
+
+    await engine.configure(selectedSettings, "cable-device");
+    const fallbackSource = FakeAudioContext.instances[1].mediaSources.at(-1)!;
+    await engine.retryPreferredDevices();
+
+    expect(getUserMedia).toHaveBeenCalledTimes(3);
+    expect(getUserMedia).toHaveBeenNthCalledWith(3, {
+      audio: expect.objectContaining({ deviceId: { exact: "preferred-device" } })
+    });
+    expect(fallback.track.stop).not.toHaveBeenCalled();
+    expect(fallbackSource.disconnect).not.toHaveBeenCalled();
+    expect(engine.getDeviceStatus().microphone).toEqual({
+      state: "fallback",
+      requestedDeviceId: "preferred-device",
+      activeDeviceId: "default-device"
+    });
+
+    await engine.dispose();
+  });
+
+  it("retries the selected microphone from fallback and replaces the fallback route", async () => {
+    const fallback = fakeStream({ deviceId: "default-device" });
+    const selected = fakeStream({ deviceId: "preferred-device" });
+    const selectedOpen = deferred<MediaStream>();
+    const getUserMedia = vi.fn()
+      .mockRejectedValueOnce(new DOMException("selected microphone unavailable", "NotFoundError"))
+      .mockResolvedValueOnce(fallback.stream)
+      .mockReturnValueOnce(selectedOpen.promise);
     vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const selectedSettings = makeAudioSettings({ microphoneDeviceId: "preferred-device" });
@@ -324,12 +355,19 @@ describe("AudioEngine mic routing", () => {
     await engine.configure(selectedSettings, "cable-device");
     const fallbackSource = FakeAudioContext.instances[1].mediaSources.at(-1)!;
 
-    await engine.retryPreferredDevices();
+    const retry = engine.retryPreferredDevices();
+    await waitForMockCalls(getUserMedia, 3);
 
     expect(getUserMedia).toHaveBeenCalledTimes(3);
     expect(getUserMedia).toHaveBeenNthCalledWith(3, {
       audio: expect.objectContaining({ deviceId: { exact: "preferred-device" } })
     });
+    expect(fallback.track.stop).not.toHaveBeenCalled();
+    expect(fallbackSource.disconnect).not.toHaveBeenCalled();
+
+    selectedOpen.resolve(selected.stream);
+    await retry;
+
     expect(fallback.track.stop).toHaveBeenCalledOnce();
     expect(fallbackSource.disconnect).toHaveBeenCalledOnce();
     expect(FakeAudioContext.instances[1].mediaSources.at(-1)?.stream).toBe(selected.stream);
@@ -499,6 +537,74 @@ describe("AudioEngine mic routing", () => {
       state: "selected",
       requestedDeviceId: "preferred-output",
       activeDeviceId: "preferred-output"
+    });
+
+    await engine.dispose();
+  });
+
+  it("does not cancel a settings update while retrying the monitor", async () => {
+    const captured = fakeStream({ deviceId: "device-1" });
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia: vi.fn().mockResolvedValue(captured.stream) } });
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const selectedSettings = makeAudioSettings({ monitorDeviceId: "preferred-output" });
+    const engine = new AudioEngine(selectedSettings, vi.fn(), vi.fn(), vi.fn());
+    const monitorContext = FakeAudioContext.instances[0];
+    const virtualContext = FakeAudioContext.instances[1];
+    monitorContext.setSinkId.mockRejectedValueOnce(new DOMException("output unavailable", "NotFoundError"));
+
+    await engine.configure(selectedSettings, "cable-device");
+    const retrySink = deferred<void>();
+    monitorContext.setSinkId.mockImplementationOnce(async (sinkId: string) => {
+      await retrySink.promise;
+      monitorContext.sinkId = sinkId;
+    });
+
+    const retry = engine.retryPreferredDevices();
+    await waitForMockCalls(monitorContext.setSinkId, 3);
+    await engine.configure({
+      ...selectedSettings,
+      micPassthrough: false,
+      monitorMicToHeadphones: false
+    }, "cable-device");
+    retrySink.resolve();
+    await retry;
+
+    expect(captured.track.stop).toHaveBeenCalledOnce();
+    expect(monitorContext.mediaSources).toHaveLength(0);
+    expect(virtualContext.mediaSources).toHaveLength(1);
+    expect(virtualContext.mediaSources[0].disconnect).toHaveBeenCalledOnce();
+    expect(engine.getDeviceStatus().microphone).toEqual({
+      state: "closed",
+      requestedDeviceId: "device-1",
+      activeDeviceId: ""
+    });
+
+    await engine.dispose();
+  });
+
+  it("reapplies a selected monitor when asked to recheck it", async () => {
+    const captured = fakeStream({ deviceId: "device-1" });
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia: vi.fn().mockResolvedValue(captured.stream) } });
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const selectedSettings = makeAudioSettings({ monitorDeviceId: "preferred-output" });
+    const engine = new AudioEngine(selectedSettings, vi.fn(), vi.fn(), vi.fn());
+    const monitorContext = FakeAudioContext.instances[0];
+
+    await engine.configure(selectedSettings, "cable-device");
+    monitorContext.setSinkId.mockClear();
+    await engine.retryPreferredDevices();
+    expect(monitorContext.setSinkId).not.toHaveBeenCalled();
+
+    monitorContext.setSinkId.mockRejectedValueOnce(new DOMException("output unavailable", "NotFoundError"));
+    await engine.retryPreferredDevices({ recheckMonitor: true });
+
+    expect(monitorContext.setSinkId).toHaveBeenCalledTimes(2);
+    expect(monitorContext.setSinkId).toHaveBeenNthCalledWith(1, "preferred-output");
+    expect(monitorContext.setSinkId).toHaveBeenNthCalledWith(2, "");
+    expect(engine.getDeviceStatus().monitor).toEqual({
+      state: "fallback",
+      requestedDeviceId: "preferred-output",
+      activeDeviceId: ""
     });
 
     await engine.dispose();

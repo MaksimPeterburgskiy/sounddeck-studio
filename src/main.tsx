@@ -425,18 +425,31 @@ function App() {
     padRectsRef.current = next;
   }, [padOrderKey]);
 
-  const refreshDevices = useCallback(async () => {
+  const refreshDevices = useCallback(async (): Promise<MediaDeviceInfo[]> => {
     try {
       await navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => stream.getTracks().forEach((track) => track.stop())).catch(() => undefined);
-      setDevices(await navigator.mediaDevices.enumerateDevices());
+      const list = await navigator.mediaDevices.enumerateDevices();
+      setDevices(list);
+      return list;
     } catch {
-      setDevices(await navigator.mediaDevices.enumerateDevices());
+      const list = await navigator.mediaDevices.enumerateDevices();
+      setDevices(list);
+      return list;
     }
   }, []);
 
   const refreshDevicesAndRetryPreferredDevices = useCallback(async () => {
-    await refreshDevices();
-    await engineRef.current?.retryPreferredDevices();
+    const list = await refreshDevices();
+    const currentDeviceStatus = deviceStatusRef.current;
+    const micNeedsRetry = currentDeviceStatus.microphone.state === "fallback" || currentDeviceStatus.microphone.state === "unavailable";
+    const monitorNeedsRetry = currentDeviceStatus.monitor.state === "fallback" || currentDeviceStatus.monitor.state === "unavailable";
+    const monitorMissing =
+      currentDeviceStatus.monitor.state === "selected" &&
+      currentDeviceStatus.monitor.requestedDeviceId !== "" &&
+      !list.some((device) => device.kind === "audiooutput" && device.deviceId === currentDeviceStatus.monitor.requestedDeviceId);
+    if (micNeedsRetry || monitorNeedsRetry || monitorMissing) {
+      await engineRef.current?.retryPreferredDevices({ recheckMonitor: monitorMissing });
+    }
   }, [refreshDevices]);
 
   useEffect(() => {
@@ -448,15 +461,10 @@ function App() {
     if (!mediaDevices?.addEventListener) return;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     const handleDeviceChange = () => {
-      void refreshDevices();
       if (retryTimer !== null) clearTimeout(retryTimer);
-      const currentDeviceStatus = deviceStatusRef.current;
-      const microphoneNeedsRetry = currentDeviceStatus.microphone.state === "fallback" || currentDeviceStatus.microphone.state === "unavailable";
-      const monitorNeedsRetry = currentDeviceStatus.monitor.state === "fallback" || currentDeviceStatus.monitor.state === "unavailable";
-      if (!microphoneNeedsRetry && !monitorNeedsRetry) return;
       retryTimer = setTimeout(() => {
         retryTimer = null;
-        void engineRef.current?.retryPreferredDevices();
+        void refreshDevicesAndRetryPreferredDevices();
       }, 600);
     };
     mediaDevices.addEventListener("devicechange", handleDeviceChange);
@@ -464,7 +472,7 @@ function App() {
       mediaDevices.removeEventListener("devicechange", handleDeviceChange);
       if (retryTimer !== null) clearTimeout(retryTimer);
     };
-  }, [refreshDevices]);
+  }, [refreshDevicesAndRetryPreferredDevices]);
 
   const registerHotkeys = useCallback(async (current: SoundLibrary) => {
     const bindings: HotkeyBinding[] = [];
