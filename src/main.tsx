@@ -35,7 +35,7 @@ import {
 } from "lucide-react";
 import { AudioEngine } from "./lib/audioEngine";
 import type { MicrophoneProcessingStatus } from "./lib/audioEngine";
-import { findVirtualAudioCandidates, getDefaultDeviceLabel, isSelectableMediaDevice, makeMicrophoneConstraints, normalizeSelectableDeviceId } from "./lib/devices";
+import { findVirtualAudioCandidates, getDefaultDeviceLabel, isSelectableMediaDevice, makeMicrophoneConstraints, normalizeMonitorDeviceId, normalizeSelectableDeviceId } from "./lib/devices";
 import type { VirtualAudioCandidate } from "./lib/devices";
 import { acceleratorLooksReserved, formatBytes, formatDuration, getDefaultSoundEffects, makeBoard, normalizeLibrary, normalizeSoundEffects, now, soundEffectsAreActive, soundEffectsAreDefault, soundFromImport } from "./lib/model";
 import { claimCaptureSlot, eventToToken, formatAccelerator, MODIFIER_TOKENS, normalizeAccelerator, orderTokens } from "./lib/hotkeys";
@@ -228,15 +228,19 @@ function App() {
 
   useEffect(() => {
     if (!library) return;
+    const engineSettings = {
+      ...library.settings,
+      monitorDeviceId: normalizeMonitorDeviceId(library.settings.monitorDeviceId, library.settings.virtualOutputDeviceId)
+    };
     if (!engineRef.current) engineRef.current = new AudioEngine(
-      library.settings,
+      engineSettings,
       (status, activeIds) => {
         setEngineStatus(status);
         setPlayingIds(activeIds);
       },
       setMicrophoneProcessingStatus
     );
-    void engineRef.current.configure(library.settings, library.settings.virtualOutputDeviceId);
+    void engineRef.current.configure(engineSettings, library.settings.virtualOutputDeviceId);
   }, [library?.settings]);
 
   useEffect(() => {
@@ -364,8 +368,8 @@ function App() {
         setMessage(`Stopped ${sound.title}`);
         return;
       }
-      await engineRef.current?.play(sound);
-      setMessage(`Triggered ${sound.title}`);
+      const started = await engineRef.current?.play(sound);
+      setMessage(started === false ? `No output route enabled for ${sound.title}` : `Triggered ${sound.title}`);
       if (!sound.duration || !sound.waveform) {
         const buffer = await engineRef.current?.preload(sound);
         if (buffer) updateSound(sound.id, { duration: buffer.duration, waveform: makeWaveform(buffer), updatedAt: now() });
@@ -782,7 +786,11 @@ function App() {
     if ("microphoneDeviceId" in normalizedPatch) normalizedPatch.microphoneDeviceId = normalizeSelectableDeviceId(normalizedPatch.microphoneDeviceId);
     if ("monitorDeviceId" in normalizedPatch) normalizedPatch.monitorDeviceId = normalizeSelectableDeviceId(normalizedPatch.monitorDeviceId);
     if ("virtualOutputDeviceId" in normalizedPatch) normalizedPatch.virtualOutputDeviceId = normalizeSelectableDeviceId(normalizedPatch.virtualOutputDeviceId);
-    updateLibrary((current) => ({ ...current, settings: { ...current.settings, ...normalizedPatch } }));
+    updateLibrary((current) => {
+      const settings = { ...current.settings, ...normalizedPatch };
+      settings.monitorDeviceId = normalizeMonitorDeviceId(settings.monitorDeviceId, settings.virtualOutputDeviceId);
+      return { ...current, settings };
+    });
   }
 
   async function changeUpdateChannel(channel: UpdateChannel) {
@@ -829,10 +837,17 @@ function App() {
 
   if (!library || !activeBoard) return <div className="boot">Loading SoundDeck Studio...</div>;
 
-  const outputDevices = devices.filter((device) => device.kind === "audiooutput" && isSelectableMediaDevice(device));
+  const outputDevices = devices.filter((device) =>
+    device.kind === "audiooutput" &&
+    isSelectableMediaDevice(device) &&
+    device.deviceId !== library.settings.virtualOutputDeviceId
+  );
   const inputDevices = devices.filter((device) => device.kind === "audioinput" && isSelectableMediaDevice(device));
   const defaultInputLabel = getDefaultDeviceLabel(devices, "audioinput");
   const defaultOutputLabel = getDefaultDeviceLabel(devices, "audiooutput");
+  const virtualOutputLabel = devices.find((device) =>
+    device.kind === "audiooutput" && device.deviceId === library.settings.virtualOutputDeviceId
+  )?.label || "";
   const canCheckForUpdates = capabilities?.updateChecksSupported === true;
   const isGlobalView = view === "devices" || view === "settings" || view === "hotkeys";
   const globalViewTitle = view === "devices" ? "Devices" : view === "settings" ? "Settings" : "Hotkeys";
@@ -1005,6 +1020,7 @@ function App() {
             outputDevices={outputDevices}
             defaultInputLabel={defaultInputLabel}
             defaultOutputLabel={defaultOutputLabel}
+            virtualOutputLabel={virtualOutputLabel}
             platform={platform}
             candidate={recommendedVirtualAudio}
             capabilities={capabilities}
@@ -2128,12 +2144,13 @@ function SettingsPanel({ startupSettings, startupUpdateStatus, capabilities, upd
   );
 }
 
-function DevicePanel({ library, inputDevices, outputDevices, defaultInputLabel, defaultOutputLabel, platform, candidate, capabilities, processingStatus, onRefresh, onChange }: {
+function DevicePanel({ library, inputDevices, outputDevices, defaultInputLabel, defaultOutputLabel, virtualOutputLabel, platform, candidate, capabilities, processingStatus, onRefresh, onChange }: {
   library: SoundLibrary;
   inputDevices: MediaDeviceInfo[];
   outputDevices: MediaDeviceInfo[];
   defaultInputLabel: string;
   defaultOutputLabel: string;
+  virtualOutputLabel: string;
   platform: SoundDeckPlatform;
   candidate: VirtualAudioCandidate | null;
   capabilities: AppCapabilities | null;
@@ -2142,8 +2159,14 @@ function DevicePanel({ library, inputDevices, outputDevices, defaultInputLabel, 
   onChange: (patch: Partial<SoundLibrary["settings"]>) => void;
 }) {
   const settings = library.settings;
+  const monitorDeviceId = normalizeMonitorDeviceId(settings.monitorDeviceId, settings.virtualOutputDeviceId);
   const defaultInputOption = defaultInputLabel ? `System default (${defaultInputLabel})` : "System default";
   const defaultOutputOption = defaultOutputLabel ? `System default (${defaultOutputLabel})` : "System default";
+  const defaultOutputIsVirtual = Boolean(
+    defaultOutputLabel.trim() &&
+    virtualOutputLabel.trim() &&
+    defaultOutputLabel.trim().toLocaleLowerCase() === virtualOutputLabel.trim().toLocaleLowerCase()
+  );
   const route = virtualRouteCopy(platform);
   const pairedInputVisible = inputDevices.some((device) => route.inputPattern.test(device.label));
   const routeReady = Boolean(candidate && settings.virtualOutputDeviceId === candidate.outputDeviceId && pairedInputVisible);
@@ -2197,7 +2220,7 @@ function DevicePanel({ library, inputDevices, outputDevices, defaultInputLabel, 
             <output>{settings.noiseSuppressionAttenuationDb} dB</output>
           </label>
         </div>
-        <label><Headphones size={16} /> Headphones / monitor<select value={settings.monitorDeviceId} onChange={(event) => onChange({ monitorDeviceId: event.target.value })}><option value="">{defaultOutputOption}</option>{outputDevices.map((device) => <option key={device.deviceId} value={device.deviceId}>{device.label || `Output ${device.deviceId.slice(0, 6)}`}</option>)}</select></label>
+        <label><Headphones size={16} /> Headphones / monitor<select value={monitorDeviceId} onChange={(event) => onChange({ monitorDeviceId: event.target.value })}><option value="">{defaultOutputOption}</option>{outputDevices.map((device) => <option key={device.deviceId} value={device.deviceId}>{device.label || `Output ${device.deviceId.slice(0, 6)}`}</option>)}</select>{defaultOutputIsVirtual && <small className="deviceWarning">Your system default output is the virtual cable; pick your real headphones.</small>}</label>
         <VolumeField label="Mic volume (virtual mic)" value={settings.micVirtualVolume} onChange={(micVirtualVolume) => onChange({ micVirtualVolume })} />
         <VolumeField label="Mic volume (monitoring)" value={settings.micMonitorVolume} onChange={(micMonitorVolume) => onChange({ micMonitorVolume })} />
         <VolumeField label="Soundboard volume (virtual mic)" value={settings.soundboardVirtualVolume} onChange={(soundboardVirtualVolume) => onChange({ soundboardVirtualVolume })} />

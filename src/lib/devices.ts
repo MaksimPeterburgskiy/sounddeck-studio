@@ -19,6 +19,15 @@ export function normalizeSelectableDeviceId(deviceId: string | undefined | null)
   return isRoleDeviceId(deviceId) ? "" : deviceId || "";
 }
 
+export function normalizeMonitorDeviceId(
+  monitorDeviceId: string | undefined | null,
+  virtualSinkId: string | undefined | null
+) {
+  const monitorId = normalizeSelectableDeviceId(monitorDeviceId);
+  const sinkId = normalizeSelectableDeviceId(virtualSinkId);
+  return sinkId && monitorId === sinkId ? "" : monitorId;
+}
+
 export function isSelectableMediaDevice(device: MediaDeviceInfo) {
   return !isRoleDeviceId(device.deviceId);
 }
