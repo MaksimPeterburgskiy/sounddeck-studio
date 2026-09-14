@@ -211,10 +211,11 @@ export class AudioEngine {
     const buffer = await this.preload(sound);
     // Settings may have changed while decoding; re-check before any side effects.
     if (this.disposed || !this.hasLiveRoute(sound.outputTarget)) return false;
-    if (sound.soloPlay) this.stopAllExcept(sound.id);
-    if (sound.retriggerMode === "restart") this.stop(sound.id);
     await Promise.all([this.monitorContext.resume(), this.virtualContext.resume()]);
     if (this.disposed || !this.hasLiveRoute(sound.outputTarget)) return false;
+    // Only stop other voices once nothing else can bail out; a muted trigger must not silence what is playing.
+    if (sound.soloPlay) this.stopAllExcept(sound.id);
+    if (sound.retriggerMode === "restart") this.stop(sound.id);
     const contexts = this.contextsForTarget(sound.outputTarget);
     const trimStart = Math.min(Math.max(0, sound.trimStartSec ?? 0), buffer.duration);
     const trimEnd = Math.min(Math.max(trimStart + 0.01, sound.trimEndSec ?? buffer.duration), buffer.duration);
@@ -632,9 +633,26 @@ export class AudioEngine {
   }
 
   private applyBusVolumes() {
-    this.monitorBus.gain.setTargetAtTime(this.settings.monitorToHeadphones ? this.settings.soundboardMonitorVolume : 0, this.monitorContext.currentTime, 0.02);
-    this.previewBus.gain.setTargetAtTime(this.settings.soundboardMonitorVolume, this.monitorContext.currentTime, 0.02);
-    this.virtualBus.gain.setTargetAtTime(this.virtualSinkReady && this.settings.soundboardToVirtualMic ? this.settings.soundboardVirtualVolume : 0, this.virtualContext.currentTime, 0.02);
+    this.setBusGain(this.monitorBus, this.settings.monitorToHeadphones ? this.settings.soundboardMonitorVolume : 0);
+    this.setBusGain(this.previewBus, this.settings.soundboardMonitorVolume);
+    this.setBusGain(this.virtualBus, this.virtualSinkReady && this.settings.soundboardToVirtualMic ? this.settings.soundboardVirtualVolume : 0);
+  }
+
+  /**
+   * Bus gain is what enforces the global route toggles, so a disabled route must read zero
+   * immediately. Automation only advances while a context is running: on a suspended context a
+   * setTargetAtTime toward zero would still start from the default gain of 1 once play() resumes
+   * it, leaking the first slice of a sound through a disabled route.
+   */
+  private setBusGain(bus: GainNode, target: number) {
+    const context = bus.context;
+    const now = context.currentTime;
+    bus.gain.cancelScheduledValues(now);
+    if (target <= 0 || context.state !== "running") {
+      bus.gain.setValueAtTime(target, now);
+      return;
+    }
+    bus.gain.setTargetAtTime(target, now, 0.02);
   }
 
   private needsMicrophone(settings: AudioSettings = this.settings) {

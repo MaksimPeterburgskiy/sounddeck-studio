@@ -240,10 +240,17 @@ export class FakeAudioContext {
     return destination as unknown as MediaStreamAudioDestinationNode;
   }
 
-  close = vi.fn(async () => undefined);
+  state: AudioContextState = "running";
+  close = vi.fn(async () => {
+    this.state = "closed";
+  });
   decodeAudioData = vi.fn(async () => new FakeAudioBuffer() as unknown as AudioBuffer);
-  resume = vi.fn(async () => undefined);
-  suspend = vi.fn(async () => undefined);
+  resume = vi.fn(async () => {
+    if (this.state === "suspended") this.state = "running";
+  });
+  suspend = vi.fn(async () => {
+    this.state = "suspended";
+  });
 }
 
 /**
