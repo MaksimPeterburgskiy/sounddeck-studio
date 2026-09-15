@@ -2240,6 +2240,52 @@ function Switch({ checked, disabled, label, onChange }: { checked: boolean; disa
   );
 }
 
+function SegmentedRadioGroup<T extends string>({ label, value, options, onChange }: {
+  label: string;
+  value: T;
+  options: { value: T; label: string }[];
+  onChange: (value: T) => void;
+}) {
+  const groupRef = useRef<HTMLDivElement>(null);
+  function focusOption(option: T) {
+    groupRef.current?.querySelector<HTMLButtonElement>(`button[data-value="${option}"]`)?.focus();
+  }
+  function handleKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
+    const index = options.findIndex((option) => option.value === value);
+    let nextIndex = index;
+    if (event.key === "ArrowRight" || event.key === "ArrowDown") nextIndex = (index + 1) % options.length;
+    else if (event.key === "ArrowLeft" || event.key === "ArrowUp") nextIndex = (index - 1 + options.length) % options.length;
+    else if (event.key === "Home") nextIndex = 0;
+    else if (event.key === "End") nextIndex = options.length - 1;
+    else return;
+    event.preventDefault();
+    const next = options[nextIndex].value;
+    focusOption(next);
+    if (next !== value) onChange(next);
+  }
+  return (
+    <div ref={groupRef} className="segmented" role="radiogroup" aria-label={label} onKeyDown={handleKeyDown}>
+      {options.map((option) => {
+        const selected = option.value === value;
+        return (
+          <button
+            key={option.value}
+            type="button"
+            role="radio"
+            aria-checked={selected}
+            tabIndex={selected ? 0 : -1}
+            data-value={option.value}
+            data-state={selected ? "on" : "off"}
+            onClick={() => onChange(option.value)}
+          >
+            {option.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function SettingsRow({ icon, title, description, children, disabled }: {
   icon?: React.ReactNode;
   title: string;
@@ -2351,10 +2397,12 @@ function SettingsPanel({ settings, soundCount, startupSettings, startupUpdateSta
               ? "Nightly builds from development. Newer features, rougher edges. Switching back to stable may downgrade the app."
               : "Tested releases only."}
           >
-            <div className="segmented" role="radiogroup" aria-label="Update channel">
-              <button type="button" role="radio" aria-checked={effectiveChannel === "stable"} data-state={effectiveChannel === "stable" ? "on" : "off"} onClick={() => onChangeUpdateChannel("stable")}>Stable</button>
-              <button type="button" role="radio" aria-checked={effectiveChannel === "beta"} data-state={effectiveChannel === "beta" ? "on" : "off"} onClick={() => onChangeUpdateChannel("beta")}>Beta</button>
-            </div>
+            <SegmentedRadioGroup
+              label="Update channel"
+              value={effectiveChannel}
+              options={[{ value: "stable", label: "Stable" }, { value: "beta", label: "Beta" }]}
+              onChange={onChangeUpdateChannel}
+            />
           </SettingsRow>
         </section>
       )}
