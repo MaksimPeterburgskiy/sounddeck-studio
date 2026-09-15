@@ -89,6 +89,27 @@ export function installDevBridge() {
     async getPlatform() {
       return "unknown";
     },
+    getPlatformSync() {
+      // Browser preview only: `?platform=win32` previews the custom window controls.
+      const forced = new URLSearchParams(window.location?.search ?? "").get("platform");
+      if (forced === "win32" || forced === "darwin" || forced === "linux") return forced;
+      return "unknown";
+    },
+    async minimizeWindow() {
+      // No window to control outside Electron.
+    },
+    async toggleMaximizeWindow() {
+      // No window to control outside Electron.
+    },
+    async closeWindow() {
+      // No window to control outside Electron.
+    },
+    async getWindowState() {
+      return { maximized: false, fullscreen: false };
+    },
+    onWindowState() {
+      return () => undefined;
+    },
     async getCapabilities() {
       return {
         platform: "unknown",

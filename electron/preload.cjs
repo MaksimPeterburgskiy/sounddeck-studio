@@ -18,6 +18,16 @@ contextBridge.exposeInMainWorld("sounddeck", {
   openExternal: (url) => ipcRenderer.invoke("app:openExternal", url),
   getVersion: () => ipcRenderer.invoke("app:getVersion"),
   getPlatform: () => ipcRenderer.invoke("app:getPlatform"),
+  getPlatformSync: () => (["win32", "darwin", "linux"].includes(process.platform) ? process.platform : "unknown"),
+  minimizeWindow: () => ipcRenderer.invoke("window:minimize"),
+  toggleMaximizeWindow: () => ipcRenderer.invoke("window:toggleMaximize"),
+  closeWindow: () => ipcRenderer.invoke("window:close"),
+  getWindowState: () => ipcRenderer.invoke("window:getState"),
+  onWindowState: (callback) => {
+    const listener = (_event, state) => callback(state);
+    ipcRenderer.on("window-state", listener);
+    return () => ipcRenderer.removeListener("window-state", listener);
+  },
   getCapabilities: () => ipcRenderer.invoke("app:getCapabilities"),
   getStartupSettings: () => ipcRenderer.invoke("app:getStartupSettings"),
   setRunAtStartup: (enabled, options) => ipcRenderer.invoke("app:setRunAtStartup", enabled, options),

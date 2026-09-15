@@ -51,6 +51,7 @@ import { acceleratorLooksReserved, formatBytes, formatDuration, getDefaultSoundE
 import { claimCaptureSlot, eventToToken, formatAccelerator, MODIFIER_TOKENS, normalizeAccelerator, orderTokens } from "./lib/hotkeys";
 import { makeWaveform } from "./lib/waveform";
 import { installDevBridge } from "./lib/devBridge";
+import { TitleBar } from "./titleBar";
 import { cancelTopLevelDrag } from "./lib/drop";
 import type { AppCapabilities, CorsairState, HotkeyBinding, HotkeyResult, MediaImportResult, RetriggerMode, SoundBoard, SoundDeckPlatform, SoundEffects, SoundLibrary, SoundSlot, StartupSettings, UpdateChannel, UpdateChannelState, UpdateStatus, VirtualBackend } from "./types";
 import "./styles.css";
@@ -1029,7 +1030,14 @@ function App() {
     }
   }
 
-  if (!library || !activeBoard) return <div className="boot">Loading SoundDeck Studio...</div>;
+  if (!library || !activeBoard) {
+    return (
+      <main className="app">
+        <TitleBar status={engineStatus} />
+        <div className="boot">Loading SoundDeck Studio...</div>
+      </main>
+    );
+  }
 
   const canCheckForUpdates = capabilities?.updateChecksSupported === true;
   const isGlobalView = view === "devices" || view === "settings" || view === "hotkeys";
@@ -1048,14 +1056,9 @@ function App() {
         void importFiles(Array.from(event.dataTransfer.files));
       }}
     >
+      <TitleBar status={engineStatus} />
+
       <aside className="sidebar">
-        <div className="brand" data-status={engineStatus}>
-          <Radio size={24} />
-          <div>
-            <strong>SoundDeck</strong>
-            <span>{engineStatus}</span>
-          </div>
-        </div>
         <div className="sideLabel">Boards</div>
         <nav className="boards">
           {library.boards.map((board) => (

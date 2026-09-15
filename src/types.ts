@@ -182,6 +182,11 @@ export interface StartupSettings {
   reason?: string;
 }
 
+export type WindowState = {
+  maximized: boolean;
+  fullscreen: boolean;
+};
+
 declare global {
   interface Window {
     sounddeck: {
@@ -202,6 +207,12 @@ declare global {
       openExternal: (url: string) => Promise<{ ok: boolean }>;
       getVersion: () => Promise<string>;
       getPlatform: () => Promise<SoundDeckPlatform>;
+      getPlatformSync: () => SoundDeckPlatform;
+      minimizeWindow: () => Promise<void>;
+      toggleMaximizeWindow: () => Promise<void>;
+      closeWindow: () => Promise<void>;
+      getWindowState: () => Promise<WindowState>;
+      onWindowState: (callback: (state: WindowState) => void) => () => void;
       getCapabilities: () => Promise<AppCapabilities>;
       getStartupSettings: () => Promise<StartupSettings>;
       setRunAtStartup: (enabled: boolean, options?: { hideOnStartup?: boolean }) => Promise<StartupSettings & { ok: boolean }>;

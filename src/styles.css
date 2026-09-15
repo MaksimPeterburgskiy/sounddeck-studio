@@ -29,6 +29,7 @@
   --danger-soft: rgba(255, 93, 93, 0.15);
   --warn: #ffcf5c;
 
+  --titlebar-h: 38px;
   --radius: 10px;
   --radius-sm: 7px;
   --pad-shadow: 0 1px 0 rgba(255, 255, 255, 0.04) inset, 0 -10px 24px rgba(0, 0, 0, 0.35) inset, 0 8px 20px rgba(0, 0, 0, 0.45);
@@ -95,7 +96,8 @@ small { color: var(--text-dim); font-size: 12px; }
 
 .boot {
   display: grid;
-  min-height: 100vh;
+  grid-column: 1 / -1;
+  min-height: calc(100vh - var(--titlebar-h));
   place-items: center;
   font-family: var(--font-display);
   font-size: 13px;
@@ -111,38 +113,91 @@ small { color: var(--text-dim); font-size: 12px; }
 .app {
   display: grid;
   grid-template-columns: 272px minmax(0, 1fr);
+  grid-template-rows: var(--titlebar-h) minmax(0, 1fr);
   min-height: 100vh;
+}
+
+/* ---------- title bar ----------
+   Replaces the OS title bar. The strip spans both columns and doubles as the
+   window drag handle; the main process insets macOS traffic lights into it,
+   and on Windows/Linux the caption buttons are drawn here. */
+
+.titlebar {
+  grid-column: 1 / -1;
+  position: sticky;
+  top: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  height: var(--titlebar-h);
+  padding-left: 16px;
+  border-bottom: 1px solid var(--line);
+  background: linear-gradient(180deg, #111318 0%, #0d0f12 100%);
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-app-region: drag;
+}
+/* Clear the traffic lights: 16px inset + three 12px buttons with 8px gaps. */
+.titlebar[data-platform="darwin"] { padding-left: 86px; }
+.titlebar[data-platform="darwin"][data-fullscreen] { padding-left: 16px; }
+
+.windowControls {
+  display: flex;
+  align-self: stretch;
+  margin-left: auto;
+  -webkit-app-region: no-drag;
+}
+.windowControls button {
+  display: grid;
+  place-items: center;
+  width: 46px;
+  color: var(--text-dim);
+  border-radius: 0;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.windowControls button:hover { background: var(--surface-3); color: var(--text); }
+.windowControls button:active { background: var(--line-bright); }
+.windowControls .windowControlClose:hover { background: var(--danger); color: #fff; }
+.windowControls .windowControlClose:active { background: #d64c4c; color: #fff; }
+.windowControls button:focus-visible { outline-offset: -2px; border-radius: 0; }
+.windowControls svg {
+  width: 10px;
+  height: 10px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1;
+  shape-rendering: crispEdges;
 }
 
 /* ---------- sidebar ---------- */
 
 .sidebar {
   position: sticky;
-  top: 0;
+  top: var(--titlebar-h);
   display: flex;
   flex-direction: column;
   gap: 20px;
-  height: 100vh;
+  height: calc(100vh - var(--titlebar-h));
   padding: 20px 16px;
   overflow-y: auto;
   border-right: 1px solid var(--line);
   background: linear-gradient(180deg, #0e1013 0%, #0b0c0f 100%);
 }
 
+/* Nameplate in the title bar: glyph, wordmark, then a status LED. */
 .brand {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 4px 6px;
+  gap: 10px;
+  min-width: 0;
   color: var(--accent);
 }
-.brand svg { filter: drop-shadow(0 0 8px var(--accent-glow)); }
+.brand svg { flex: none; filter: drop-shadow(0 0 8px var(--accent-glow)); }
 .brand strong {
-  display: block;
   font-family: var(--font-display);
-  font-size: 15px;
+  font-size: 12px;
   font-weight: 900;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--text);
 }
@@ -150,6 +205,9 @@ small { color: var(--text-dim); font-size: 12px; }
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  margin-left: 4px;
+  padding-left: 14px;
+  border-left: 1px solid var(--line);
   font-family: var(--font-mono);
   font-size: 10px;
   letter-spacing: 0.18em;
@@ -158,8 +216,8 @@ small { color: var(--text-dim); font-size: 12px; }
 }
 .brand span::before {
   content: "";
-  width: 7px;
-  height: 7px;
+  width: 6px;
+  height: 6px;
   border-radius: 99px;
   background: var(--text-faint);
   box-shadow: 0 0 6px transparent;
@@ -1824,7 +1882,7 @@ input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent);
 }
 
 @media (max-width: 760px) {
-  .app { grid-template-columns: minmax(0, 1fr); }
+  .app { grid-template-columns: minmax(0, 1fr); grid-template-rows: var(--titlebar-h) auto minmax(0, 1fr); }
   .sidebar {
     position: static;
     height: auto;
