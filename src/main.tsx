@@ -1,18 +1,24 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
+  Activity,
   AlertCircle,
+  ArrowRightLeft,
+  AudioLines,
   Download,
+  Ear,
   Eye,
   EyeOff,
   FlaskConical,
   FolderOpen,
+  Gamepad2,
   GripVertical,
   Headphones,
   Image as ImageIcon,
   Keyboard,
   Link,
   Mic,
+  OctagonX,
   Pause,
   Pencil,
   Play,
@@ -27,11 +33,14 @@ import {
   Scissors,
   Settings,
   ShieldCheck,
+  SlidersHorizontal,
+  Speaker,
   Square,
   Trash2,
   Upload,
   Volume2,
   Wand2,
+  Waves,
   X
 } from "lucide-react";
 import { AudioEngine } from "./lib/audioEngine";
@@ -1197,7 +1206,6 @@ function App() {
             virtualOutputLabel={virtualOutputLabel}
             platform={platform}
             candidate={recommendedVirtualAudio}
-            capabilities={capabilities}
             processingStatus={microphoneProcessingStatus}
             deviceStatus={deviceStatus}
             preferredMicrophoneLabel={preferredMicrophoneLabel}
@@ -1621,24 +1629,32 @@ function Playhead({ engine, soundId, duration, active }: { engine: AudioEngine |
   return <div className="playhead" ref={lineRef} />;
 }
 
+function VolumeControl({ label, value, disabled, onChange }: { label: string; value: number; disabled?: boolean; onChange: (value: number) => void }) {
+  return (
+    <div className="volumeRow">
+      <input type="range" aria-label={label} min="0" max="1" step="0.01" disabled={disabled} value={value} onChange={(event) => onChange(Number(event.target.value))} />
+      <input
+        type="number"
+        aria-label={`${label} percent`}
+        min="0"
+        max="100"
+        disabled={disabled}
+        value={Math.round(value * 100)}
+        onChange={(event) => {
+          const percent = Number(event.target.value);
+          if (Number.isFinite(percent)) onChange(Math.min(100, Math.max(0, percent)) / 100);
+        }}
+      />
+      <span className="volumeUnit">%</span>
+    </div>
+  );
+}
+
 function VolumeField({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) {
   return (
     <label className="volumeField">
       {label}
-      <div className="volumeRow">
-        <input type="range" min="0" max="1" step="0.01" value={value} onChange={(event) => onChange(Number(event.target.value))} />
-        <input
-          type="number"
-          min="0"
-          max="100"
-          value={Math.round(value * 100)}
-          onChange={(event) => {
-            const percent = Number(event.target.value);
-            if (Number.isFinite(percent)) onChange(Math.min(100, Math.max(0, percent)) / 100);
-          }}
-        />
-        <span className="volumeUnit">%</span>
-      </div>
+      <VolumeControl label={label} value={value} onChange={onChange} />
     </label>
   );
 }
@@ -2286,23 +2302,61 @@ function SegmentedRadioGroup<T extends string>({ label, value, options, onChange
   );
 }
 
-function SettingsRow({ icon, title, description, children, disabled }: {
+function SettingsCard({ title, description, children }: { title: string; description?: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <section className="settingsCard">
+      <header className="settingsCardHeader">
+        <h2>{title}</h2>
+        {description && <p>{description}</p>}
+      </header>
+      {children}
+    </section>
+  );
+}
+
+function SettingsRow({ icon, tone, title, description, issue, children, disabled }: {
   icon?: React.ReactNode;
+  tone?: "danger";
   title: string;
-  description: React.ReactNode;
+  description?: React.ReactNode;
+  issue?: React.ReactNode;
   children: React.ReactNode;
   disabled?: boolean;
 }) {
   return (
     <div className={disabled ? "settingsRow disabled" : "settingsRow"}>
-      {icon && <span className="settingsRowIcon">{icon}</span>}
+      {icon && <span className="settingsRowIcon" data-tone={tone}>{icon}</span>}
       <div className="settingsRowText">
         <strong>{title}</strong>
-        <small>{description}</small>
+        {description && <small>{description}</small>}
+        {issue && <span className="settingsRowIssue">{issue}</span>}
       </div>
       <div className="settingsRowControl">{children}</div>
     </div>
   );
+}
+
+function SettingsNotice({ tone = "neutral", icon, title, children, action }: {
+  tone?: "neutral" | "ready" | "warning";
+  icon: React.ReactNode;
+  title?: string;
+  children: React.ReactNode;
+  action?: React.ReactNode;
+}) {
+  return (
+    <div className="settingsNotice" data-tone={tone}>
+      <span className="settingsNoticeIcon">{icon}</span>
+      <div className="settingsNoticeText">
+        {title && <strong>{title}</strong>}
+        <span>{children}</span>
+      </div>
+      {action && <div className="settingsNoticeAction">{action}</div>}
+    </div>
+  );
+}
+
+function StatusBadge({ state, children }: { state: string; children: React.ReactNode }) {
+  return <em className="settingsBadge" data-state={state}>{children}</em>;
 }
 
 function SettingsPanel({ settings, soundCount, startupSettings, startupUpdateStatus, capabilities, updateChannel, onChangeSettings, onApplyRetriggerToAll, onChangeStartup, onChangeUpdateChannel }: {
@@ -2341,11 +2395,7 @@ function SettingsPanel({ settings, soundCount, startupSettings, startupUpdateSta
     : "Sign-in launches stay in the tray instead of opening the window.";
   return (
     <div className="settingsPanel">
-      <section className="settingsCard">
-        <header className="settingsCardHeader">
-          <h2>Sounds</h2>
-          <p>Defaults for sounds you import or record. Existing sounds keep their own settings unless you apply the default to all.</p>
-        </header>
+      <SettingsCard title="Sounds" description="Defaults for sounds you import or record. Existing sounds keep their own settings unless you apply the default to all.">
         <SettingsRow
           icon={<Repeat size={16} />}
           title="Default retrigger"
@@ -2369,27 +2419,19 @@ function SettingsPanel({ settings, soundCount, startupSettings, startupUpdateSta
             Apply to all
           </button>
         </SettingsRow>
-      </section>
+      </SettingsCard>
 
-      <section className="settingsCard">
-        <header className="settingsCardHeader">
-          <h2>Startup</h2>
-          <p>Control how SoundDeck behaves when you sign in to your computer.</p>
-        </header>
+      <SettingsCard title="Startup" description="Control how SoundDeck behaves when you sign in to your computer.">
         <SettingsRow icon={<Power size={16} />} title="Run on start" description={startupCopy} disabled={disabled}>
           <Switch label="Run on start" checked={startupSettings.enabled} disabled={disabled} onChange={(enabled) => onChangeStartup(enabled)} />
         </SettingsRow>
         <SettingsRow icon={hideOnStartup ? <EyeOff size={16} /> : <Eye size={16} />} title="Start hidden" description={hiddenStartupCopy} disabled={hiddenStartupDisabled}>
           <Switch label="Start hidden" checked={hideOnStartup} disabled={hiddenStartupDisabled} onChange={(hidden) => onChangeStartup(startupSettings.enabled, hidden)} />
         </SettingsRow>
-      </section>
+      </SettingsCard>
 
       {capabilities?.updateChecksSupported && effectiveChannel && (
-        <section className="settingsCard">
-          <header className="settingsCardHeader">
-            <h2>Updates</h2>
-            <p>Choose which releases SoundDeck installs.</p>
-          </header>
+        <SettingsCard title="Updates" description="Choose which releases SoundDeck installs.">
           <SettingsRow
             icon={effectiveChannel === "beta" ? <FlaskConical size={16} /> : <ShieldCheck size={16} />}
             title="Update channel"
@@ -2404,13 +2446,13 @@ function SettingsPanel({ settings, soundCount, startupSettings, startupUpdateSta
               onChange={onChangeUpdateChannel}
             />
           </SettingsRow>
-        </section>
+        </SettingsCard>
       )}
     </div>
   );
 }
 
-function DevicePanel({ library, inputDevices, outputDevices, defaultInputLabel, defaultOutputLabel, virtualOutputLabel, platform, candidate, capabilities, processingStatus, deviceStatus, preferredMicrophoneLabel, activeMicrophoneLabel, preferredMonitorLabel, activeMonitorLabel, onRefresh, onChange }: {
+function DevicePanel({ library, inputDevices, outputDevices, defaultInputLabel, defaultOutputLabel, virtualOutputLabel, platform, candidate, processingStatus, deviceStatus, preferredMicrophoneLabel, activeMicrophoneLabel, preferredMonitorLabel, activeMonitorLabel, onRefresh, onChange }: {
   library: SoundLibrary;
   inputDevices: MediaDeviceInfo[];
   outputDevices: MediaDeviceInfo[];
@@ -2419,7 +2461,6 @@ function DevicePanel({ library, inputDevices, outputDevices, defaultInputLabel, 
   virtualOutputLabel: string;
   platform: SoundDeckPlatform;
   candidate: VirtualAudioCandidate | null;
-  capabilities: AppCapabilities | null;
   processingStatus: MicrophoneProcessingStatus;
   deviceStatus: AudioDeviceStatus;
   preferredMicrophoneLabel: string;
@@ -2475,21 +2516,44 @@ function DevicePanel({ library, inputDevices, outputDevices, defaultInputLabel, 
       monitorDeviceLabel: monitorDeviceId ? selectedOption?.dataset.deviceLabel || selectedOption?.textContent || "" : ""
     });
   };
+  const refreshButton = (
+    <button type="button" className="settingsButton" onClick={() => void onRefresh()}><RefreshCw size={14} /> Refresh devices</button>
+  );
   return (
-    <div className="panel">
-      <section>
-        <h2>Audio Routing</h2>
-        <div className="toggleRow"><label><input type="checkbox" checked={settings.micPassthrough} onChange={(event) => onChange({ micPassthrough: event.target.checked })} /> Microphone to virtual mic</label><label><input type="checkbox" checked={settings.soundboardToVirtualMic} onChange={(event) => onChange({ soundboardToVirtualMic: event.target.checked })} /> Soundboard to virtual mic</label><label><input type="checkbox" checked={settings.monitorToHeadphones} onChange={(event) => onChange({ monitorToHeadphones: event.target.checked })} /> Monitor soundboard</label><label><input type="checkbox" checked={settings.monitorMicToHeadphones} onChange={(event) => onChange({ monitorMicToHeadphones: event.target.checked })} /> Monitor microphone</label></div>
-        <div className={routeReady ? "managedRoute ready" : "managedRoute warning"}>
-          {routeReady ? <Radio size={18} /> : <AlertCircle size={18} />}
-          <div>
-            <strong>{route.title}</strong>
-            <span>{routeStatus}</span>
-          </div>
-        </div>
-        <label>
-          <Mic size={16} /> Microphone
-          <select value={settings.microphoneDeviceId} onChange={handleMicrophoneChange}>
+    <div className="settingsPanel">
+      <SettingsCard title="Virtual mic" description="Send your voice, the soundboard, or both to a virtual microphone that other apps can pick up.">
+        <SettingsNotice
+          tone={routeReady ? "ready" : "warning"}
+          icon={routeReady ? <Radio size={16} /> : <AlertCircle size={16} />}
+          title={route.title}
+          action={
+            <>
+              {refreshButton}
+              {!routeReady && route.repairUrl && (
+                <button type="button" className="settingsButton" onClick={() => void window.sounddeck.openExternal(route.repairUrl!)}><RefreshCcw size={14} /> Repair audio driver</button>
+              )}
+            </>
+          }
+        >
+          {routeStatus}
+        </SettingsNotice>
+        <SettingsRow icon={<Mic size={16} />} title="Microphone to virtual mic" description="Send your voice through the virtual mic.">
+          <Switch label="Microphone to virtual mic" checked={settings.micPassthrough} onChange={(micPassthrough) => onChange({ micPassthrough })} />
+        </SettingsRow>
+        <SettingsRow icon={<Volume2 size={16} />} title="Mic volume" description="How loud your voice is in the virtual mic." disabled={!settings.micPassthrough}>
+          <VolumeControl label="Mic volume (virtual mic)" value={settings.micVirtualVolume} disabled={!settings.micPassthrough} onChange={(micVirtualVolume) => onChange({ micVirtualVolume })} />
+        </SettingsRow>
+        <SettingsRow icon={<AudioLines size={16} />} title="Soundboard to virtual mic" description="Play sounds through the virtual mic.">
+          <Switch label="Soundboard to virtual mic" checked={settings.soundboardToVirtualMic} onChange={(soundboardToVirtualMic) => onChange({ soundboardToVirtualMic })} />
+        </SettingsRow>
+        <SettingsRow icon={<Volume2 size={16} />} title="Soundboard volume" description="How loud sounds are in the virtual mic." disabled={!settings.soundboardToVirtualMic}>
+          <VolumeControl label="Soundboard volume (virtual mic)" value={settings.soundboardVirtualVolume} disabled={!settings.soundboardToVirtualMic} onChange={(soundboardVirtualVolume) => onChange({ soundboardVirtualVolume })} />
+        </SettingsRow>
+      </SettingsCard>
+
+      <SettingsCard title="Microphone" description="Choose which microphone SoundDeck captures and how it is cleaned up.">
+        <SettingsRow icon={<Mic size={16} />} title="Input device" description="Used for the virtual mic and for monitoring.">
+          <select className="settingsSelect" aria-label="Microphone" value={settings.microphoneDeviceId} onChange={handleMicrophoneChange}>
             <option value="" data-device-label="">{defaultInputOption}</option>
             {missingPreferredMicrophone && (
               <option value={settings.microphoneDeviceId} data-device-label={settings.microphoneDeviceLabel || "Selected microphone"}>
@@ -2501,56 +2565,49 @@ function DevicePanel({ library, inputDevices, outputDevices, defaultInputLabel, 
               return <option key={device.deviceId} value={device.deviceId} data-device-label={label}>{label}</option>;
             })}
           </select>
-        </label>
+        </SettingsRow>
         {deviceStatus.microphone.state === "fallback" && (
-          <div className="managedRoute warning">
-            <AlertCircle size={18} />
-            <div>
-              <strong>Selected microphone not available</strong>
-              <span>Using {activeMicrophoneLabel} until {preferredMicrophoneLabel} comes back. SoundDeck switches back automatically.</span>
-            </div>
-          </div>
+          <SettingsNotice tone="warning" icon={<AlertCircle size={16} />} title="Selected microphone not available" action={refreshButton}>
+            Using {activeMicrophoneLabel} until {preferredMicrophoneLabel} comes back. SoundDeck switches back automatically.
+          </SettingsNotice>
         )}
         {deviceStatus.microphone.state === "unavailable" && (
-          <div className="managedRoute warning">
-            <AlertCircle size={18} />
-            <div>
-              <strong>No microphone available</strong>
-              <span>
-                {deviceStatus.microphone.requestedDeviceId
-                  ? `Neither ${preferredMicrophoneLabel} nor the system default could be opened. Check the device and click Refresh devices.`
-                  : "The system default microphone could not be opened. Check the device and click Refresh devices."}
-              </span>
-            </div>
-          </div>
+          <SettingsNotice tone="warning" icon={<AlertCircle size={16} />} title="No microphone available" action={refreshButton}>
+            {deviceStatus.microphone.requestedDeviceId
+              ? `Neither ${preferredMicrophoneLabel} nor the system default could be opened. Check the device, then refresh.`
+              : "The system default microphone could not be opened. Check the device, then refresh."}
+          </SettingsNotice>
         )}
-        <div className="microphoneProcessing">
-          <div className="microphoneProcessingHeader">
-            <div><strong>Microphone processing</strong></div>
-          </div>
-          <div className="processingToggle">
-            <label className={!echoCancellationSupported ? "disabled" : ""}>
-              <input type="checkbox" checked={settings.echoCancellationEnabled} disabled={!echoCancellationSupported} onChange={(event) => onChange({ echoCancellationEnabled: event.target.checked })} />
-              <span><strong>Echo cancellation</strong></span>
-            </label>
-            <em data-state={processingStatus.echoCancellation}>{echoCancellationSupported ? echoStatus : "Unsupported"}</em>
-          </div>
-          <div className="processingToggle">
-            <label>
-              <input type="checkbox" checked={settings.noiseSuppressionEnabled} onChange={(event) => onChange({ noiseSuppressionEnabled: event.target.checked })} />
-              <span><strong>Noise suppression</strong></span>
-            </label>
-            <em data-state={processingStatus.noiseSuppression}>{suppressionStatus}</em>
-          </div>
-          <label className={settings.noiseSuppressionEnabled ? "attenuationControl" : "attenuationControl disabled"}>
-            <span>Maximum attenuation</span>
-            <input type="range" min="6" max="30" step="1" disabled={!settings.noiseSuppressionEnabled} value={settings.noiseSuppressionAttenuationDb} onChange={(event) => onChange({ noiseSuppressionAttenuationDb: Number(event.target.value) })} />
+        <SettingsRow
+          icon={<Waves size={16} />}
+          title="Echo cancellation"
+          description={echoCancellationSupported ? "Keep sound from your speakers out of your mic." : "Not supported on this system."}
+          disabled={!echoCancellationSupported}
+        >
+          <StatusBadge state={processingStatus.echoCancellation}>{echoCancellationSupported ? echoStatus : "Unsupported"}</StatusBadge>
+          <Switch label="Echo cancellation" checked={settings.echoCancellationEnabled} disabled={!echoCancellationSupported} onChange={(echoCancellationEnabled) => onChange({ echoCancellationEnabled })} />
+        </SettingsRow>
+        <SettingsRow icon={<Activity size={16} />} title="Noise suppression" description="Filter background noise out of your mic with an on-device model.">
+          <StatusBadge state={processingStatus.noiseSuppression}>{suppressionStatus}</StatusBadge>
+          <Switch label="Noise suppression" checked={settings.noiseSuppressionEnabled} onChange={(noiseSuppressionEnabled) => onChange({ noiseSuppressionEnabled })} />
+        </SettingsRow>
+        <SettingsRow icon={<SlidersHorizontal size={16} />} title="Maximum attenuation" description="How much noise suppression is allowed to cut." disabled={!settings.noiseSuppressionEnabled}>
+          <div className="settingsSlider">
+            <input type="range" aria-label="Maximum attenuation" min="6" max="30" step="1" disabled={!settings.noiseSuppressionEnabled} value={settings.noiseSuppressionAttenuationDb} onChange={(event) => onChange({ noiseSuppressionAttenuationDb: Number(event.target.value) })} />
             <output>{settings.noiseSuppressionAttenuationDb} dB</output>
-          </label>
-        </div>
-        <label>
-          <Headphones size={16} /> Headphones / monitor
-          <select value={settings.monitorDeviceId} onChange={handleMonitorChange}>
+          </div>
+        </SettingsRow>
+      </SettingsCard>
+
+      <SettingsCard title="Headphones" description="Where you hear the soundboard and your own mic.">
+        <SettingsRow
+          icon={<Headphones size={16} />}
+          title="Output device"
+          description={defaultOutputIsVirtual
+            ? <span className="deviceWarning">Your system default output is the virtual cable. Pick your real headphones.</span>
+            : "Keep this on your real headphones so you hear the soundboard without feedback."}
+        >
+          <select className="settingsSelect" aria-label="Headphones / monitor" value={settings.monitorDeviceId} onChange={handleMonitorChange}>
             <option value="" data-device-label="">{defaultOutputOption}</option>
             {missingPreferredMonitor && (
               <option value={settings.monitorDeviceId} data-device-label={settings.monitorDeviceLabel || "Selected headphones"}>
@@ -2562,49 +2619,32 @@ function DevicePanel({ library, inputDevices, outputDevices, defaultInputLabel, 
               return <option key={device.deviceId} value={device.deviceId} data-device-label={label}>{label}</option>;
             })}
           </select>
-          {defaultOutputIsVirtual && <small className="deviceWarning">Your system default output is the virtual cable; pick your real headphones.</small>}
-        </label>
+        </SettingsRow>
         {deviceStatus.monitor.state === "fallback" && (
-          <div className="managedRoute warning">
-            <AlertCircle size={18} />
-            <div>
-              <strong>Selected headphones not available</strong>
-              <span>Playing through {activeMonitorLabel} until {preferredMonitorLabel} comes back. SoundDeck switches back automatically.</span>
-            </div>
-          </div>
+          <SettingsNotice tone="warning" icon={<AlertCircle size={16} />} title="Selected headphones not available" action={refreshButton}>
+            Playing through {activeMonitorLabel} until {preferredMonitorLabel} comes back. SoundDeck switches back automatically.
+          </SettingsNotice>
         )}
         {deviceStatus.monitor.state === "unavailable" && (
-          <div className="managedRoute warning">
-            <AlertCircle size={18} />
-            <div>
-              <strong>Headphones output unavailable</strong>
-              <span>
-                {deviceStatus.monitor.requestedDeviceId
-                  ? `Neither ${preferredMonitorLabel} nor the system default could be selected. Check the device and click Refresh devices.`
-                  : "The system default output could not be selected. Check the device and click Refresh devices."}
-              </span>
-            </div>
-          </div>
+          <SettingsNotice tone="warning" icon={<AlertCircle size={16} />} title="Headphones output unavailable" action={refreshButton}>
+            {deviceStatus.monitor.requestedDeviceId
+              ? `Neither ${preferredMonitorLabel} nor the system default could be selected. Check the device, then refresh.`
+              : "The system default output could not be selected. Check the device, then refresh."}
+          </SettingsNotice>
         )}
-        <VolumeField label="Mic volume (virtual mic)" value={settings.micVirtualVolume} onChange={(micVirtualVolume) => onChange({ micVirtualVolume })} />
-        <VolumeField label="Mic volume (monitoring)" value={settings.micMonitorVolume} onChange={(micMonitorVolume) => onChange({ micMonitorVolume })} />
-        <VolumeField label="Soundboard volume (virtual mic)" value={settings.soundboardVirtualVolume} onChange={(soundboardVirtualVolume) => onChange({ soundboardVirtualVolume })} />
-        <VolumeField label="Soundboard volume (monitoring)" value={settings.soundboardMonitorVolume} onChange={(soundboardMonitorVolume) => onChange({ soundboardMonitorVolume })} />
-        <div className="buttonLine">
-          <button onClick={onRefresh}><Settings size={16} /> Refresh devices</button>
-          {!routeReady && route.repairUrl && <button onClick={() => void window.sounddeck.openExternal(route.repairUrl!)}><RefreshCcw size={16} /> Repair audio driver</button>}
-        </div>
-      </section>
-      <section className="routingGuide">
-        <h2>Virtual Mic Setup</h2>
-        <p>{route.description}</p>
-        <ol>
-          <li>In Discord, OBS, or your game, pick <strong>{route.inputLabel}</strong> as the microphone.</li>
-          <li>Enable <strong>Microphone to virtual mic</strong> to send your voice, <strong>Soundboard to virtual mic</strong> to send sounds, or both to mix them.</li>
-          <li>Keep the headphones / monitor device above on your real headphones so you hear the soundboard without echo or feedback.</li>
-        </ol>
-        {platform === "darwin" && capabilities && !capabilities.managedVirtualMicAvailable && <p>Packaged macOS builds use the SoundDeck installer to place the bundled audio driver in the system HAL plug-ins folder.</p>}
-      </section>
+        <SettingsRow icon={<Speaker size={16} />} title="Monitor soundboard" description="Hear sounds in your headphones when they play.">
+          <Switch label="Monitor soundboard" checked={settings.monitorToHeadphones} onChange={(monitorToHeadphones) => onChange({ monitorToHeadphones })} />
+        </SettingsRow>
+        <SettingsRow icon={<Volume2 size={16} />} title="Soundboard volume" description="How loud sounds are in your headphones." disabled={!settings.monitorToHeadphones}>
+          <VolumeControl label="Soundboard volume (monitoring)" value={settings.soundboardMonitorVolume} disabled={!settings.monitorToHeadphones} onChange={(soundboardMonitorVolume) => onChange({ soundboardMonitorVolume })} />
+        </SettingsRow>
+        <SettingsRow icon={<Ear size={16} />} title="Monitor microphone" description="Hear your own voice in your headphones.">
+          <Switch label="Monitor microphone" checked={settings.monitorMicToHeadphones} onChange={(monitorMicToHeadphones) => onChange({ monitorMicToHeadphones })} />
+        </SettingsRow>
+        <SettingsRow icon={<Volume2 size={16} />} title="Mic volume" description="How loud your voice is in your headphones." disabled={!settings.monitorMicToHeadphones}>
+          <VolumeControl label="Mic volume (monitoring)" value={settings.micMonitorVolume} disabled={!settings.monitorMicToHeadphones} onChange={(micMonitorVolume) => onChange({ micMonitorVolume })} />
+        </SettingsRow>
+      </SettingsCard>
     </div>
   );
 }
@@ -2615,7 +2655,6 @@ function virtualRouteCopy(platform: SoundDeckPlatform) {
       title: "Managed macOS virtual mic",
       inputLabel: "BlackHole 2ch (Virtual)",
       inputPattern: /^blackhole\s+2ch(?:\s+\(virtual\))?$/i,
-      description: "The macOS package installs SoundDeck's bundled BlackHole 2ch driver. SoundDeck selects the BlackHole 2ch output automatically, and target apps use the matching BlackHole 2ch microphone.",
       missing: "BlackHole 2ch is not visible. Refresh devices after install, or repair the SoundDeck audio driver.",
       repairUrl: "https://github.com/MaksimPeterburgskiy/sounddeck-studio/releases/latest"
     };
@@ -2625,7 +2664,6 @@ function virtualRouteCopy(platform: SoundDeckPlatform) {
       title: "Managed Linux virtual mic",
       inputLabel: "SoundDeck Mic",
       inputPattern: /^sounddeck mic$/i,
-      description: "Installed Linux builds create a SoundDeck Sink output and SoundDeck Mic input from the app session.",
       missing: "SoundDeck Sink is not visible. Use the managed Linux repair action after installing the package.",
       repairUrl: ""
     };
@@ -2634,7 +2672,6 @@ function virtualRouteCopy(platform: SoundDeckPlatform) {
     title: "Managed Windows virtual mic",
     inputLabel: "CABLE Output (VB-Audio Virtual Cable)",
     inputPattern: /cable output|vb-audio virtual cable/i,
-    description: "VB-CABLE is installed automatically with this app and the soundboard plays into its CABLE Input speaker. Everything comes back out of the CABLE Output microphone for other apps.",
     missing: "CABLE Input is not visible. Repair the SoundDeck installation or refresh devices after the driver finishes installing.",
     repairUrl: "https://github.com/MaksimPeterburgskiy/sounddeck-studio/releases/latest"
   };
@@ -2666,56 +2703,71 @@ function HotkeyPanel({ library, results, corsairState, capabilities, onChangeSet
 }) {
   const allSounds = library.boards.flatMap((board) => board.sounds.map((sound) => ({ board, sound })));
   const hasMacPermissionIssue = capabilities?.platform === "darwin" && results.some((result) => result.reason === "macos-input-monitoring-permission");
+  const issueFor = (result: HotkeyResult | undefined) => (result && !result.ok ? result.reason : undefined);
+  const cycleResult = results.find((candidate) => candidate.type === "cycle-board");
   return (
-    <div className="panel hotkeysPanel">
-      <section className="hotkeysSection">
-        <h2>Hotkeys</h2>
-        <p className={corsairState === "connected" ? "corsairStatus connected" : "corsairStatus"}>
+    <div className="settingsPanel">
+      <SettingsCard title="Global" description="Shortcuts that work anywhere on your computer, even while SoundDeck is in the background.">
+        <SettingsNotice tone={corsairState === "connected" ? "ready" : "neutral"} icon={<Gamepad2 size={16} />}>
           {corsairStateLabels[corsairState]}
-        </p>
+        </SettingsNotice>
         {hasMacPermissionIssue && (
-          <div className="permissionNotice">
-            <AlertCircle size={18} />
-            <span>macOS blocked keyboard monitoring. Allow SoundDeck Studio in Privacy & Security, then retry the hotkey.</span>
-            <button onClick={() => void window.sounddeck.openExternal(capabilities?.hotkeys.permissionHelpUrl || "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent")}>Open Settings</button>
-          </div>
+          <SettingsNotice
+            tone="warning"
+            icon={<AlertCircle size={16} />}
+            title="Keyboard monitoring blocked"
+            action={
+              <button type="button" className="settingsButton" onClick={() => void window.sounddeck.openExternal(capabilities?.hotkeys.permissionHelpUrl || "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent")}>
+                Open Settings
+              </button>
+            }
+          >
+            Allow SoundDeck Studio under Privacy &amp; Security, then retry the hotkey.
+          </SettingsNotice>
         )}
-        <div className="hotkeyList">
-          <div className="hotkeyRow emergency">
-            <span className="dot stopDot" />
-            <strong>Emergency Stop</strong>
-            <small>Global</small>
-            <HotkeyCapture value={library.settings.stopAllHotkey} onChange={(hotkey) => onChangeSettings({ stopAllHotkey: hotkey })} />
-          </div>
-          <div className="hotkeyRow">
-            <span className="dot" />
-            <strong>Next Board</strong>
-            <small>Cycles through boards</small>
-            <HotkeyCapture value={library.settings.cycleBoardsHotkey} onChange={(hotkey) => onChangeSettings({ cycleBoardsHotkey: hotkey })} />
-            {(() => {
-              const result = results.find((candidate) => candidate.type === "cycle-board");
-              return result && !result.ok ? <em>{result.reason}</em> : null;
-            })()}
-          </div>
-          {library.boards.map((board) => {
-            const result = results.find((candidate) => candidate.type === "board" && candidate.boardId === board.id);
-            return (
-              <div key={board.id} className="hotkeyRow">
-                <span className="dot" style={{ background: board.color }} />
-                <strong>Switch to {board.name}</strong>
-                <small>Board</small>
-                <HotkeyCapture value={board.switchHotkey || ""} onChange={(switchHotkey) => onChangeBoard(board.id, { switchHotkey })} />
-                {result && !result.ok && <em>{result.reason}</em>}
-              </div>
-            );
-          })}
-          {allSounds.map(({ board, sound }) => {
-            const result = results.find((candidate) => candidate.soundId === sound.id);
-            return <div key={sound.id} className="hotkeyRow"><span className="dot" style={{ background: board.color }} /><strong>{sound.title}</strong><small>{board.name}</small><HotkeyCapture value={sound.hotkey} onChange={(hotkey) => onChangeSound(sound.id, { hotkey })} />{result && !result.ok && <em>{result.reason}</em>}{acceleratorLooksReserved(sound.hotkey) && <em>reserved-looking</em>}</div>;
-          })}
-          {!allSounds.length && <div className="emptyHotkeys">Add sounds to bind sound hotkeys.</div>}
-        </div>
-      </section>
+        <SettingsRow icon={<OctagonX size={16} />} tone="danger" title="Emergency stop" description="Stop every sound immediately.">
+          <HotkeyCapture value={library.settings.stopAllHotkey} onChange={(hotkey) => onChangeSettings({ stopAllHotkey: hotkey })} />
+        </SettingsRow>
+        <SettingsRow icon={<ArrowRightLeft size={16} />} title="Next board" description="Cycle through your boards." issue={issueFor(cycleResult)}>
+          <HotkeyCapture value={library.settings.cycleBoardsHotkey} onChange={(hotkey) => onChangeSettings({ cycleBoardsHotkey: hotkey })} />
+        </SettingsRow>
+      </SettingsCard>
+
+      <SettingsCard title="Boards" description="Jump straight to a board.">
+        {library.boards.map((board) => {
+          const result = results.find((candidate) => candidate.type === "board" && candidate.boardId === board.id);
+          return (
+            <SettingsRow
+              key={board.id}
+              icon={<span className="dot" style={{ background: board.color }} />}
+              title={`Switch to ${board.name}`}
+              description={`${board.sounds.length} sound${board.sounds.length === 1 ? "" : "s"}`}
+              issue={issueFor(result)}
+            >
+              <HotkeyCapture value={board.switchHotkey || ""} onChange={(switchHotkey) => onChangeBoard(board.id, { switchHotkey })} />
+            </SettingsRow>
+          );
+        })}
+      </SettingsCard>
+
+      <SettingsCard title="Sounds" description="Trigger a sound from any app.">
+        {allSounds.map(({ board, sound }) => {
+          const result = results.find((candidate) => candidate.soundId === sound.id);
+          const issues = [issueFor(result), acceleratorLooksReserved(sound.hotkey) ? "This shortcut may be reserved by the system." : undefined].filter(Boolean);
+          return (
+            <SettingsRow
+              key={sound.id}
+              icon={<span className="dot" style={{ background: board.color }} />}
+              title={sound.title}
+              description={board.name}
+              issue={issues.length ? issues.join(" · ") : undefined}
+            >
+              <HotkeyCapture value={sound.hotkey} onChange={(hotkey) => onChangeSound(sound.id, { hotkey })} />
+            </SettingsRow>
+          );
+        })}
+        {!allSounds.length && <div className="settingsEmpty">Add sounds to bind sound hotkeys.</div>}
+      </SettingsCard>
     </div>
   );
 }
