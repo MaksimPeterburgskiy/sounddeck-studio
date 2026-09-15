@@ -14,6 +14,7 @@ const {
   developmentNativeToolCandidates
 } = require("./nativeTools.cjs");
 const { shouldDetachProcessTree, terminateProcessTree } = require("./processTree.cjs");
+const { ytDlpRuntimeOptions } = require("./ytDlpRuntime.cjs");
 const { createMacTrayTemplateImage, MAC_TRAY_ICON_FILENAME } = require("./trayIcon.cjs");
 const { createShutdownLifecycle, registerWindowShutdown } = require("./shutdownLifecycle.cjs");
 const { createUpdateInstallLifecycle } = require("./updateInstallLifecycle.cjs");
@@ -164,18 +165,6 @@ function bundledYtDlpCandidates() {
     arch: process.arch,
     tool: "yt-dlp"
   });
-}
-
-function ytDlpJsRuntimeArgs() {
-  if (!process.versions.electron || !process.execPath) return [];
-  if (process.platform !== "darwin" && process.platform !== "linux") return [];
-  return ["--no-js-runtimes", "--js-runtimes", `node:${process.execPath}`];
-}
-
-function ytDlpSpawnEnv() {
-  const env = { ...process.env };
-  if (ytDlpJsRuntimeArgs().length) env.ELECTRON_RUN_AS_NODE = "1";
-  return env;
 }
 
 function bundledFfmpegPath() {
@@ -487,7 +476,8 @@ async function importMediaPaths(filePaths) {
 }
 
 function runYtDlp(args, cwd) {
-  const ytDlpArgs = [...ytDlpJsRuntimeArgs(), ...args];
+  const runtime = ytDlpRuntimeOptions(process.execPath);
+  const ytDlpArgs = [...runtime.args, ...args];
   const bundledCandidates = bundledYtDlpCandidates().map((command) => ({ command, args: ytDlpArgs }));
   const developmentCandidates = process.platform === "win32"
     ? [
@@ -527,7 +517,7 @@ function runYtDlp(args, cwd) {
       try {
         child = spawn(candidate.command, candidate.args, {
           cwd,
-          env: ytDlpSpawnEnv(),
+          env: runtime.env,
           windowsHide: true,
           shell: false,
           detached: shouldDetachProcessTree()

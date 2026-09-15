@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { verifyPackagedProvenance } from "./native-tools.mjs";
+import { verifyYtDlpRuntime } from "./verify-ytdlp-runtime.mjs";
 
 const execFileAsync = promisify(execFile);
 const pkgPath = process.argv[2];
@@ -87,6 +88,7 @@ async function verifyAppPayload(appPath) {
   await run("lipo", [ytDlp, "-verify_arch", "x86_64", "arm64"]);
   await run(process.arch === "x64" ? ffmpegX64 : ffmpegArm64, ["-version"]);
   await run(ytDlp, ["--version"]);
+  await verifyYtDlpRuntime(path.join(appPath, "Contents/MacOS/SoundDeck Studio"), ytDlp);
   await run("codesign", ["--verify", "--deep", "--strict", "--verbose=2", appPath]);
   await run("spctl", ["--assess", "--verbose", "--type", "execute", appPath]);
 }

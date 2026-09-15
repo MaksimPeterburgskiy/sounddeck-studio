@@ -3,6 +3,7 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { verifyNativeToolHashes, verifyPackagedProvenance } from "./native-tools.mjs";
+import { verifyYtDlpRuntime } from "./verify-ytdlp-runtime.mjs";
 
 const execFileAsync = promisify(execFile);
 const argv = process.argv.slice(2);
@@ -34,6 +35,10 @@ for (const [name, asset] of Object.entries(assets)) {
 }
 
 const packageJson = JSON.parse(await readFile("package.json", "utf8"));
+await verifyYtDlpRuntime(
+  path.join(appOutDir, `${packageJson.build.productName}.exe`),
+  path.join(toolsDir, assets["yt-dlp"].fileName)
+);
 const installerName = `SoundDeck-Studio-Setup-${packageJson.version}.exe`;
 const portableName = `SoundDeck-Studio-${packageJson.version}.exe`;
 for (const fileName of [
