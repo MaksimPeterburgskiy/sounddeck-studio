@@ -1,4 +1,4 @@
-import type { MediaImportResult, OutputTarget, SoundBoard, SoundEffects, SoundLibrary, SoundSlot } from "../types";
+import type { MediaImportResult, OutputTarget, RetriggerMode, SoundBoard, SoundEffects, SoundLibrary, SoundSlot } from "../types";
 import { normalizeMonitorDeviceId, normalizeSelectableDeviceId } from "./devices";
 import { normalizeAccelerator } from "./hotkeys";
 
@@ -24,7 +24,8 @@ const defaultSettings: SoundLibrary["settings"] = {
   microphoneDeviceId: "",
   microphoneDeviceLabel: "",
   stopAllHotkey: "Ctrl+Alt+Space",
-  cycleBoardsHotkey: ""
+  cycleBoardsHotkey: "",
+  defaultRetriggerMode: "restart"
 };
 const defaultSoundOptions: Pick<SoundSlot, "fadeInMs" | "fadeOutMs" | "loop" | "soloPlay" | "retriggerMode" | "hotkey" | "outputTarget"> = {
   fadeInMs: 0,
@@ -71,6 +72,20 @@ function cloneEffects(effects: SoundEffects): SoundEffects {
     limiter: { ...effects.limiter },
     reverb: { ...effects.reverb }
   };
+}
+
+export const RETRIGGER_MODES: { value: RetriggerMode; label: string; description: string }[] = [
+  { value: "restart", label: "Stop then restart", description: "Pressing again cuts the sound off and starts it over." },
+  { value: "overlap", label: "Overlap", description: "Pressing again layers another copy on top." },
+  { value: "stop", label: "Play / stop toggle", description: "Pressing again stops the sound." }
+];
+
+export function normalizeRetriggerMode(value: unknown, fallback: RetriggerMode = "restart"): RetriggerMode {
+  return RETRIGGER_MODES.some((mode) => mode.value === value) ? (value as RetriggerMode) : fallback;
+}
+
+export function retriggerModeLabel(value: RetriggerMode) {
+  return RETRIGGER_MODES.find((mode) => mode.value === value)?.label ?? value;
 }
 
 function numberIn(value: unknown, fallback: number, min: number, max: number) {
@@ -157,7 +172,7 @@ export function makeBoard(index: number): SoundBoard {
   };
 }
 
-export function soundFromImport(result: MediaImportResult, index: number, outputTarget: OutputTarget): SoundSlot | null {
+export function soundFromImport(result: MediaImportResult, index: number, outputTarget: OutputTarget, retriggerMode: RetriggerMode = "restart"): SoundSlot | null {
   if (!result.ok || !result.id || !result.mediaPath || !result.storedName || !result.mime || !result.ext || !result.size) return null;
   const timestamp = now();
   return {
@@ -175,7 +190,7 @@ export function soundFromImport(result: MediaImportResult, index: number, output
     fadeOutMs: 0,
     loop: false,
     soloPlay: true,
-    retriggerMode: "restart",
+    retriggerMode: normalizeRetriggerMode(retriggerMode),
     hotkey: "",
     outputTarget,
     effects: getDefaultSoundEffects(),
@@ -205,6 +220,7 @@ export function normalizeLibrary(library: SoundLibrary): SoundLibrary {
     noiseSuppressionEnabled: boolOr(currentSettings.noiseSuppressionEnabled, defaultSettings.noiseSuppressionEnabled),
     noiseSuppressionAttenuationDb: Math.round(numberIn(currentSettings.noiseSuppressionAttenuationDb, defaultSettings.noiseSuppressionAttenuationDb, 6, 30))
   };
+  settings.defaultRetriggerMode = normalizeRetriggerMode(settings.defaultRetriggerMode, defaultSettings.defaultRetriggerMode);
   settings.stopAllHotkey = normalizeAccelerator(settings.stopAllHotkey);
   settings.cycleBoardsHotkey = normalizeAccelerator(settings.cycleBoardsHotkey);
   settings.virtualOutputDeviceId = normalizeSelectableDeviceId(settings.virtualOutputDeviceId);
@@ -229,6 +245,7 @@ export function normalizeLibrary(library: SoundLibrary): SoundLibrary {
         ...defaultSoundOptions,
         ...sound,
         hotkey: normalizeAccelerator(sound.hotkey || ""),
+        retriggerMode: normalizeRetriggerMode(sound.retriggerMode, defaultSoundOptions.retriggerMode),
         volume: sound.volume === 0.9 ? 1 : sound.volume,
         effects: normalizeSoundEffects(sound.effects)
       }))

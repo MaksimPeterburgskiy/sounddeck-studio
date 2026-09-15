@@ -19,6 +19,7 @@ import {
   Plus,
   Power,
   Radio,
+  Repeat,
   RefreshCcw,
   RefreshCw,
   RotateCcw,
@@ -37,12 +38,12 @@ import { AudioEngine } from "./lib/audioEngine";
 import type { AudioDeviceStatus, MicrophoneProcessingStatus } from "./lib/audioEngine";
 import { findVirtualAudioCandidates, getDefaultDeviceLabel, isSelectableMediaDevice, makeMicrophoneConstraints, normalizeMonitorDeviceId, normalizeSelectableDeviceId } from "./lib/devices";
 import type { VirtualAudioCandidate } from "./lib/devices";
-import { acceleratorLooksReserved, formatBytes, formatDuration, getDefaultSoundEffects, makeBoard, normalizeLibrary, normalizeSoundEffects, now, soundEffectsAreActive, soundEffectsAreDefault, soundFromImport } from "./lib/model";
+import { acceleratorLooksReserved, formatBytes, formatDuration, getDefaultSoundEffects, makeBoard, normalizeLibrary, normalizeSoundEffects, now, RETRIGGER_MODES, retriggerModeLabel, soundEffectsAreActive, soundEffectsAreDefault, soundFromImport } from "./lib/model";
 import { claimCaptureSlot, eventToToken, formatAccelerator, MODIFIER_TOKENS, normalizeAccelerator, orderTokens } from "./lib/hotkeys";
 import { makeWaveform } from "./lib/waveform";
 import { installDevBridge } from "./lib/devBridge";
 import { cancelTopLevelDrag } from "./lib/drop";
-import type { AppCapabilities, CorsairState, HotkeyBinding, HotkeyResult, MediaImportResult, SoundBoard, SoundDeckPlatform, SoundEffects, SoundLibrary, SoundSlot, StartupSettings, UpdateChannel, UpdateChannelState, UpdateStatus, VirtualBackend } from "./types";
+import type { AppCapabilities, CorsairState, HotkeyBinding, HotkeyResult, MediaImportResult, RetriggerMode, SoundBoard, SoundDeckPlatform, SoundEffects, SoundLibrary, SoundSlot, StartupSettings, UpdateChannel, UpdateChannelState, UpdateStatus, VirtualBackend } from "./types";
 import "./styles.css";
 
 installDevBridge();
@@ -582,7 +583,8 @@ function App() {
   function addImportedSounds(results: MediaImportResult[], emptyMessage: string) {
     if (!activeBoard) return;
     const successful = results.filter((result) => result.ok);
-    const imported = successful.map((result, index) => soundFromImport(result, activeBoard.sounds.length + index, "both")).filter(Boolean) as SoundSlot[];
+    const defaultRetriggerMode = library?.settings.defaultRetriggerMode ?? "restart";
+    const imported = successful.map((result, index) => soundFromImport(result, activeBoard.sounds.length + index, "both", defaultRetriggerMode)).filter(Boolean) as SoundSlot[];
     updateLibrary((current) => ({
       ...current,
       boards: current.boards.map((board) => board.id === activeBoard.id ? { ...board, sounds: [...board.sounds, ...imported], updatedAt: now() } : board)
@@ -948,6 +950,34 @@ function App() {
     });
   }
 
+  function applyRetriggerModeToAllSounds(mode: RetriggerMode) {
+    if (!library) return;
+    const total = library.boards.reduce((count, board) => count + board.sounds.length, 0);
+    if (!total) {
+      setMessage("No sounds to update yet");
+      return;
+    }
+    const label = retriggerModeLabel(mode);
+    const confirmed = window.confirm(
+      `Set retrigger to "${label}" on all ${total} sound${total === 1 ? "" : "s"}?\n\n` +
+      "This changes every sound on every board and replaces any per-sound retrigger choice."
+    );
+    if (!confirmed) return;
+    const timestamp = now();
+    updateLibrary((current) => ({
+      ...current,
+      boards: current.boards.map((board) => {
+        if (board.sounds.every((sound) => sound.retriggerMode === mode)) return board;
+        return {
+          ...board,
+          updatedAt: timestamp,
+          sounds: board.sounds.map((sound) => sound.retriggerMode === mode ? sound : { ...sound, retriggerMode: mode, updatedAt: timestamp })
+        };
+      })
+    }));
+    setMessage(`Retrigger set to "${label}" on ${total} sound${total === 1 ? "" : "s"}`);
+  }
+
   async function changeUpdateChannel(channel: UpdateChannel) {
     if (!updateChannel) return;
     const effective = updateChannel.preference ?? updateChannel.installedChannel;
@@ -1181,10 +1211,14 @@ function App() {
 
         {view === "settings" && (
           <SettingsPanel
+            settings={library.settings}
+            soundCount={library.boards.reduce((count, board) => count + board.sounds.length, 0)}
             startupSettings={startupSettings}
             startupUpdateStatus={startupUpdateStatus}
             capabilities={capabilities}
             updateChannel={updateChannel}
+            onChangeSettings={changeSettings}
+            onApplyRetriggerToAll={applyRetriggerModeToAllSounds}
             onChangeStartup={(enabled, hideOnStartup) => void updateRunAtStartup(enabled, hideOnStartup)}
             onChangeUpdateChannel={(channel) => void changeUpdateChannel(channel)}
           />
@@ -1209,7 +1243,7 @@ function App() {
             preferredMicrophoneLabel={recorderMicrophoneLabel}
             onNotice={setMessage}
             onImport={async (result) => {
-              const sound = soundFromImport(result, activeBoard.sounds.length, "both");
+              const sound = soundFromImport(result, activeBoard.sounds.length, "both", library.settings.defaultRetriggerMode);
               if (!sound) return;
               updateLibrary((current) => ({
                 ...current,
@@ -1657,7 +1691,7 @@ function SoundEditor({ sound, onChange, onClose }: { sound: SoundSlot; onChange:
       <label>Fade in ms<input type="number" min="0" value={sound.fadeInMs} onChange={(event) => onChange({ fadeInMs: Number(event.target.value) })} /></label>
       <label>Fade out ms<input type="number" min="0" value={sound.fadeOutMs} onChange={(event) => onChange({ fadeOutMs: Number(event.target.value) })} /></label>
       <label>Output<select value={sound.outputTarget} onChange={(event) => onChange({ outputTarget: event.target.value as SoundSlot["outputTarget"] })}><option value="both">Headphones + virtual mic</option><option value="monitor">Headphones</option><option value="virtual">Virtual mic</option></select></label>
-      <label>Retrigger<select value={sound.retriggerMode} onChange={(event) => onChange({ retriggerMode: event.target.value as SoundSlot["retriggerMode"] })}><option value="restart">Stop then restart</option><option value="overlap">Overlap</option><option value="stop">Play / stop toggle</option></select></label>
+      <label>Retrigger<select value={sound.retriggerMode} onChange={(event) => onChange({ retriggerMode: event.target.value as SoundSlot["retriggerMode"] })}>{RETRIGGER_MODES.map((mode) => <option key={mode.value} value={mode.value}>{mode.label}</option>)}</select></label>
       <label className="check"><input type="checkbox" checked={sound.loop} onChange={(event) => onChange({ loop: event.target.checked })} /> Loop</label>
       <label className="check"><input type="checkbox" checked={sound.soloPlay} onChange={(event) => onChange({ soloPlay: event.target.checked })} /> Stop other sounds when played</label>
       <HotkeyCapture value={sound.hotkey} onChange={(hotkey) => onChange({ hotkey })} />
@@ -2189,11 +2223,97 @@ function ClipEditor({ sound, engine, onChange, onClose, mediaUsedElsewhere }: {
   );
 }
 
-function SettingsPanel({ startupSettings, startupUpdateStatus, capabilities, updateChannel, onChangeStartup, onChangeUpdateChannel }: {
+function Switch({ checked, disabled, label, onChange }: { checked: boolean; disabled?: boolean; label: string; onChange: (checked: boolean) => void }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      className="switch"
+      data-state={checked ? "checked" : "unchecked"}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+    >
+      <span className="switchThumb" />
+    </button>
+  );
+}
+
+function SegmentedRadioGroup<T extends string>({ label, value, options, onChange }: {
+  label: string;
+  value: T;
+  options: { value: T; label: string }[];
+  onChange: (value: T) => void;
+}) {
+  const groupRef = useRef<HTMLDivElement>(null);
+  function focusOption(option: T) {
+    groupRef.current?.querySelector<HTMLButtonElement>(`button[data-value="${option}"]`)?.focus();
+  }
+  function handleKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
+    const index = options.findIndex((option) => option.value === value);
+    let nextIndex = index;
+    if (event.key === "ArrowRight" || event.key === "ArrowDown") nextIndex = (index + 1) % options.length;
+    else if (event.key === "ArrowLeft" || event.key === "ArrowUp") nextIndex = (index - 1 + options.length) % options.length;
+    else if (event.key === "Home") nextIndex = 0;
+    else if (event.key === "End") nextIndex = options.length - 1;
+    else return;
+    event.preventDefault();
+    const next = options[nextIndex].value;
+    focusOption(next);
+    if (next !== value) onChange(next);
+  }
+  return (
+    <div ref={groupRef} className="segmented" role="radiogroup" aria-label={label} onKeyDown={handleKeyDown}>
+      {options.map((option) => {
+        const selected = option.value === value;
+        return (
+          <button
+            key={option.value}
+            type="button"
+            role="radio"
+            aria-checked={selected}
+            tabIndex={selected ? 0 : -1}
+            data-value={option.value}
+            data-state={selected ? "on" : "off"}
+            onClick={() => onChange(option.value)}
+          >
+            {option.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function SettingsRow({ icon, title, description, children, disabled }: {
+  icon?: React.ReactNode;
+  title: string;
+  description: React.ReactNode;
+  children: React.ReactNode;
+  disabled?: boolean;
+}) {
+  return (
+    <div className={disabled ? "settingsRow disabled" : "settingsRow"}>
+      {icon && <span className="settingsRowIcon">{icon}</span>}
+      <div className="settingsRowText">
+        <strong>{title}</strong>
+        <small>{description}</small>
+      </div>
+      <div className="settingsRowControl">{children}</div>
+    </div>
+  );
+}
+
+function SettingsPanel({ settings, soundCount, startupSettings, startupUpdateStatus, capabilities, updateChannel, onChangeSettings, onApplyRetriggerToAll, onChangeStartup, onChangeUpdateChannel }: {
+  settings: SoundLibrary["settings"];
+  soundCount: number;
   startupSettings: StartupSettings;
   startupUpdateStatus: StartupUpdateStatus;
   capabilities: AppCapabilities | null;
   updateChannel: UpdateChannelState | null;
+  onChangeSettings: (patch: Partial<SoundLibrary["settings"]>) => void;
+  onApplyRetriggerToAll: (mode: RetriggerMode) => void;
   onChangeStartup: (enabled: boolean, hideOnStartup?: boolean) => void;
   onChangeUpdateChannel: (channel: UpdateChannel) => void;
 }) {
@@ -2203,92 +2323,87 @@ function SettingsPanel({ startupSettings, startupUpdateStatus, capabilities, upd
   const hideOnStartup = startupSettings.hideOnStartup ?? true;
   const startupNeedsApproval = startupSettings.status === "requires-approval" || startupSettings.status === "not-approved";
   const hiddenStartupDisabled = disabled || startupNeedsApproval;
+  const retriggerMode = settings.defaultRetriggerMode;
+  const retriggerCopy = RETRIGGER_MODES.find((mode) => mode.value === retriggerMode)?.description ?? "";
   const startupCopy = !startupSupported
     ? startupSettings.reason === "portable-build"
-      ? "Startup launch is disabled for portable Windows builds."
-      : "Startup launch is available on macOS and Windows builds."
+      ? "Not available in portable Windows builds."
+      : "Available on macOS and Windows builds."
     : startupUpdateStatus === "saving"
-    ? "Saving startup preference..."
+    ? "Saving..."
     : startupUpdateStatus === "error" || startupSettings.reason
       ? startupSettings.reason || "Could not update startup preference."
       : startupNeedsApproval
-        ? "Startup is enabled, but your system still needs approval."
-        : startupSettings.enabled
-          ? hideOnStartup
-            ? "SoundDeck starts in the tray when you sign in."
-            : "SoundDeck opens its window when you sign in."
-          : "SoundDeck stays closed until you open it.";
-  const hiddenStartupCopy = startupUpdateStatus === "saving"
-    ? "Saving startup preference..."
-    : hideOnStartup
-      ? "Sign-in launches stay in the tray."
-      : "Sign-in launches show the main window.";
+        ? "Enabled, but your system still needs to approve it."
+        : "Launch SoundDeck automatically when you sign in.";
+  const hiddenStartupCopy = startupNeedsApproval
+    ? "Approve startup launch first."
+    : "Sign-in launches stay in the tray instead of opening the window.";
   return (
-    <div className="panel settingsPanel">
-      <section>
-        <h2>App Settings</h2>
-        <div className="toggleRow settingsToggleRow">
-          <label className={disabled ? "settingsToggle disabled" : "settingsToggle"}>
-            <input
-              type="checkbox"
-              checked={startupSettings.enabled}
-              disabled={disabled}
-              onChange={(event) => onChangeStartup(event.target.checked)}
-            />
-            <Power size={17} />
-            <span className="settingsToggleText">
-              <strong>Run on start</strong>
-              <small>{startupCopy}</small>
-            </span>
-          </label>
-          <label className={hiddenStartupDisabled ? "settingsToggle disabled" : "settingsToggle"}>
-            <input
-              type="checkbox"
-              checked={hideOnStartup}
-              disabled={hiddenStartupDisabled}
-              onChange={(event) => onChangeStartup(startupSettings.enabled, event.target.checked)}
-            />
-            {hideOnStartup ? <EyeOff size={17} /> : <Eye size={17} />}
-            <span className="settingsToggleText">
-              <strong>Start hidden</strong>
-              <small>{hiddenStartupCopy}</small>
-            </span>
-          </label>
-        </div>
+    <div className="settingsPanel">
+      <section className="settingsCard">
+        <header className="settingsCardHeader">
+          <h2>Sounds</h2>
+          <p>Defaults for sounds you import or record. Existing sounds keep their own settings unless you apply the default to all.</p>
+        </header>
+        <SettingsRow
+          icon={<Repeat size={16} />}
+          title="Default retrigger"
+          description={<>What happens when a sound is triggered while it is already playing. {retriggerCopy}</>}
+        >
+          <select
+            className="settingsSelect"
+            aria-label="Default retrigger"
+            value={retriggerMode}
+            onChange={(event) => onChangeSettings({ defaultRetriggerMode: event.target.value as RetriggerMode })}
+          >
+            {RETRIGGER_MODES.map((mode) => <option key={mode.value} value={mode.value}>{mode.label}</option>)}
+          </select>
+          <button
+            type="button"
+            className="settingsButton"
+            disabled={!soundCount}
+            title={soundCount ? `Set retrigger on all ${soundCount} sound${soundCount === 1 ? "" : "s"}` : "No sounds yet"}
+            onClick={() => onApplyRetriggerToAll(retriggerMode)}
+          >
+            Apply to all
+          </button>
+        </SettingsRow>
       </section>
+
+      <section className="settingsCard">
+        <header className="settingsCardHeader">
+          <h2>Startup</h2>
+          <p>Control how SoundDeck behaves when you sign in to your computer.</p>
+        </header>
+        <SettingsRow icon={<Power size={16} />} title="Run on start" description={startupCopy} disabled={disabled}>
+          <Switch label="Run on start" checked={startupSettings.enabled} disabled={disabled} onChange={(enabled) => onChangeStartup(enabled)} />
+        </SettingsRow>
+        <SettingsRow icon={hideOnStartup ? <EyeOff size={16} /> : <Eye size={16} />} title="Start hidden" description={hiddenStartupCopy} disabled={hiddenStartupDisabled}>
+          <Switch label="Start hidden" checked={hideOnStartup} disabled={hiddenStartupDisabled} onChange={(hidden) => onChangeStartup(startupSettings.enabled, hidden)} />
+        </SettingsRow>
+      </section>
+
       {capabilities?.updateChecksSupported && effectiveChannel && (
-        <section>
-          <h2>Update Channel</h2>
-          <div className="toggleRow settingsToggleRow">
-            <label className="settingsToggle">
-              <input
-                type="radio"
-                name="update-channel"
-                value="stable"
-                checked={effectiveChannel === "stable"}
-                onChange={() => onChangeUpdateChannel("stable")}
-              />
-              <ShieldCheck size={17} />
-              <span className="settingsToggleText">
-                <strong>Stable</strong>
-                <small>Tested releases only. Switching back from beta may downgrade the app.</small>
-              </span>
-            </label>
-            <label className="settingsToggle">
-              <input
-                type="radio"
-                name="update-channel"
-                value="beta"
-                checked={effectiveChannel === "beta"}
-                onChange={() => onChangeUpdateChannel("beta")}
-              />
-              <FlaskConical size={17} />
-              <span className="settingsToggleText">
-                <strong>Beta</strong>
-                <small>Nightly builds from development. Newer features, rougher edges.</small>
-              </span>
-            </label>
-          </div>
+        <section className="settingsCard">
+          <header className="settingsCardHeader">
+            <h2>Updates</h2>
+            <p>Choose which releases SoundDeck installs.</p>
+          </header>
+          <SettingsRow
+            icon={effectiveChannel === "beta" ? <FlaskConical size={16} /> : <ShieldCheck size={16} />}
+            title="Update channel"
+            description={effectiveChannel === "beta"
+              ? "Nightly builds from development. Newer features, rougher edges. Switching back to stable may downgrade the app."
+              : "Tested releases only."}
+          >
+            <SegmentedRadioGroup
+              label="Update channel"
+              value={effectiveChannel}
+              options={[{ value: "stable", label: "Stable" }, { value: "beta", label: "Beta" }]}
+              onChange={onChangeUpdateChannel}
+            />
+          </SettingsRow>
         </section>
       )}
     </div>

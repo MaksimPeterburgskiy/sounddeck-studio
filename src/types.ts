@@ -92,6 +92,8 @@ export interface AudioSettings {
   microphoneDeviceLabel: string;
   stopAllHotkey: string;
   cycleBoardsHotkey: string;
+  /** Retrigger behaviour assigned to newly imported or recorded sounds. */
+  defaultRetriggerMode: RetriggerMode;
 }
 
 export interface SoundLibrary {

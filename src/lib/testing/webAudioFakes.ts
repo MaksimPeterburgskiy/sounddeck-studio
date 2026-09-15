@@ -330,7 +330,8 @@ const baseSettings: AudioSettings = {
   microphoneDeviceId: "device-1",
   microphoneDeviceLabel: "",
   stopAllHotkey: "",
-  cycleBoardsHotkey: ""
+  cycleBoardsHotkey: "",
+  defaultRetriggerMode: "restart"
 };
 
 export function makeAudioSettings(patch: Partial<AudioSettings> = {}): AudioSettings {
