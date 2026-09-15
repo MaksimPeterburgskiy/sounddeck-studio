@@ -682,6 +682,33 @@ function createTrayIcon() {
   return icon.resize({ width: 24, height: 24, quality: "best" });
 }
 
+// The renderer draws its own title bar, so the native one is hidden on every
+// platform. macOS keeps its traffic lights (inset to sit inside the custom bar);
+// Windows and Linux get caption buttons drawn by the renderer instead.
+const TITLE_BAR_HEIGHT = 38;
+const MAC_TRAFFIC_LIGHT_SIZE = 12;
+
+function windowChromeOptions() {
+  if (process.platform === "darwin") {
+    return {
+      titleBarStyle: "hidden",
+      trafficLightPosition: { x: 16, y: Math.round((TITLE_BAR_HEIGHT - MAC_TRAFFIC_LIGHT_SIZE) / 2) }
+    };
+  }
+  return { titleBarStyle: "hidden" };
+}
+
+function windowState(window) {
+  if (!window || window.isDestroyed()) return { maximized: false, fullscreen: false };
+  return { maximized: window.isMaximized(), fullscreen: window.isFullScreen() };
+}
+
+function withMainWindow(action) {
+  const window = mainWindow;
+  if (!window || window.isDestroyed()) return;
+  action(window);
+}
+
 function showMainWindow() {
   if (shutdownLifecycle.isShuttingDown()) return;
   if (mainWindow?.isDestroyed()) mainWindow = undefined;
@@ -734,6 +761,7 @@ async function createWindow() {
     show: !startHidden,
     backgroundColor: "#101114",
     title: "SoundDeck Studio",
+    ...windowChromeOptions(),
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
@@ -770,6 +798,9 @@ async function createWindow() {
   window.on("closed", () => {
     if (mainWindow === window) mainWindow = undefined;
   });
+  for (const eventName of ["maximize", "unmaximize", "enter-full-screen", "leave-full-screen"]) {
+    window.on(eventName, () => sendToMainWindow("window-state", windowState(window)));
+  }
 
   await loadRenderer(window, rendererTarget);
   if (shutdownLifecycle.isShuttingDown()) return;
@@ -1268,6 +1299,19 @@ handleTrustedIpc("app:openExternal", async (_event, url) => {
 handleTrustedIpc("app:getVersion", () => app.getVersion());
 
 handleTrustedIpc("app:getPlatform", () => sounddeckPlatform());
+
+handleTrustedIpc("window:minimize", () => withMainWindow((window) => window.minimize()));
+
+handleTrustedIpc("window:toggleMaximize", () => withMainWindow((window) => {
+  if (window.isFullScreen()) return;
+  if (window.isMaximized()) window.unmaximize();
+  else window.maximize();
+}));
+
+// Routes through the regular close path so the hide-to-tray behavior applies.
+handleTrustedIpc("window:close", () => withMainWindow((window) => window.close()));
+
+handleTrustedIpc("window:getState", () => windowState(mainWindow));
 
 handleTrustedIpc("app:getCapabilities", () => appCapabilities());
 
