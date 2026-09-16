@@ -86,8 +86,8 @@ A new beta is published every night whenever `main` has changed, as a prerelease
 Requirements:
 
 - Windows 10/11 (64-bit) or macOS 13 Ventura or later
-- Node.js 22.12+
-- pnpm 11.6+ via Corepack
+- Node.js 24+
+- pnpm 12.4.2 (pinned in `package.json`)
 
 ```bash
 git clone https://github.com/MaksimPeterburgskiy/sounddeck-studio.git
