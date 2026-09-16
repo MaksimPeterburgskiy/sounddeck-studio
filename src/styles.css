@@ -160,14 +160,7 @@ small { color: var(--text-dim); font-size: 12px; }
 .windowControls .windowControlClose:hover { background: var(--danger); color: #fff; }
 .windowControls .windowControlClose:active { background: #d64c4c; color: #fff; }
 .windowControls button:focus-visible { outline-offset: -2px; border-radius: 0; }
-.windowControls svg {
-  width: 10px;
-  height: 10px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1;
-  shape-rendering: crispEdges;
-}
+.windowControls svg { display: block; }
 
 /* ---------- sidebar ---------- */
 

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Radio } from "lucide-react";
+import { Copy, Minus, Radio, Square, X } from "lucide-react";
 import type { WindowState } from "./types";
 
 // Custom window chrome. The native title bar is hidden by the main process on
@@ -33,7 +33,7 @@ export function TitleBar({ status }: { status: string }) {
       {drawsControls && (
         <div className="windowControls">
           <button type="button" aria-label="Minimize" title="Minimize" onClick={() => void window.sounddeck.minimizeWindow()}>
-            <svg viewBox="0 0 10 10" aria-hidden="true"><path d="M0 5.5h10" /></svg>
+            <Minus size={14} strokeWidth={1.5} aria-hidden="true" />
           </button>
           <button
             type="button"
@@ -41,14 +41,10 @@ export function TitleBar({ status }: { status: string }) {
             title={windowState.maximized ? "Restore" : "Maximize"}
             onClick={() => void window.sounddeck.toggleMaximizeWindow()}
           >
-            {windowState.maximized ? (
-              <svg viewBox="0 0 10 10" aria-hidden="true"><path d="M2.5 2.5v-2h7v7h-2" /><rect x="0.5" y="2.5" width="7" height="7" /></svg>
-            ) : (
-              <svg viewBox="0 0 10 10" aria-hidden="true"><rect x="0.5" y="0.5" width="9" height="9" /></svg>
-            )}
+            {windowState.maximized ? <Copy size={13} strokeWidth={1.5} aria-hidden="true" /> : <Square size={13} strokeWidth={1.5} aria-hidden="true" />}
           </button>
           <button type="button" className="windowControlClose" aria-label="Close" title="Close" onClick={() => void window.sounddeck.closeWindow()}>
-            <svg viewBox="0 0 10 10" aria-hidden="true"><path d="M0.5 0.5l9 9M9.5 0.5l-9 9" /></svg>
+            <X size={15} strokeWidth={1.5} aria-hidden="true" />
           </button>
         </div>
       )}
