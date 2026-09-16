@@ -4,7 +4,7 @@
   "description": "Desktop soundboard for Windows and macOS with boards, hotkeys, local media, and virtual audio routing.",
   "main": "electron/main.cjs",
   "type": "module",
-  "packageManager": "pnpm@11.6.0",
+  "packageManager": "pnpm@12.4.2",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "electron": "electron .",
@@ -143,8 +143,8 @@
     "url": "https://github.com/MaksimPeterburgskiy/sounddeck-studio.git"
   },
   "engines": {
-    "node": ">=22.12.0",
-    "pnpm": ">=11.6.0"
+    "node": ">=24.0.0",
+    "pnpm": ">=12.4.2"
   },
   "dependencies": {
     "cue-sdk": "^4.0.84",
@@ -152,20 +152,20 @@
     "uiohook-napi": "^1.5.5"
   },
   "devDependencies": {
-    "@types/node": "^26.4.1",
-    "@types/react": "^19.2.18",
-    "@types/react-dom": "^19.2.7",
+    "@types/node": "^24.13.5",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.1",
-    "@vitest/coverage-v8": "^4.1.11",
+    "@vitest/coverage-v8": "^5.0.1",
     "concurrently": "^10.0.5",
-    "electron": "^44.2.0",
-    "electron-builder": "^26.15.3",
-    "lucide-react": "^1.41.0",
-    "react": "^19.2.8",
-    "react-dom": "^19.2.8",
+    "electron": "^44.4.1",
+    "electron-builder": "^26.16.1",
+    "lucide-react": "^1.46.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
     "typescript": "^7.0.2",
-    "vite": "^8.2.2",
-    "vitest": "^4.1.11",
+    "vite": "^8.3.0",
+    "vitest": "^5.0.1",
     "wait-on": "^9.1.0"
   }
 }
