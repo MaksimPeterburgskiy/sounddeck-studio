@@ -34,7 +34,7 @@ export function installDevBridge() {
           microphoneDeviceLabel: "",
           stopAllHotkey: "Ctrl+Alt+Space",
           cycleBoardsHotkey: "",
-          defaultRetriggerMode: "restart"
+          defaultRetriggerMode: "stop"
         },
         boards: [{ id: "board-default", name: "Main Board", color: "#1db7a6", icon: "zap", createdAt, updatedAt: createdAt, sounds: [] }]
       };
