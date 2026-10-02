@@ -156,16 +156,16 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.1",
-    "@vitest/coverage-v8": "^5.0.1",
+    "@vitest/coverage-v8": "^5.0.2",
     "concurrently": "^10.0.5",
-    "electron": "^44.4.1",
+    "electron": "^44.4.5",
     "electron-builder": "^26.16.1",
-    "lucide-react": "^1.46.0",
+    "lucide-react": "^1.48.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "typescript": "^7.0.2",
-    "vite": "^8.3.0",
-    "vitest": "^5.0.1",
+    "vite": "^8.3.1",
+    "vitest": "^5.0.2",
     "wait-on": "^9.1.0"
   }
 }
