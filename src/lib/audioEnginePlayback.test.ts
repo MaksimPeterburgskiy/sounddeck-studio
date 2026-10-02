@@ -605,11 +605,47 @@ describe("AudioEngine lifecycle and cache", () => {
     const engine = new AudioEngine(playbackSettings, status);
 
     await engine.play(makeSound());
-    expect(status).toHaveBeenLastCalledWith("playing", ["sound-1"]);
+    expect(status).toHaveBeenLastCalledWith("playing", ["sound-1"], [expect.objectContaining({ soundId: "sound-1", duration: 2, loop: false })]);
 
     monitorContext().bufferSources[0].onended?.();
-    expect(status).toHaveBeenLastCalledWith("idle", []);
+    expect(status).toHaveBeenLastCalledWith("idle", [], []);
 
+    await engine.dispose();
+  });
+
+  it("reports every overlapping voice with an epoch timestamp and effective trimmed duration", async () => {
+    const status = vi.fn();
+    const engine = new AudioEngine(playbackSettings, status);
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1700000000000);
+    const sound = makeSound({ retriggerMode: "overlap", trimStartSec: 0.25, trimEndSec: 1.75, playbackRate: 2, loop: true });
+    await engine.play(sound);
+    clock.mockReturnValue(1700000000200);
+    await engine.play(sound);
+
+    expect(status.mock.lastCall?.[2]).toEqual([
+      { soundId: "sound-1", startedAt: 1700000000000, duration: 0.75, loop: true },
+      { soundId: "sound-1", startedAt: 1700000000200, duration: 0.75, loop: true }
+    ]);
+    engine.stop("sound-1");
+    expect(status.mock.lastCall?.[2]).toEqual([]);
+    await engine.dispose();
+  });
+
+  it("updates effective duration and preserves progress when live pitch changes playback speed", async () => {
+    const status = vi.fn();
+    const engine = new AudioEngine(playbackSettings, status);
+    const epoch = vi.spyOn(Date, "now").mockReturnValue(1700000000000);
+    const monotonic = vi.spyOn(performance, "now").mockReturnValue(1000);
+    const sound = makeSound({ trimStartSec: 0.25, trimEndSec: 1.75, playbackRate: 2 });
+    await engine.play(sound);
+    monotonic.mockReturnValue(1250);
+    epoch.mockReturnValue(1700000000250);
+    engine.setSoundEffects(sound.id, { ...sound.effects!, pitchEnabled: true, pitchSemitones: 12 });
+
+    const voice = status.mock.lastCall?.[2][0];
+    expect(voice.duration).toBe(0.375);
+    expect(voice.startedAt).toBe(1700000000125);
+    expect((Date.now() - voice.startedAt) / (voice.duration * 1000)).toBeCloseTo(1 / 3);
     await engine.dispose();
   });
 

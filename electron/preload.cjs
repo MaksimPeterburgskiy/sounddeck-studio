@@ -37,6 +37,20 @@ contextBridge.exposeInMainWorld("sounddeck", {
     ipcRenderer.on("hotkey-trigger", listener);
     return () => ipcRenderer.removeListener("hotkey-trigger", listener);
   },
+  getControlSettings: () => ipcRenderer.invoke("control:getSettings"),
+  setControlSettings: (patch) => ipcRenderer.invoke("control:setSettings", patch),
+  regenerateControlToken: () => ipcRenderer.invoke("control:regenerateToken"),
+  pushControlState: (state) => ipcRenderer.invoke("control:state", state),
+  onControlStatus: (callback) => {
+    const listener = (_event, state) => callback(state);
+    ipcRenderer.on("control-status", listener);
+    return () => ipcRenderer.removeListener("control-status", listener);
+  },
+  onControlCommand: (callback) => {
+    const listener = (_event, command) => callback(command);
+    ipcRenderer.on("control-command", listener);
+    return () => ipcRenderer.removeListener("control-command", listener);
+  },
   getCorsairStatus: () => ipcRenderer.invoke("corsair:status"),
   onCorsairStatus: (callback) => {
     const listener = (_event, state) => callback(state);

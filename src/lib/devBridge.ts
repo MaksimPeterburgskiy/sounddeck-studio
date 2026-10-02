@@ -1,3 +1,4 @@
+import { CONTROL_DEFAULT_PORT } from "./controlProtocol";
 import type { HotkeyBinding, MediaImportResult, SoundLibrary, UpdateChannel } from "../types";
 
 const storageKey = "sounddeck-dev-library";
@@ -135,6 +136,24 @@ export function installDevBridge() {
       return file.name;
     },
     onHotkeyTrigger() {
+      return () => undefined;
+    },
+    async getControlSettings() {
+      return { enabled: false, port: CONTROL_DEFAULT_PORT, token: "", allowLan: false, listening: false, clients: [], error: null };
+    },
+    async setControlSettings() {
+      return { ...await this.getControlSettings(), error: { code: "unavailable", message: "Run in Electron to use external control." } };
+    },
+    async regenerateControlToken() {
+      return this.setControlSettings({});
+    },
+    async pushControlState() {
+      return { ok: true };
+    },
+    onControlStatus() {
+      return () => undefined;
+    },
+    onControlCommand() {
       return () => undefined;
     },
     async getCorsairStatus() {

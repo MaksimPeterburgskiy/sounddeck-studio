@@ -44,6 +44,8 @@ import {
   X
 } from "lucide-react";
 import { AudioEngine } from "./lib/audioEngine";
+import { CONTROL_DEFAULT_PORT } from "./lib/controlProtocol";
+import type { ControlPlaybackVoice, ControlSettingsPatch, ControlStatus } from "./lib/controlProtocol";
 import type { AudioDeviceStatus, MicrophoneProcessingStatus } from "./lib/audioEngine";
 import { findVirtualAudioCandidates, getDefaultDeviceLabel, isSelectableMediaDevice, makeMicrophoneConstraints, normalizeMonitorDeviceId, normalizeSelectableDeviceId } from "./lib/devices";
 import type { VirtualAudioCandidate } from "./lib/devices";
@@ -92,6 +94,7 @@ function App() {
   const [hotkeyResults, setHotkeyResults] = useState<HotkeyResult[]>([]);
   const [engineStatus, setEngineStatus] = useState<EngineStatus>("idle");
   const [playingIds, setPlayingIds] = useState<string[]>([]);
+  const [controlPlayback, setControlPlayback] = useState<ControlPlaybackVoice[]>([]);
   const [microphoneProcessingStatus, setMicrophoneProcessingStatus] = useState<MicrophoneProcessingStatus>(defaultMicrophoneProcessingStatus);
   const [deviceStatus, setDeviceStatus] = useState<AudioDeviceStatus>(defaultAudioDeviceStatus);
   const [editingClipId, setEditingClipId] = useState<string>("");
@@ -299,9 +302,10 @@ function App() {
     };
     if (!engineRef.current) engineRef.current = new AudioEngine(
       engineSettings,
-      (status, activeIds) => {
+      (status, activeIds, playback) => {
         setEngineStatus(status);
         setPlayingIds(activeIds);
+        setControlPlayback(playback);
       },
       setMicrophoneProcessingStatus,
       (status) => {
@@ -408,6 +412,11 @@ function App() {
       if (engineRef.current?.isPlaying(soundId)) engineRef.current.stop(soundId);
     }
   }, [activeBoard]);
+
+  useEffect(() => {
+    if (!activeBoard) return;
+    void window.sounddeck.pushControlState({ activeBoardId: activeBoard.id, playback: controlPlayback }).catch(() => undefined);
+  }, [activeBoard?.id, controlPlayback]);
 
   const selectedSound = useMemo(() => activeBoard?.sounds.find((sound) => sound.id === selectedSoundId) || null, [activeBoard, selectedSoundId]);
   const editingClipSound = useMemo(() => activeBoard?.sounds.find((sound) => sound.id === editingClipId) || null, [activeBoard, editingClipId]);
@@ -566,6 +575,21 @@ function App() {
       if (sound) void triggerSound(sound);
     });
   }, [library, triggerSound]);
+
+  useEffect(() => window.sounddeck.onControlCommand(({ command, args }) => {
+    if (command === "sound.stop") {
+      engineRef.current?.stop(args.soundId);
+      return;
+    }
+    if (command === "board.cycle") {
+      updateLibrary((current) => {
+        if (current.boards.length < 2) return current;
+        const index = current.boards.findIndex((board) => board.id === current.activeBoardId);
+        const next = current.boards[(index + (args.direction ?? 1) + current.boards.length) % current.boards.length];
+        return { ...current, activeBoardId: next.id };
+      });
+    }
+  }), []);
 
   function updateLibrary(updater: (current: SoundLibrary) => SoundLibrary) {
     setLibrary((current) => current ? updater(current) : current);
@@ -2364,6 +2388,93 @@ function StatusBadge({ state, children }: { state: string; children: React.React
   return <em className="settingsBadge" data-state={state}>{children}</em>;
 }
 
+function ExternalControlSettings() {
+  const [status, setStatus] = useState<ControlStatus>({ enabled: false, port: CONTROL_DEFAULT_PORT, token: "", allowLan: false, listening: false, clients: [], error: null });
+  const [port, setPort] = useState(String(CONTROL_DEFAULT_PORT));
+  const [issue, setIssue] = useState("");
+  const [portIssue, setPortIssue] = useState("");
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+    const receive = (next: ControlStatus) => {
+      if (!mounted) return;
+      setStatus(next);
+    };
+    const unsubscribe = window.sounddeck.onControlStatus(receive);
+    void window.sounddeck.getControlSettings().then((next) => {
+      receive(next);
+      if (mounted) setPort(String(next.port));
+    }).catch(() => { if (mounted) setIssue("Could not load external control settings."); });
+    return () => { mounted = false; unsubscribe(); };
+  }, []);
+
+  async function apply(patch: ControlSettingsPatch) {
+    setIssue("");
+    try {
+      const next = await window.sounddeck.setControlSettings(patch);
+      setStatus(next);
+    } catch {
+      setIssue("Could not save external control settings.");
+    }
+  }
+
+  function applyPort() {
+    const value = Number(port);
+    if (!/^\d+$/.test(port) || !Number.isInteger(value) || value < 1 || value > 65535) {
+      setPortIssue("Enter a port from 1 to 65535.");
+      return;
+    }
+    setPortIssue("");
+    if (value !== status.port || status.error) void apply({ port: value });
+  }
+
+  async function copyToken() {
+    try {
+      await navigator.clipboard.writeText(status.token);
+      setCopied(true);
+    } catch {
+      setIssue("Could not copy the token.");
+    }
+  }
+
+  async function regenerateToken() {
+    setIssue("");
+    setCopied(false);
+    try {
+      setStatus(await window.sounddeck.regenerateControlToken());
+    } catch {
+      setIssue("Could not regenerate the token.");
+    }
+  }
+
+  const portError = portIssue || status.error?.message;
+  return (
+    <SettingsCard title="External control" description="Control SoundDeck from other apps and scripts.">
+      <SettingsRow icon={<Radio size={16} />} title="Enable external control" description="Allow clients with your token to play sounds and switch boards." issue={issue && <span role="alert">{issue}</span>}>
+        <StatusBadge state={status.listening ? "active" : status.error ? "unavailable" : "idle"}>{status.listening ? "Listening" : status.enabled ? "Offline" : "Off"}</StatusBadge>
+        <Switch label="Enable external control" checked={status.enabled} onChange={(enabled) => void apply({ enabled })} />
+      </SettingsRow>
+      <SettingsRow title="Port" description="Applied when you leave the field." issue={portError && <span id="control-port-error" role="alert">{portError}</span>}>
+        <input className="controlPort" type="number" min={1} max={65535} step={1} aria-label="External control port" aria-invalid={Boolean(portError)} aria-describedby={portError ? "control-port-error" : undefined} value={port} onChange={(event) => { setPort(event.target.value); setPortIssue(""); }} onBlur={applyPort} />
+      </SettingsRow>
+      <SettingsRow icon={<ShieldCheck size={16} />} title="Token" description="Regenerate to disconnect clients and replace their access token.">
+        <input className="controlToken" type="password" aria-label="External control token" autoComplete="off" readOnly value={status.token} />
+        <button className="settingsButton" onClick={() => void copyToken()}>{copied ? "Copied" : "Copy"}</button>
+        <button className="settingsButton" onClick={() => void regenerateToken()}>Regenerate</button>
+      </SettingsRow>
+      <SettingsRow title="Allow connections from other devices" description="The token travels unencrypted on your local network.">
+        <Switch label="Allow connections from other devices" checked={status.allowLan} onChange={(allowLan) => void apply({ allowLan })} />
+      </SettingsRow>
+      <SettingsRow title="Connected clients">
+        <div className="controlClients">
+          {status.clients.length ? status.clients.map((client, index) => <span key={`${client.name}:${index}`}>{client.name} <small>{client.version}</small></span>) : <span>No clients connected</span>}
+        </div>
+      </SettingsRow>
+    </SettingsCard>
+  );
+}
+
 function SettingsPanel({ settings, soundCount, startupSettings, startupUpdateStatus, capabilities, updateChannel, onChangeSettings, onApplyRetriggerToAll, onChangeStartup, onChangeUpdateChannel }: {
   settings: SoundLibrary["settings"];
   soundCount: number;
@@ -2425,6 +2536,8 @@ function SettingsPanel({ settings, soundCount, startupSettings, startupUpdateSta
           </button>
         </SettingsRow>
       </SettingsCard>
+
+      <ExternalControlSettings />
 
       <SettingsCard title="Startup" description="Control how SoundDeck behaves when you sign in to your computer.">
         <SettingsRow icon={<Power size={16} />} title="Run on start" description={startupCopy} disabled={disabled}>
