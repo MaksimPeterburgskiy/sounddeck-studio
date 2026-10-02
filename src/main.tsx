@@ -593,7 +593,7 @@ function App() {
   function addImportedSounds(results: MediaImportResult[], emptyMessage: string) {
     if (!activeBoard) return;
     const successful = results.filter((result) => result.ok);
-    const defaultRetriggerMode = library?.settings.defaultRetriggerMode ?? "restart";
+    const defaultRetriggerMode = library?.settings.defaultRetriggerMode ?? "stop";
     const imported = successful.map((result, index) => soundFromImport(result, activeBoard.sounds.length + index, "both", defaultRetriggerMode)).filter(Boolean) as SoundSlot[];
     updateLibrary((current) => ({
       ...current,
