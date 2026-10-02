@@ -7,6 +7,7 @@ const crypto = require("node:crypto");
 const os = require("node:os");
 const { spawn } = require("node:child_process");
 const { createCorsairBridge, isCorsairSupportedPlatform, isGKeyAccelerator } = require("./corsair.cjs");
+const { createExternalControlBridge, launcherPath } = require("./externalControl.cjs");
 const { createHotkeyEngine } = require("./hotkeys.cjs");
 const { buildCropArgs } = require("./ffmpegArgs.cjs");
 const {
@@ -106,12 +107,35 @@ const corsair = createCorsairBridge({
   }
 });
 
+const externalControl = createExternalControlBridge({
+  userData: app.getPath("userData"),
+  appVersion: app.getVersion(),
+  appPath: launcherPath(process.execPath, process.platform, app.isPackaged),
+  onStateChange: (state) => sendToMainWindow("control-status", state),
+  onCommand: ({ command, args }) => {
+    if (hotkeyCaptureActive) return { ok: false, code: "busy" };
+    if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return { ok: false, code: "unavailable" };
+    const binding = { accelerator: "" };
+    if (command === "sound.play") Object.assign(binding, { type: "sound", soundId: args.soundId });
+    else if (command === "playback.stopAll") binding.type = "stop-all";
+    else if (command === "board.activate") Object.assign(binding, { type: "board", boardId: args.boardId });
+    else if (command === "board.cycle" && args.direction !== -1) binding.type = "cycle-board";
+    else {
+      sendToMainWindow("control-command", { command, args });
+      return { ok: true };
+    }
+    sendToMainWindow("hotkey-trigger", binding);
+    return { ok: true };
+  }
+});
+
 const shutdownLifecycle = createShutdownLifecycle({
   onShutdown: () => {
     isQuitting = true;
     hotkeyCaptureActive = false;
     hotkeyEngine.stop();
     corsair.stop();
+    void externalControl.stop();
     if (updateCheckTimer) {
       clearInterval(updateCheckTimer);
       updateCheckTimer = undefined;
@@ -1005,6 +1029,14 @@ function setupAutoUpdates() {
 }
 
 app.whenReady().then(async () => {
+  await ensureLibrary();
+  if (shutdownLifecycle.isShuttingDown()) return;
+  const library = await readJson(libraryFile());
+  if (shutdownLifecycle.isShuttingDown()) return;
+  externalControl.updateLibrary(library);
+  externalControl.updateLiveState({ activeBoardId: library.activeBoardId || "", playback: [] });
+  await externalControl.start();
+  if (shutdownLifecycle.isShuttingDown()) return;
   await createWindow();
   if (shutdownLifecycle.isShuttingDown() || !mainWindow) return;
   app.on("activate", () => {
@@ -1035,11 +1067,14 @@ app.on("window-all-closed", () => {
 
 handleTrustedIpc("library:load", async () => {
   await ensureLibrary();
-  return readJson(libraryFile());
+  const library = await readJson(libraryFile());
+  externalControl.updateLibrary(library);
+  return library;
 });
 
 handleTrustedIpc("library:save", async (_event, library) => {
   await ensureLibrary();
+  externalControl.updateLibrary(library);
   await fs.writeFile(libraryFile(), JSON.stringify(library, null, 2));
   return { ok: true };
 });
@@ -1289,6 +1324,14 @@ handleTrustedIpc("hotkeys:capture", (_event, active) => {
 });
 
 handleTrustedIpc("corsair:status", async () => corsair.getState());
+
+handleTrustedIpc("control:getSettings", () => externalControl.getState());
+handleTrustedIpc("control:setSettings", (_event, patch) => externalControl.setSettings(patch));
+handleTrustedIpc("control:regenerateToken", () => externalControl.regenerateToken());
+handleTrustedIpc("control:state", (_event, state) => {
+  externalControl.updateLiveState(state);
+  return { ok: true };
+});
 
 handleTrustedIpc("app:openExternal", async (_event, url) => {
   if (!isAllowedExternalUrl(url)) return { ok: false, reason: "unsupported-url" };

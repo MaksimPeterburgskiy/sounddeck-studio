@@ -1,3 +1,4 @@
+import type { ControlPlaybackVoice } from "./controlProtocol";
 import type { AudioSettings, OutputTarget, SoundEffects, SoundSlot } from "../types";
 import { makeMicrophoneConstraints, normalizeSelectableDeviceId } from "./devices";
 import { normalizeSoundEffects } from "./model";
@@ -29,6 +30,7 @@ interface ActiveVoice {
   gains: GainNode[];
   effects: ActiveEffectChain[];
   startedAt: number;
+  epochStartedAt: number;
   fadeOutMs: number;
   trimStart: number;
   clipDuration: number;
@@ -111,7 +113,7 @@ export class AudioEngine {
   private settings: AudioSettings;
   private virtualSinkId = "";
   private virtualSinkReady = false;
-  private statusCallback: (status: EngineStatus, activeSoundIds: string[]) => void;
+  private statusCallback: (status: EngineStatus, activeSoundIds: string[], playback: ControlPlaybackVoice[]) => void;
   private processingStatusCallback: (status: MicrophoneProcessingStatus) => void;
   private processingStatus: MicrophoneProcessingStatus = disabledMicrophoneProcessingStatus;
   private deviceStatusCallback: (status: AudioDeviceStatus) => void;
@@ -119,7 +121,7 @@ export class AudioEngine {
 
   constructor(
     settings: AudioSettings,
-    statusCallback: (status: EngineStatus, activeSoundIds: string[]) => void,
+    statusCallback: (status: EngineStatus, activeSoundIds: string[], playback: ControlPlaybackVoice[]) => void,
     processingStatusCallback: (status: MicrophoneProcessingStatus) => void = () => undefined,
     deviceStatusCallback: (status: AudioDeviceStatus) => void = () => undefined
   ) {
@@ -229,6 +231,7 @@ export class AudioEngine {
       gains: [],
       effects: [],
       startedAt: performance.now(),
+      epochStartedAt: Date.now(),
       fadeOutMs: sound.fadeOutMs,
       trimStart,
       clipDuration,
@@ -315,13 +318,16 @@ export class AudioEngine {
   /** Apply new per-sound effects to any currently playing voices and preview audio. */
   setSoundEffects(soundId: string, effects: SoundEffects | undefined) {
     const normalized = normalizeSoundEffects(effects);
-    for (const voice of this.active.get(soundId) || []) {
+    const voices = this.active.get(soundId) || [];
+    for (const voice of voices) {
       const currentElapsed = this.voiceElapsed(voice);
       voice.positionOffset = currentElapsed;
       voice.startedAt = performance.now();
       voice.rate = this.effectivePlaybackRate(voice.baseRate, normalized);
+      voice.epochStartedAt = Date.now() - (currentElapsed / voice.rate) * 1000;
       for (const chain of voice.effects) this.applyEffectsToChain(chain, normalized, true);
     }
+    if (voices.length) this.emitStatus();
     if (this.previewVoice?.soundId === soundId) {
       const position = this.getPreviewPosition();
       if (position !== null) {
@@ -1145,6 +1151,12 @@ export class AudioEngine {
   }
 
   private emitStatus() {
-    this.statusCallback(this.active.size ? "playing" : "idle", [...this.active.keys()]);
+    const playback = [...this.active.values()].flat().map((voice) => ({
+      soundId: voice.soundId,
+      startedAt: voice.epochStartedAt,
+      duration: voice.clipDuration / voice.rate,
+      loop: voice.loop
+    }));
+    this.statusCallback(this.active.size ? "playing" : "idle", [...this.active.keys()], playback);
   }
 }

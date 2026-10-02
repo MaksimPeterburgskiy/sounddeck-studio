@@ -1903,3 +1903,9 @@ input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent);
   .settingsSelect { flex: 1 1 auto; }
   .settingsRowControl .volumeRow, .settingsRowControl .hotkeyCapture, .settingsSlider { width: 100%; }
 }
+
+.controlPort { width: 110px; min-height: 36px; }
+.controlToken { width: 160px; min-height: 36px; font-family: var(--font-mono); }
+.controlPort[aria-invalid="true"] { border-color: var(--danger); }
+.controlClients { display: grid; gap: 6px; color: var(--text-dim); font-size: 13px; }
+.controlClients small { color: var(--text-faint); }
