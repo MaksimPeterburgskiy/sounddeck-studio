@@ -50,14 +50,14 @@ describe("model helpers", () => {
     expect(library.settings.noiseSuppressionAttenuationDb).toBe(18);
     expect(library.settings.monitorDeviceLabel).toBe("");
     expect(library.settings.microphoneDeviceLabel).toBe("");
-    expect(library.settings.defaultRetriggerMode).toBe("restart");
+    expect(library.settings.defaultRetriggerMode).toBe("stop");
   });
 
   it("keeps a valid default retrigger mode and falls back on garbage", () => {
     const base = { version: 1, activeBoardId: "a", boards: [{ id: "a", name: "A", color: "#fff", icon: "zap", createdAt: "", updatedAt: "", sounds: [{ ...soundWithVolume("s", 1), retriggerMode: "bogus" as SoundSlot["retriggerMode"] }] }] };
     expect(normalizeLibrary({ ...base, settings: { defaultRetriggerMode: "overlap" } as SoundLibrary["settings"] }).settings.defaultRetriggerMode).toBe("overlap");
     const normalized = normalizeLibrary({ ...base, settings: { defaultRetriggerMode: "nope" } as unknown as SoundLibrary["settings"] });
-    expect(normalized.settings.defaultRetriggerMode).toBe("restart");
+    expect(normalized.settings.defaultRetriggerMode).toBe("stop");
     expect(normalized.boards[0].sounds[0].retriggerMode).toBe("restart");
     expect(normalizeRetriggerMode("stop")).toBe("stop");
     expect(normalizeRetriggerMode(undefined, "overlap")).toBe("overlap");
@@ -214,7 +214,7 @@ describe("model helpers", () => {
 
     expect(sound?.title).toBe("Airhorn");
     expect(sound?.outputTarget).toBe("both");
-    expect(sound?.retriggerMode).toBe("restart");
+    expect(sound?.retriggerMode).toBe("stop");
     expect(sound?.soloPlay).toBe(true);
     expect(soundEffectsAreDefault(sound?.effects)).toBe(true);
   });
@@ -222,7 +222,7 @@ describe("model helpers", () => {
   it("applies the requested default retrigger mode to imported sounds", () => {
     const result = { ok: true, id: "sound-2", title: "Laugh", sourcePath: "", mediaPath: "/m/sound-2.mp3", storedName: "sound-2.mp3", ext: ".mp3", mime: "audio/mpeg", size: 10 };
     expect(soundFromImport(result, 0, "both", "overlap")?.retriggerMode).toBe("overlap");
-    expect(soundFromImport(result, 0, "both", "nope" as SoundSlot["retriggerMode"])?.retriggerMode).toBe("restart");
+    expect(soundFromImport(result, 0, "both", "nope" as SoundSlot["retriggerMode"])?.retriggerMode).toBe("stop");
   });
 
   it("rejects invalid media import results", () => {

@@ -25,7 +25,7 @@ const defaultSettings: SoundLibrary["settings"] = {
   microphoneDeviceLabel: "",
   stopAllHotkey: "Ctrl+Alt+Space",
   cycleBoardsHotkey: "",
-  defaultRetriggerMode: "restart"
+  defaultRetriggerMode: "stop"
 };
 const defaultSoundOptions: Pick<SoundSlot, "fadeInMs" | "fadeOutMs" | "loop" | "soloPlay" | "retriggerMode" | "hotkey" | "outputTarget"> = {
   fadeInMs: 0,
@@ -80,7 +80,7 @@ export const RETRIGGER_MODES: { value: RetriggerMode; label: string; description
   { value: "stop", label: "Play / stop toggle", description: "Pressing again stops the sound." }
 ];
 
-export function normalizeRetriggerMode(value: unknown, fallback: RetriggerMode = "restart"): RetriggerMode {
+export function normalizeRetriggerMode(value: unknown, fallback: RetriggerMode = defaultSettings.defaultRetriggerMode): RetriggerMode {
   return RETRIGGER_MODES.some((mode) => mode.value === value) ? (value as RetriggerMode) : fallback;
 }
 
@@ -172,7 +172,7 @@ export function makeBoard(index: number): SoundBoard {
   };
 }
 
-export function soundFromImport(result: MediaImportResult, index: number, outputTarget: OutputTarget, retriggerMode: RetriggerMode = "restart"): SoundSlot | null {
+export function soundFromImport(result: MediaImportResult, index: number, outputTarget: OutputTarget, retriggerMode: RetriggerMode = defaultSettings.defaultRetriggerMode): SoundSlot | null {
   if (!result.ok || !result.id || !result.mediaPath || !result.storedName || !result.mime || !result.ext || !result.size) return null;
   const timestamp = now();
   return {
