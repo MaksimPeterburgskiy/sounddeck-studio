@@ -411,6 +411,10 @@ small { color: var(--text-dim); font-size: 12px; }
   to { transform: rotate(360deg); }
 }
 
+/* One turn per ICON_SPIN_MS in main.tsx. */
+.spin { animation: spin 0.7s linear infinite; }
+.spinCcw { animation: spin 0.7s linear infinite reverse; }
+
 /* ---------- workspace ---------- */
 
 .workspace { min-width: 0; padding: clamp(14px, 2.4vw, 28px); }

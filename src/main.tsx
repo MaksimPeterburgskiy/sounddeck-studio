@@ -1858,6 +1858,7 @@ function EffectSlider({ label, value, min, max, step, unit = "", onChange }: {
 
 function LiveEffectsEditor({ effects, onChange }: { effects?: SoundEffects; onChange: (effects: SoundEffects) => void }) {
   const normalized = normalizeSoundEffects(effects);
+  const [resetting, spinReset] = useIconSpin();
   const [openRows, setOpenRows] = useState(() => ({
     pitch: normalized.pitchEnabled,
     eq: normalized.eq.enabled,
@@ -1892,7 +1893,7 @@ function LiveEffectsEditor({ effects, onChange }: { effects?: SoundEffects; onCh
           <strong>Live effects</strong>
           <span>{effectsActive ? chips.join(" · ") : "No live effects"}</span>
         </div>
-        <button onClick={() => onChange(getDefaultSoundEffects())} disabled={!effectsChanged}><RefreshCcw size={14} /> Reset effects</button>
+        <button onClick={() => void spinReset(() => onChange(getDefaultSoundEffects()))} disabled={!effectsChanged}><RefreshCcw size={14} className={resetting ? "spinCcw" : ""} /> Reset effects</button>
       </header>
       <div className="effectRows">
         <details className="effectRow" open={openRows.pitch} onToggle={toggleRow("pitch")}>
@@ -1949,6 +1950,7 @@ function ClipEditor({ sound, engine, onChange, onClose, mediaUsedElsewhere }: {
   mediaUsedElsewhere: (mediaPath: string) => boolean;
 }) {
   const [buffer, setBuffer] = useState<AudioBuffer | null>(null);
+  const [resetting, spinReset] = useIconSpin();
   const [loadError, setLoadError] = useState(false);
   const [previewState, setPreviewState] = useState<"stopped" | "playing" | "paused">("stopped");
   const [playheadSec, setPlayheadSec] = useState(0);
@@ -2216,7 +2218,7 @@ function ClipEditor({ sound, engine, onChange, onClose, mediaUsedElsewhere }: {
             {previewState === "playing" ? <Pause size={15} /> : <Play size={15} />}{previewState === "playing" ? "Pause" : previewState === "paused" ? "Resume" : "Play"}
           </button>
           <button onClick={restartPreview} disabled={!duration}><RotateCcw size={15} /> Restart</button>
-          <button onClick={() => onChange({ trimStartSec: 0, trimEndSec: undefined, playbackRate: 1 })} disabled={!edited}><RefreshCcw size={15} /> Reset</button>
+          <button onClick={() => void spinReset(() => onChange({ trimStartSec: 0, trimEndSec: undefined, playbackRate: 1 }))} disabled={!edited}><RefreshCcw size={15} className={resetting ? "spinCcw" : ""} /> Reset</button>
           <button className="clipDone" onClick={openDone} disabled={!duration}><Save size={15} /> Done</button>
         </div>
       </div>
@@ -2455,6 +2457,31 @@ function SettingsPanel({ settings, soundCount, startupSettings, startupUpdateSta
   );
 }
 
+const ICON_SPIN_MS = 700;
+
+// Spins an icon while an action runs, always finishing a full rotation so instant actions still register visually.
+function useIconSpin() {
+  const [spinning, setSpinning] = useState(false);
+  const spinningRef = useRef(false);
+  const spin = useCallback(async (action: () => unknown) => {
+    if (spinningRef.current) return;
+    spinningRef.current = true;
+    setSpinning(true);
+    const startedAt = performance.now();
+    try {
+      await action();
+    } finally {
+      const elapsed = performance.now() - startedAt;
+      const remaining = Math.max(1, Math.ceil(elapsed / ICON_SPIN_MS)) * ICON_SPIN_MS - elapsed;
+      window.setTimeout(() => {
+        spinningRef.current = false;
+        setSpinning(false);
+      }, remaining);
+    }
+  }, []);
+  return [spinning, spin] as const;
+}
+
 function DevicePanel({ library, inputDevices, outputDevices, defaultInputLabel, defaultOutputLabel, virtualOutputLabel, platform, candidate, processingStatus, deviceStatus, preferredMicrophoneLabel, activeMicrophoneLabel, preferredMonitorLabel, activeMonitorLabel, onRefresh, onChange }: {
   library: SoundLibrary;
   inputDevices: MediaDeviceInfo[];
@@ -2474,6 +2501,8 @@ function DevicePanel({ library, inputDevices, outputDevices, defaultInputLabel, 
   onChange: (patch: Partial<SoundLibrary["settings"]>) => void;
 }) {
   const settings = library.settings;
+  const [refreshing, spinRefresh] = useIconSpin();
+  const [repairing, spinRepair] = useIconSpin();
   const defaultInputOption = defaultInputLabel ? `System default (${defaultInputLabel})` : "System default";
   const defaultOutputOption = defaultOutputLabel ? `System default (${defaultOutputLabel})` : "System default";
   const defaultOutputIsVirtual = Boolean(
@@ -2520,7 +2549,9 @@ function DevicePanel({ library, inputDevices, outputDevices, defaultInputLabel, 
     });
   };
   const refreshButton = (
-    <button type="button" className="settingsButton" onClick={() => void onRefresh()}><RefreshCw size={14} /> Refresh devices</button>
+    <button type="button" className="settingsButton" onClick={() => void spinRefresh(onRefresh)} aria-busy={refreshing}>
+      <RefreshCw size={14} className={refreshing ? "spin" : ""} /> Refresh devices
+    </button>
   );
   return (
     <div className="settingsPanel">
@@ -2533,7 +2564,7 @@ function DevicePanel({ library, inputDevices, outputDevices, defaultInputLabel, 
             <>
               {refreshButton}
               {!routeReady && route.repairUrl && (
-                <button type="button" className="settingsButton" onClick={() => void window.sounddeck.openExternal(route.repairUrl!)}><RefreshCcw size={14} /> Repair audio driver</button>
+                <button type="button" className="settingsButton" onClick={() => void spinRepair(() => window.sounddeck.openExternal(route.repairUrl!))}><RefreshCcw size={14} className={repairing ? "spinCcw" : ""} /> Repair audio driver</button>
               )}
             </>
           }
