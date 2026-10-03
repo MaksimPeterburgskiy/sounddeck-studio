@@ -70,8 +70,8 @@ export class Volume extends LiveAction {
   }
 
   private atLimit(repeat: Repeat): boolean {
-    const value = this.connection.snapshot?.volumes?.[repeat.bus]?.value;
-    return value !== undefined && (repeat.delta > 0 ? value >= 1 : value <= 0);
+    const level = this.connection.snapshot?.volumes?.[repeat.bus];
+    return level !== undefined && !level.muted && (repeat.delta > 0 ? level.value >= 1 : level.value <= 0);
   }
 
   private async drain(id: string): Promise<void> {
