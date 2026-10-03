@@ -22,7 +22,7 @@ const { createMacTrayTemplateImage, MAC_TRAY_ICON_FILENAME } = require("./trayIc
 const { createShutdownLifecycle, registerWindowShutdown } = require("./shutdownLifecycle.cjs");
 const { createUpdateInstallLifecycle } = require("./updateInstallLifecycle.cjs");
 const { installedChannel, isStalePayload, normalizeChannelPreference, resolveUpdaterFlags } = require("./updateChannel.cjs");
-const { getWindowsStartupState, hasStartupArg, startupLoginItemOptions, STARTUP_ARG, WINDOWS_STARTUP_NAME } = require("./startupSettings.cjs");
+const { getWindowsStartupState, hasStartupArg, hasExternalLaunchArg, shouldStartHidden, startupLoginItemOptions, STARTUP_ARG, WINDOWS_STARTUP_NAME } = require("./startupSettings.cjs");
 const {
   sanitizeName,
   inferMime,
@@ -49,6 +49,7 @@ if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
   app.on("second-instance", (_event, argv) => {
+    if (hasExternalLaunchArg(argv)) return;
     if (!hasStartupArg(argv)) {
       showMainWindow();
       return;
@@ -126,7 +127,7 @@ function resetControlRenderer() {
 const externalControl = createExternalControlBridge({
   userData: app.getPath("userData"),
   appVersion: app.getVersion(),
-  appPath: launcherPath(process.execPath, process.platform, app.isPackaged),
+  appPath: launcherPath(process.execPath, process.platform, app.isPackaged, process.env),
   onStateChange: (state) => sendToMainWindow("control-status", state),
   onCommand: ({ command, args }, signal) => {
     if (hotkeyCaptureActive) return { ok: false, code: "busy" };
@@ -804,7 +805,7 @@ async function createWindow() {
   Menu.setApplicationMenu(null);
   const startupSettings = await getStartupSettings();
   if (shutdownLifecycle.isShuttingDown()) return;
-  const startHidden = Boolean(startupSettings.enabled && startupSettings.wasOpenedAtLogin && startupSettings.hideOnStartup && !pendingShowMainWindow);
+  const startHidden = shouldStartHidden(startupSettings, pendingShowMainWindow);
   const window = new BrowserWindow({
     width: 1360,
     height: 860,

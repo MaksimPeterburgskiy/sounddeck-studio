@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import startupSettings from "./startupSettings.cjs";
 
-const { STARTUP_ARG, WINDOWS_STARTUP_NAME, findWindowsStartupLaunchItem, getWindowsStartupState, hasStartupArg, startupLoginItemOptions } = startupSettings;
+const { EXTERNAL_LAUNCH_ARG, hasExternalLaunchArg, shouldStartHidden, STARTUP_ARG, WINDOWS_STARTUP_NAME, findWindowsStartupLaunchItem, getWindowsStartupState, hasStartupArg, startupLoginItemOptions } = startupSettings;
 
 const executablePath = "C:\\Program Files\\SoundDeck Studio\\SoundDeck Studio.exe";
 
@@ -102,5 +102,22 @@ describe("getWindowsStartupState", () => {
       registered: false,
       approved: false
     });
+  });
+});
+
+
+describe("external control launches", () => {
+  it("recognizes only the exact external launch argument", () => {
+    expect(hasExternalLaunchArg(["app", EXTERNAL_LAUNCH_ARG])).toBe(true);
+    expect(hasExternalLaunchArg(["app", STARTUP_ARG])).toBe(false);
+    expect(hasExternalLaunchArg(["app", EXTERNAL_LAUNCH_ARG + "=false"])).toBe(false);
+  });
+
+  it("starts hidden independently of login preferences, while honoring a pending user open", () => {
+    const settings = { enabled: false, wasOpenedAtLogin: false, hideOnStartup: false };
+    expect(shouldStartHidden(settings, false, [EXTERNAL_LAUNCH_ARG])).toBe(true);
+    expect(shouldStartHidden(settings, true, [EXTERNAL_LAUNCH_ARG])).toBe(false);
+    expect(shouldStartHidden(settings, false, [])).toBe(false);
+    expect(shouldStartHidden({ enabled: true, wasOpenedAtLogin: true, hideOnStartup: true }, false, [])).toBe(true);
   });
 });
