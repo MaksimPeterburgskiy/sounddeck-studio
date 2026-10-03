@@ -75,7 +75,7 @@ export function keyImage(input: KeyImageInput): string {
     ? `<g data-icon="${input.icon}" transform="translate(36 28) scale(3)" color="${iconColor}" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${keyIcons[input.icon]}</g>`
     : image
       ? `<image data-image="custom" href="${escapeXml(image)}" xlink:href="${escapeXml(image)}" x="8" y="8" width="128" height="128" preserveAspectRatio="xMidYMid slice"/><path d="M8 8H136V136H8Z M20 8H124Q136 8 136 20V124Q136 136 124 136H20Q8 136 8 124V20Q8 8 20 8Z" fill="#11181b" fill-rule="evenodd"/>`
-      : `<text data-glyph="initial" x="72" y="80" text-anchor="middle" fill="${glyphColor(color)}" font-family="Arial, sans-serif" font-size="54" font-weight="700">${escapeXml(glyph)}</text>`;
+      : glyph ? `<text data-glyph="initial" x="72" y="80" text-anchor="middle" fill="${glyphColor(color)}" font-family="Arial, sans-serif" font-size="54" font-weight="700">${escapeXml(glyph)}</text>` : "";
   const bar = input.playing
     ? `<rect data-progress-track="top" x="16" y="12" width="${BAR_WIDTH}" height="5" rx="2.5" fill="#071916" fill-opacity="0.85"/>${indeterminate
       ? `<rect x="${16 + Math.round((BAR_WIDTH - 30) * (1 - Math.abs(loopStep / 8 - 1)))}" y="12" width="30" height="5" rx="2.5" fill="#62ffe7" data-progress="indeterminate"/>`

@@ -122,6 +122,61 @@
       ],
       "PropertyInspectorPath": "ui/toggle-setting.html",
       "DisableAutomaticStates": true
+    },
+    {
+      "UUID": "com.sounddeck.studio.board-slot",
+      "Name": "Board slot",
+      "SupportedInMultiActions": false,
+      "Tooltip": "Play a board slot, following the active board or a pinned board.",
+      "Icon": "imgs/board-slot",
+      "Controllers": [
+        "Keypad"
+      ],
+      "UserTitleEnabled": true,
+      "States": [
+        {
+          "Image": "imgs/board-slot-key",
+          "TitleAlignment": "bottom",
+          "FontSize": 13
+        }
+      ],
+      "PropertyInspectorPath": "ui/board-slot.html"
+    },
+    {
+      "UUID": "com.sounddeck.studio.page-next",
+      "Name": "Next page",
+      "SupportedInMultiActions": false,
+      "Tooltip": "Show the next page of board slots on this device.",
+      "Icon": "imgs/page-next",
+      "Controllers": [
+        "Keypad"
+      ],
+      "UserTitleEnabled": true,
+      "States": [
+        {
+          "Image": "imgs/page-next-key",
+          "TitleAlignment": "bottom",
+          "FontSize": 13
+        }
+      ]
+    },
+    {
+      "UUID": "com.sounddeck.studio.page-previous",
+      "Name": "Previous page",
+      "SupportedInMultiActions": false,
+      "Tooltip": "Show the previous page of board slots on this device.",
+      "Icon": "imgs/page-previous",
+      "Controllers": [
+        "Keypad"
+      ],
+      "UserTitleEnabled": true,
+      "States": [
+        {
+          "Image": "imgs/page-previous-key",
+          "TitleAlignment": "bottom",
+          "FontSize": 13
+        }
+      ]
     }
   ]
 }

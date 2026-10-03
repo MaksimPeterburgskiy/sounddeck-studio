@@ -6,6 +6,8 @@ export type ActionSettings = {
   boardId?: string;
   soundId?: string;
   title?: string;
+  /** Empty/omitted means auto; fixed slots are one-based. */
+  slot?: string | number;
   key?: ControlSettingKey;
 };
 

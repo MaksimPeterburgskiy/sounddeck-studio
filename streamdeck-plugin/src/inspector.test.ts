@@ -97,6 +97,56 @@ describe("play sound inspector", () => {
   });
 });
 
+describe("board slot inspector", () => {
+  it.each(["board", "slot"])("preserves both selections through stale echoes when %s changes first", async (firstControl) => {
+    const initial = { boardId: "a", slot: 1, inspectorRevision: 5 };
+    const ui = inspector(initial, "board-slot"); await flush();
+    expect(ui.elements.board.value).toBe("a");
+    expect(ui.elements.slot.value).toBe("1");
+    expect(ui.client.setSettings).not.toHaveBeenCalled();
+    for (const id of firstControl === "board" ? ["board", "slot"] : ["slot", "board"]) {
+      ui.elements[id].value = id === "board" ? "b" : "2";
+    }
+    await flush(); // both sends settle before Stream Deck echoes either snapshot
+    const first = ui.client.setSettings.mock.calls[0][0];
+    const latest = ui.client.setSettings.mock.calls[1][0];
+    expect(latest).toEqual({ boardId: "b", slot: "2", inspectorRevision: 7 });
+    ui.receive(first);
+    ui.receive(initial);
+    expect(ui.elements.board.value).toBe("b");
+    expect(ui.elements.slot.value).toBe("2");
+    ui.elements.board.value = "c";
+    await flush();
+    expect(ui.client.setSettings).toHaveBeenLastCalledWith({ boardId: "c", slot: "2", inspectorRevision: 8 });
+    ui.receive(ui.client.setSettings.mock.lastCall![0]);
+    ui.receive(latest); // older snapshots stay stale after the latest acknowledgement
+    expect(ui.elements.board.value).toBe("c");
+    expect(ui.elements.slot.value).toBe("2");
+    ui.elements.slot.value = "3";
+    await flush();
+    expect(ui.client.setSettings).toHaveBeenLastCalledWith({ boardId: "c", slot: "3", inspectorRevision: 9 });
+    expect(ui.client.setSettings).toHaveBeenCalledTimes(4);
+    const reopened = inspector(ui.client.setSettings.mock.lastCall![0] as Record<string, string | number>, "board-slot"); await flush();
+    expect(reopened.elements.board.value).toBe("c");
+    expect(reopened.elements.slot.value).toBe("3");
+    expect(reopened.client.setSettings).not.toHaveBeenCalled();
+  });
+  it.each([{}, { slot: 1 }, { slot: "1" }])("initializes auto and fixed slots without saving: %j", async (initial) => {
+    const ui = inspector(initial, "board-slot"); await flush();
+    expect(ui.elements.board.value).toBe("");
+    expect(ui.elements.slot.value).toBe(initial.slot === undefined ? "" : "1");
+    ui.elements.slot.value = ui.elements.slot.value;
+    await flush();
+    expect(ui.client.setSettings).not.toHaveBeenCalled();
+    ui.elements.slot.value = "2";
+    ui.elements.slot.value = "";
+    await flush();
+    expect(ui.client.setSettings.mock.calls).toEqual([
+      [{ slot: "2", inspectorRevision: 1 }], [{ slot: "", inspectorRevision: 2 }],
+    ]);
+  });
+});
+
 describe("single-picker inspectors", () => {
   it.each([
     { page: "switch-board", id: "board", field: "boardId", initial: "a", first: "b", latest: "c", next: "d" },
