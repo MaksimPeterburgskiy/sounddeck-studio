@@ -392,6 +392,36 @@ describe("main-process external control lifecycle", () => {
     await app.bridge.stop();
   });
 
+  it.each([
+    [{ command: "sound.play", args: { soundId: "sound-a" } }, { ok: true }],
+    [{ command: "setting.toggle", args: { key: "micPassthrough" } }, { ok: true, data: { key: "micPassthrough", value: true } }],
+    [{ command: "volume.mute", args: { bus: "micVirtual" } }, { ok: true, data: { bus: "micVirtual", value: 0.6, muted: true } }]
+  ])("isolates pending %j replies and readiness between documents", async (command, result) => {
+    const app = await boot();
+    await app.loaded();
+    await app.invoke("control:getSettings");
+    app.ready();
+    const token = app.window.webContents.send.mock.calls.findLast(([channel]) => channel === "control-ready-token")[1];
+    const outgoing = app.onCommand(command);
+    const outgoingRequest = app.window.webContents.send.mock.lastCall[1];
+    app.window.webContents.emit("did-start-navigation", { isMainFrame: true, isSameDocument: false });
+    expect(await outgoing).toEqual({ ok: false, code: "unavailable" });
+    expect(app.invoke("control:ready", app.event, token)).toEqual({ ok: false });
+    expect(app.onCommand(command)).toEqual({ ok: false, code: "unavailable" });
+    app.window.webContents.emit("did-navigate");
+    app.window.webContents.emit("did-finish-load");
+    expect(app.invoke("control:ready", app.event, token)).toEqual({ ok: false });
+    expect(app.onCommand(command)).toEqual({ ok: false, code: "unavailable" });
+    expect(app.ready()).toEqual({ ok: true });
+    const current = app.onCommand(command);
+    const currentRequest = app.window.webContents.send.mock.lastCall[1];
+    expect(currentRequest.requestId).not.toBe(outgoingRequest.requestId);
+    expect(app.invoke("control:result", app.event, outgoingRequest.requestId, result)).toEqual({ ok: false });
+    expect(app.invoke("control:result", app.event, currentRequest.requestId, result)).toEqual({ ok: true });
+    expect(await current).toEqual(result);
+    await app.bridge.stop();
+  });
+
   it.each([{ ok: true }, { ok: false, code: "unavailable" }, { ok: false, code: "internal-error" }])("waits for the renderer playback result %j", async (result) => {
     const app = await boot();
     await app.loaded();

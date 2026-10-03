@@ -44,7 +44,7 @@ import {
   Waves,
   X
 } from "lucide-react";
-import { applyAudioControlCommand } from "./lib/controlSettings";
+import { applyAudioControlCommand, rollbackAudioControlSettings } from "./lib/controlSettings";
 import { createControlReplies } from "./lib/controlReplies";
 import { AudioEngine } from "./lib/audioEngine";
 import { CONTROL_DEFAULT_PORT } from "./lib/controlProtocol";
@@ -607,7 +607,12 @@ function App() {
       const current = libraryRef.current;
       if (!current) return { ok: false, code: "unavailable" };
       const applied = applyAudioControlCommand(current.settings, request);
-      const reply = controlRepliesRef.current.add({ ok: true, data: applied.data });
+      const reply = controlRepliesRef.current.add({ ok: true, data: applied.data }, () => {
+        updateLibrary((latest) => {
+          const settings = rollbackAudioControlSettings(latest.settings, current.settings, applied.settings);
+          return settings === latest.settings ? latest : { ...latest, settings };
+        });
+      });
       updateLibrary((latest) => ({ ...latest, settings: applied.settings }));
       return reply;
     }

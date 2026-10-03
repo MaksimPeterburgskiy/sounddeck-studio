@@ -58,3 +58,28 @@ describe("preload control readiness", () => {
   });
 
 });
+
+describe("preload control acknowledgements", () => {
+  it.each([
+    [{ command: "sound.play", args: { soundId: "sound-a" } }, { ok: true }],
+    [{ command: "setting.toggle", args: { key: "micPassthrough" } }, { ok: true, data: { key: "micPassthrough", value: true } }],
+    [{ command: "volume.mute", args: { bus: "micVirtual" } }, { ok: true, data: { bus: "micVirtual", value: 0.6, muted: true } }]
+  ])("acknowledges %j only after its renderer operation completes", async (command, result) => {
+    const { ipcRenderer, sounddeck } = preload();
+    ipcRenderer.emit("control-ready-token", {}, "current-document");
+    await sounddeck.controlReady();
+    expect(ipcRenderer.invoke).toHaveBeenLastCalledWith("control:ready", "current-document");
+    ipcRenderer.invoke.mockClear();
+    let finish;
+    const callback = vi.fn(() => new Promise((resolve) => { finish = resolve; }));
+    const unsubscribe = sounddeck.onControlCommand(callback);
+    ipcRenderer.emit("control-command", {}, { ...command, requestId: "request-a" });
+    expect(callback).toHaveBeenCalledExactlyOnceWith({ ...command, requestId: "request-a" });
+    await Promise.resolve();
+    expect(ipcRenderer.invoke).not.toHaveBeenCalled();
+    finish(result);
+    await vi.waitFor(() => expect(ipcRenderer.invoke).toHaveBeenCalledExactlyOnceWith("control:result", "request-a", result, "current-document"));
+    unsubscribe();
+    expect(ipcRenderer.listenerCount("control-command")).toBe(0);
+  });
+});
