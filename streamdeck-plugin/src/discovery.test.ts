@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { mkdtemp, mkdir, rm, utimes, writeFile } from "node:fs/promises";
 import path from "node:path";
+import os from "node:os";
 import { discover, discoveryPaths, discoveryStatus, parseDiscovery, protocolLabel } from "./discovery";
 
 const state = { enabled: true, protocol: 1, host: "127.0.0.1", port: 41730, token: "token", allowLan: false, appVersion: "1.0", appPath: "/Applications/SoundDeck Studio.app" };
@@ -19,7 +20,7 @@ describe("discovery", () => {
   });
 
   it("selects the newest file and does not fall back to an old token if it becomes malformed", async () => {
-    const home = await mkdtemp(path.join(process.cwd(), ".discovery-test-"));
+    const home = await mkdtemp(path.join(os.tmpdir(), ".discovery-test-"));
     directories.push(home);
     const options = { platform: "linux" as const, home, env: {} };
     expect(await discover(options)).toBeNull();
@@ -44,7 +45,7 @@ describe("discovery", () => {
     expect(discoveryStatus({ path: "state", state: { ...parsed, enabled: false } })).toBe("disabled");
     expect(discoveryStatus({ path: "state", state: parsed })).toBe("offline");
     expect(discoveryStatus({ path: "state", state: { ...parsed, protocol: 2 } })).toBe("protocol-mismatch");
-    expect(protocolLabel(2)).toBe("Update plugin");
-    expect(protocolLabel(0)).toBe("Update SoundDeck");
+    expect(protocolLabel(2)).toBe("Update\nplugin");
+    expect(protocolLabel(0)).toBe("Update\napp");
   });
 });

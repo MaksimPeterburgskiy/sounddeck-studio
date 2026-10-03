@@ -10,3 +10,12 @@ export function resolveSound(library: ControlLibrary, binding: SoundBinding): Li
   if (!binding.boardId || !binding.title) return undefined;
   return library.boards.find((board) => board.id === binding.boardId)?.sounds.find((sound) => sound.title === binding.title);
 }
+
+/** Keep import fallback metadata current while the stable id still resolves. */
+export function currentSoundBinding<T extends SoundBinding>(library: ControlLibrary, binding: T): T {
+  const sound = resolveSound(library, binding);
+  if (!sound) return binding;
+  const board = library.boards.find((item) => item.sounds.includes(sound))!;
+  return binding.soundId === sound.id && binding.boardId === board.id && binding.title === sound.title
+    ? binding : { ...binding, soundId: sound.id, boardId: board.id, title: sound.title };
+}

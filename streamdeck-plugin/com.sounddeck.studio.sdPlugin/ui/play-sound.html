@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <title>SoundDeck Studio</title>
-  <script src="https://sdpi-components.dev/releases/v4/sdpi-components.js"></script>
+  <script src="sdpi-components.js"></script>
   <link rel="stylesheet" href="inspector.css">
 </head>
 <body>
@@ -11,7 +11,7 @@
     <sdpi-select id="board" datasource="boards" placeholder="Choose a board" loading="Loading boards…" hot-reload show-refresh></sdpi-select>
   </sdpi-item>
   <sdpi-item label="Sound">
-    <sdpi-select id="sound" setting="soundId" label-setting="title" datasource="sounds" placeholder="Choose a sound" loading="Loading sounds…" hot-reload show-refresh></sdpi-select>
+    <sdpi-select id="sound" datasource="sounds" placeholder="Choose a sound" loading="Loading sounds…" hot-reload show-refresh></sdpi-select>
   </sdpi-item>
   <p id="status" role="status"></p>
   <script src="inspector.js"></script>

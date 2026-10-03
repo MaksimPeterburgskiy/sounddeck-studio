@@ -1,9 +1,10 @@
 import { defineConfig } from "vitest/config";
+import { streamDeckTestTransform } from "./streamdeck-plugin/testTransform.mjs";
 import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   base: "./",
-  plugins: [react()],
+  plugins: [react(), streamDeckTestTransform()],
   server: {
     port: 5173,
     strictPort: true

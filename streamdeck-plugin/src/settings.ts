@@ -8,11 +8,11 @@ export type ActionSettings = {
 };
 
 export const settingLabels: Record<ControlSettingKey, string> = {
-  micPassthrough: "Mic passthrough",
-  soundboardToVirtualMic: "Sounds to virtual mic",
-  noiseSuppressionEnabled: "Noise suppression",
-  echoCancellationEnabled: "Echo cancellation",
-  monitorToHeadphones: "Monitor to headphones"
+  micPassthrough: "Mic\npass-thru",
+  soundboardToVirtualMic: "Virtual\nmic",
+  noiseSuppressionEnabled: "Noise\nfilter",
+  echoCancellationEnabled: "Echo\ncancel",
+  monitorToHeadphones: "Monitor\nphones"
 };
 
 export function settingKey(value: unknown): ControlSettingKey | undefined {

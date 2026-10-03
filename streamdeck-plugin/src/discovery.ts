@@ -54,5 +54,5 @@ export function discoveryStatus(file: DiscoveryFile | null): ConnectionStatus {
 }
 
 export function protocolLabel(serverProtocol: number): string {
-  return serverProtocol > CONTROL_PROTOCOL_VERSION ? "Update plugin" : "Update SoundDeck";
+  return serverProtocol > CONTROL_PROTOCOL_VERSION ? "Update\nplugin" : "Update\napp";
 }

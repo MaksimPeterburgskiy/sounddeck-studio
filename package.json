@@ -22,6 +22,7 @@
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "validate:security": "node scripts/validate-security.mjs",
+    "version:streamdeck": "node streamdeck-plugin/scripts/version.mjs",
     "build:streamdeck": "pnpm --filter @sounddeck/streamdeck-plugin build"
   },
   "build": {

@@ -1,2 +1,3 @@
 import { defineConfig } from "vitest/config";
-export default defineConfig({ test: { environment: "node", include: ["src/**/*.test.ts"] } });
+import { streamDeckTestTransform } from "./testTransform.mjs";
+export default defineConfig({ plugins: [streamDeckTestTransform()], test: { environment: "node", include: ["src/**/*.test.ts"] } });

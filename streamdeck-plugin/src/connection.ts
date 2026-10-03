@@ -51,9 +51,9 @@ export class Connection {
 
   get statusLabel(): string {
     switch (this.status) {
-      case "not-installed": return "SoundDeck not installed";
-      case "disabled": return "Enable in Settings";
-      case "offline": return "SoundDeck offline";
+      case "not-installed": return "Not\ninstalled";
+      case "disabled": return "Enable\nin app";
+      case "offline": return "Offline";
       case "auth-error": return "Re-pair";
       case "protocol-mismatch": return protocolLabel(this.serverProtocol);
       case "connected": return "Connected";
