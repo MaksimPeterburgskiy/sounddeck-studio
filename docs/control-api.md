@@ -74,7 +74,7 @@ Responses carry the same ID:
 {"type":"result","id":"c7","ok":false,"code":"not-found"}
 ```
 
-A successful `sound.play` result confirms the sound's tap/retrigger action after the latest audio route configuration settles, not audio completion. If no output route is enabled for the sound, it returns `unavailable`. Other playback/board results acknowledge dispatch to the app. Commands respect the sound's existing tap/retrigger behavior. Trigger commands return `busy` while a hotkey is being captured and `unavailable` if the renderer is absent or still initializing, including during a reload; cached library/image queries still work.
+A successful `sound.play` result confirms the sound's tap/retrigger action after the latest audio route configuration settles, not audio completion. If no output route is enabled for the sound, it returns `unavailable`. Disconnecting cancels that client’s plays that have not started; voices already started continue. Stops cancel earlier queued plays, while later plays remain queued. Other playback/board results acknowledge dispatch to the app. Commands respect the sound's existing tap/retrigger behavior. Trigger commands return `busy` while a hotkey is being captured and `unavailable` if the renderer is absent or still initializing, including during a reload; cached library/image queries still work.
 
 | Command | Args | Result data |
 | --- | --- | --- |
@@ -105,7 +105,7 @@ Each playback entry represents a voice, so overlapping voices can repeat a sound
 
 ## HTTP
 
-Every endpoint requires `Authorization: Bearer <token>`. GET responses are the snapshot/library directly. POST responses are `{ok:true}` or `{ok:false,code}`. JSON bodies may be omitted for commands with no body arguments.
+Every endpoint requires `Authorization: Bearer <token>`. GET responses are the snapshot/library directly. POST responses are `{ok:true}` or `{ok:false,code}`. JSON bodies may be omitted for commands with no body arguments. Headers and bodies have a 10-second receive deadline; a fully received command has no socket inactivity timeout while playback preparation is pending.
 
 | Method | Path | JSON body |
 | --- | --- | --- |

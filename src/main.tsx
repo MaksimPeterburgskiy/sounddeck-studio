@@ -128,6 +128,7 @@ function App() {
   const startupSettingsRequestTokenRef = useRef(0);
   const engineRef = useRef<AudioEngine | null>(null);
   const audioConfigurationRef = useRef<Promise<void> | null>(null);
+  const controlRequests = useRef(new Map<string, AbortController>());
   const queueSoundPlay = useMemo(() => createSoundPlayQueue(), []);
   const stopSound = useCallback((soundId: string) => {
     queueSoundPlay.cancel(soundId);
@@ -295,6 +296,7 @@ function App() {
 
   useEffect(() => {
     const disposeAudio = () => {
+      queueSoundPlay.cancelAll();
       const engine = engineRef.current;
       engineRef.current = null;
       void engine?.dispose();
@@ -540,32 +542,35 @@ function App() {
     void registerHotkeys(library);
   }, [library, draggingSoundId, registerHotkeys, corsairConnected]);
 
-  const triggerSound = useCallback((sound: SoundSlot, external = false): Promise<ControlPlaybackResult> => queueSoundPlay(sound.id, async (signal) => {
+  const triggerSound = useCallback((sound: SoundSlot, external = false, cancellation?: AbortSignal): Promise<ControlPlaybackResult> => queueSoundPlay(sound.id, async (signal) => {
     try {
       if (signal.aborted) return { ok: false, code: "unavailable" };
       if (external) await waitForAudioConfiguration(() => audioConfigurationRef.current);
       if (signal.aborted) return { ok: false, code: "unavailable" };
       if (sound.retriggerMode === "stop" && engineRef.current?.isPlaying(sound.id)) {
-        stopSound(sound.id);
+        engineRef.current.stop(sound.id);
         setMessage(`Stopped ${sound.title}`);
         return { ok: true };
       }
       const started = await engineRef.current?.play(sound, signal);
-      if (signal.aborted) return { ok: false, code: "unavailable" };
-      setMessage(started === false ? `No output route enabled for ${sound.title}` : `Triggered ${sound.title}`);
-      if (external && !started) return { ok: false, code: "unavailable" };
-      if (!sound.duration || !sound.waveform) {
-        const buffer = await engineRef.current?.preload(sound);
-        if (buffer) updateSound(sound.id, { duration: buffer.duration, waveform: makeWaveform(buffer), updatedAt: now() });
+      if (!started) {
+        setMessage(`No output route enabled for ${sound.title}`);
+        return { ok: false, code: "unavailable" };
       }
-      return started ? { ok: true } : { ok: false, code: "unavailable" };
+      setMessage(`Triggered ${sound.title}`);
+      if (!sound.duration || !sound.waveform) {
+        void engineRef.current?.preload(sound).then((buffer) => {
+          updateSound(sound.id, { duration: buffer.duration, waveform: makeWaveform(buffer), updatedAt: now() });
+        }).catch(() => undefined);
+      }
+      return { ok: true };
     } catch (error) {
       if (signal.aborted) return { ok: false, code: "unavailable" };
       setMessage(`Could not play ${sound.title}`);
       console.error(error);
       return { ok: false, code: "internal-error" };
     }
-  }), [activeBoard?.id, queueSoundPlay, stopSound]);
+  }, cancellation), [activeBoard?.id, queueSoundPlay]);
 
   useEffect(() => {
     return window.sounddeck.onHotkeyTrigger((binding) => {
@@ -593,11 +598,20 @@ function App() {
   }, [library, triggerSound, stopAllSounds]);
 
   useEffect(() => window.sounddeck.onControlCommand((request) => {
+    if (request.command === "sound.cancel") {
+      controlRequests.current.get(request.requestId)?.abort();
+      return;
+    }
     const { command, args } = request;
     if (command === "sound.play") {
       const sound = library?.boards.flatMap((board) => board.sounds).find((candidate) => candidate.id === args.soundId);
-      const result = sound ? triggerSound(sound, true) : Promise.resolve<ControlPlaybackResult>({ ok: false, code: "not-found" });
-      void result.then((result) => window.sounddeck.completeControlPlayback(request.requestId, result)).catch(() => undefined);
+      const cancellation = new AbortController();
+      controlRequests.current.set(request.requestId, cancellation);
+      const result = sound ? triggerSound(sound, true, cancellation.signal) : Promise.resolve<ControlPlaybackResult>({ ok: false, code: "not-found" });
+      void result.then((result) => {
+        controlRequests.current.delete(request.requestId);
+        return window.sounddeck.completeControlPlayback(request.requestId, result);
+      }).catch(() => undefined);
       return;
     }
     if (command === "sound.stop") {

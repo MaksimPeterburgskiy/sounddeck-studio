@@ -1,14 +1,14 @@
 const { contextBridge, ipcRenderer, webUtils } = require("electron");
 
-// Each preload belongs to one document. Retain its token so a late readiness
-// promise from an outgoing document cannot make the next document ready.
+// Each preload belongs to one document. Retain its token so late readiness,
+// state updates or command results from an outgoing document cannot own the next one.
 const controlReadyToken = new Promise((resolve) => {
   ipcRenderer.once("control-ready-token", (_event, token) => resolve(token));
 });
 
 contextBridge.exposeInMainWorld("sounddeck", {
-  loadLibrary: () => ipcRenderer.invoke("library:load"),
-  saveLibrary: (library) => ipcRenderer.invoke("library:save", library),
+  loadLibrary: () => controlReadyToken.then((token) => ipcRenderer.invoke("library:load", token)),
+  saveLibrary: (library) => controlReadyToken.then((token) => ipcRenderer.invoke("library:save", library, token)),
   exportBoard: (board) => ipcRenderer.invoke("board:export", board),
   importBoard: () => ipcRenderer.invoke("board:import"),
   revealLibrary: () => ipcRenderer.invoke("library:reveal"),
@@ -20,7 +20,7 @@ contextBridge.exposeInMainWorld("sounddeck", {
   cropMedia: (payload) => ipcRenderer.invoke("media:crop", payload),
   saveRecording: (payload) => ipcRenderer.invoke("media:saveRecording", payload),
   registerHotkeys: (bindings) => ipcRenderer.invoke("hotkeys:register", bindings),
-  setHotkeyCapture: (active) => ipcRenderer.invoke("hotkeys:capture", active),
+  setHotkeyCapture: (active) => controlReadyToken.then((token) => ipcRenderer.invoke("hotkeys:capture", active, token)),
   openExternal: (url) => ipcRenderer.invoke("app:openExternal", url),
   getVersion: () => ipcRenderer.invoke("app:getVersion"),
   getPlatform: () => ipcRenderer.invoke("app:getPlatform"),
@@ -46,8 +46,8 @@ contextBridge.exposeInMainWorld("sounddeck", {
   getControlSettings: () => ipcRenderer.invoke("control:getSettings"),
   setControlSettings: (patch) => ipcRenderer.invoke("control:setSettings", patch),
   regenerateControlToken: () => ipcRenderer.invoke("control:regenerateToken"),
-  pushControlState: (state) => ipcRenderer.invoke("control:state", state),
-  completeControlPlayback: (requestId, result) => ipcRenderer.invoke("control:playbackResult", requestId, result),
+  pushControlState: (state) => controlReadyToken.then((token) => ipcRenderer.invoke("control:state", state, token)),
+  completeControlPlayback: (requestId, result) => controlReadyToken.then((token) => ipcRenderer.invoke("control:playbackResult", requestId, result, token)),
   controlReady: () => controlReadyToken.then((token) => ipcRenderer.invoke("control:ready", token)),
   onControlStatus: (callback) => {
     const listener = (_event, state) => callback(state);

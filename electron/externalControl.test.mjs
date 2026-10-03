@@ -20,7 +20,7 @@ class MemorySocket extends Duplex {
   _write(chunk, _encoding, callback) { this.peer.push(Buffer.from(chunk)); callback(); }
   _final(callback) { this.peer.push(null); callback(); }
   _destroy(error, callback) { this.peer?.destroy(); callback(error); }
-  setTimeout() { return this; }
+  setTimeout(ms) { this.timeoutMs = ms; return this; }
   setNoDelay() { return this; }
   setKeepAlive() { return this; }
 }
@@ -100,11 +100,13 @@ afterEach(async () => {
   await rm(directory, { recursive: true, force: true });
 });
 
-async function create(options = {}, enabled = true) {
+async function create(options = {}, enabled = true, populate = true) {
   bridge = createExternalControlBridge({ userData: directory, appVersion: "0.1.22", appPath: "/Applications/SoundDeck Studio.app", defaultPort: 0, onCommand, createServer: memoryServer, ...options });
   await bridge.start();
-  bridge.updateLibrary(library);
-  bridge.updateLiveState({ activeBoardId: "board-a", playback: [] });
+  if (populate) {
+    bridge.updateLibrary(library);
+    bridge.updateLiveState({ activeBoardId: "board-a", playback: [] });
+  }
   if (enabled) await bridge.setSettings({ enabled: true });
   return bridge.getState();
 }
@@ -170,7 +172,7 @@ function upgradeStatus(headers) {
 
 describe("external control discovery and listener", () => {
   it("preserves renderer playback received while the startup library load is pending", async () => {
-    await create();
+    await create({}, true, false);
     await bridge.stop();
     let finishLoading;
     const startup = bridge.start(() => new Promise((resolve) => { finishLoading = resolve; }));
@@ -184,6 +186,61 @@ describe("external control discovery and listener", () => {
     const connection = await client();
     connection.send(hello());
     expect(await connection.next()).toMatchObject({ type: "welcome", state: { playback } });
+  });
+
+  it.each(["library", "live"])("discards the startup snapshot after a newer %s update", async (kind) => {
+    await create({}, true, false);
+    await bridge.stop();
+    let finish;
+    const startup = bridge.start(() => new Promise((resolve) => { finish = resolve; }));
+    await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
+    if (kind === "library") bridge.updateLibrary({ ...library, activeBoardId: "board-b" });
+    else bridge.updateLiveState({ activeBoardId: "board-b", playback: [] });
+    finish(library);
+    await startup;
+    expect((await request()).body.activeBoardId).toBe("board-b");
+    if (kind === "library") expect((await request("/v1/library")).body.boards).toHaveLength(2);
+  });
+
+  it("rejects older generations and obsolete documents for library and live state", async () => {
+    await create();
+    bridge.setDocument("old");
+    const oldLibrary = bridge.beginUpdate("old");
+    const oldLive = bridge.beginUpdate("old");
+    bridge.setDocument("new");
+    bridge.updateLibrary({ ...library, activeBoardId: "board-b" }, bridge.beginUpdate("new"));
+    const earlier = bridge.beginUpdate("new");
+    const playback = [{ soundId: "sound-other", startedAt: 1, duration: 2, loop: false }];
+    bridge.updateLiveState({ playback }, bridge.beginUpdate("new"));
+    bridge.updateLibrary(library, oldLibrary);
+    bridge.updateLiveState({ activeBoardId: "board-a", playback: [] }, oldLive);
+    bridge.updateLibrary(library, earlier);
+    bridge.updateLiveState({ playback: [] }, earlier);
+    expect((await request()).body).toMatchObject({ activeBoardId: "board-b", playback });
+  });
+
+  it("preserves an empty renderer library published before startup initialization finishes", async () => {
+    let finish;
+    bridge = createExternalControlBridge({ userData: directory, appVersion: "1", appPath: "app", createServer: memoryServer,
+      fileSystem: { ...fs, readFile: () => new Promise((resolve) => { finish = resolve; }) } });
+    const startup = bridge.start(async () => library);
+    await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
+    bridge.updateLibrary({ boards: [], activeBoardId: "" });
+    finish("{}");
+    await startup;
+    expect(bridge.getSnapshot().library).toEqual({ boards: [], activeBoardId: "" });
+  });
+
+  it("ignores a failed obsolete startup read after the renderer supplies a newer library", async () => {
+    await create({}, true, false);
+    await bridge.stop();
+    let fail;
+    const startup = bridge.start(() => new Promise((_resolve, reject) => { fail = reject; }));
+    await vi.waitFor(() => expect(fail).toBeTypeOf("function"));
+    bridge.updateLibrary({ ...library, activeBoardId: "board-b" });
+    fail(new Error("Obsolete disk read failed"));
+    expect(await startup).toMatchObject({ listening: true, error: null });
+    expect((await request()).body.activeBoardId).toBe("board-b");
   });
 
   it.each(["readFile", "mkdir", "writeFile", "chmod", "rename"])("reports initialization %s failures without rejecting or listening", async (method) => {
@@ -212,7 +269,7 @@ describe("external control discovery and listener", () => {
   });
 
   it("contains corrupt library and invalid live-state initialization failures", async () => {
-    await create();
+    await create({}, true, false);
     await bridge.stop();
     const file = path.join(directory, "library.json");
     await writeFile(file, "{corrupt");
@@ -460,7 +517,7 @@ describe("external control protocol and dispatch", () => {
     ]) {
       connection.send({ type: "command", id: "play", command: "sound.play", args });
       expect(await connection.next()).toMatchObject({ id: "play", ok: true });
-      expect(onCommand).toHaveBeenLastCalledWith({ command: "sound.play", args: { soundId: expected } });
+      expect(onCommand).toHaveBeenLastCalledWith({ command: "sound.play", args: { soundId: expected } }, expect.any(AbortSignal));
     }
     connection.send({ type: "command", id: "missing", command: "sound.play", args: { soundId: "removed-id", boardId: "board-a", title: "airhorn" } });
     expect(await connection.next()).toMatchObject({ id: "missing", ok: false, code: "not-found" });
@@ -478,7 +535,7 @@ describe("external control protocol and dispatch", () => {
       ["/v1/boards/cycle", {}, { command: "board.cycle", args: {} }]
     ]) {
       expect(await request(url, { method: "POST", body })).toMatchObject({ status: 200, body: { ok: true } });
-      expect(onCommand).toHaveBeenLastCalledWith(expected);
+      expect(onCommand).toHaveBeenLastCalledWith(expected, expect.any(AbortSignal));
     }
     expect((await request("/v1/sounds/missing/stop", { method: "POST" })).status).toBe(404);
     expect((await request("/v1/boards/missing/activate", { method: "POST" })).status).toBe(404);
@@ -499,6 +556,58 @@ describe("external control protocol and dispatch", () => {
     await httpResult;
     expect(received).toHaveBeenCalledExactlyOnceWith({ status: 503, body: { ok: false, code: "unavailable" } });
     expect(await connection.next()).toEqual({ type: "result", id: "route", ok: false, code: "unavailable" });
+  });
+
+  it("keeps a fully received HTTP command alive during dispatch and does not cancel a completed response", async () => {
+    let listener;
+    await create({ createServer: (...args) => { listener = memoryServer(...args); return listener; } });
+    let socket;
+    listener.once("request", (req) => { socket = req.socket; });
+    let complete;
+    onCommand.mockImplementation(() => new Promise((resolve) => { complete = resolve; }));
+    const response = request("/v1/sounds/sound-new/play", { method: "POST", body: {} });
+    await vi.waitFor(() => expect(complete).toBeTypeOf("function"));
+    const signal = onCommand.mock.lastCall[1];
+    expect(socket.timeoutMs).toBe(0);
+    expect(signal.aborted).toBe(false);
+    complete({ ok: true });
+    expect(await response).toEqual({ status: 200, body: { ok: true } });
+    socket.destroy();
+    expect(signal.aborted).toBe(false);
+  });
+
+  it("cancels only the disconnected HTTP command and keeps another pending request alive", async () => {
+    await create();
+    const completions = [];
+    onCommand.mockImplementation((_command, signal) => new Promise((resolve) => {
+      completions.push(resolve);
+      signal.addEventListener("abort", () => resolve({ ok: false, code: "unavailable" }), { once: true });
+    }));
+    const state = bridge.getState();
+    const disconnected = http.request({ createConnection: memoryConnect, hostname: "127.0.0.1", port: state.port,
+      method: "POST", path: "/v1/sounds/sound-new/play", headers: { Authorization: `Bearer ${state.token}` } });
+    disconnected.on("error", () => {});
+    disconnected.end();
+    await vi.waitFor(() => expect(onCommand).toHaveBeenCalledOnce());
+    const other = request("/v1/sounds/sound-new/play", { method: "POST" });
+    await vi.waitFor(() => expect(onCommand).toHaveBeenCalledTimes(2));
+    disconnected.destroy();
+    await vi.waitFor(() => expect(onCommand.mock.calls[0][1].aborted).toBe(true));
+    expect(onCommand.mock.calls[1][1].aborted).toBe(false);
+    completions[1]({ ok: true });
+    expect((await other).body).toEqual({ ok: true });
+  });
+
+  it("cancels pending WebSocket commands when their client disconnects", async () => {
+    await create();
+    const connection = await session();
+    onCommand.mockImplementation((_command, signal) => new Promise((resolve) => {
+      signal.addEventListener("abort", () => resolve({ ok: false, code: "unavailable" }), { once: true });
+    }));
+    connection.send({ type: "command", id: "pending", command: "sound.play", args: { soundId: "sound-new" } });
+    await vi.waitFor(() => expect(onCommand).toHaveBeenCalledOnce());
+    connection.ws.terminate();
+    await vi.waitFor(() => expect(onCommand.mock.lastCall[1].aborted).toBe(true));
   });
 
   it("rejects unknown commands, paths, extra fields, wrong types and invalid direction without dispatch", async () => {

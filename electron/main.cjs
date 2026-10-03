@@ -120,13 +120,20 @@ const externalControl = createExternalControlBridge({
   appVersion: app.getVersion(),
   appPath: launcherPath(process.execPath, process.platform, app.isPackaged),
   onStateChange: (state) => sendToMainWindow("control-status", state),
-  onCommand: ({ command, args }) => {
+  onCommand: ({ command, args }, signal) => {
     if (hotkeyCaptureActive) return { ok: false, code: "busy" };
     if (!controlRendererReady || !mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return { ok: false, code: "unavailable" };
     if (command === "sound.play") {
+      if (signal?.aborted) return { ok: false, code: "unavailable" };
       const requestId = crypto.randomUUID();
       return new Promise((resolve) => {
-        pendingControlPlayback.set(requestId, resolve);
+        const cancel = () => sendToMainWindow("control-command", { command: "sound.cancel", requestId });
+        const complete = (result) => {
+          signal?.removeEventListener("abort", cancel);
+          resolve(result);
+        };
+        pendingControlPlayback.set(requestId, complete);
+        signal?.addEventListener("abort", cancel, { once: true });
         sendToMainWindow("control-command", { command, args, requestId });
       });
     }
@@ -820,19 +827,24 @@ async function createWindow() {
   controlRendererReady = false;
   controlRendererToken = null;
   const clearControlRendererState = () => {
+    if (mainWindow !== window) return;
+    hotkeyCaptureActive = false;
+    hotkeyEngine.setSuspended(false);
     controlRendererReady = false;
     controlRendererToken = null;
     clearPendingControlPlayback();
-    externalControl.updateLiveState({ activeBoardId: externalControl.getSnapshot().activeBoardId, playback: [] });
+    externalControl.setDocument(null);
   };
   window.webContents.on("did-start-navigation", (details) => {
     if (details.isMainFrame && !details.isSameDocument) clearControlRendererState();
   });
   window.webContents.on("did-navigate", () => {
+    if (mainWindow !== window) return;
     controlRendererToken = crypto.randomUUID();
+    externalControl.setDocument(controlRendererToken);
   });
   window.webContents.on("did-finish-load", () => {
-    if (controlRendererToken) window.webContents.send("control-ready-token", controlRendererToken);
+    if (mainWindow === window && controlRendererToken) window.webContents.send("control-ready-token", controlRendererToken);
   });
   window.webContents.on("render-process-gone", clearControlRendererState);
   window.webContents.on("destroyed", clearControlRendererState);
@@ -1105,18 +1117,36 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
 
-handleTrustedIpc("library:load", async () => {
-  await ensureLibrary();
-  const library = await readJson(libraryFile());
-  externalControl.updateLibrary(library);
-  return library;
+// Keep disk reads/writes in request order as well as publishing cache updates
+// with their original ownership. Finish accepted saves before a new document
+// reads the disk, so its library includes every edit accepted before reload.
+let libraryIo = Promise.resolve();
+function serialLibrary(operation) {
+  const result = libraryIo.then(operation);
+  libraryIo = result.catch(() => {});
+  return result;
+}
+
+handleTrustedIpc("library:load", (_event, token) => {
+  const owner = token && externalControl.beginUpdate(token);
+  if (!owner) throw new Error("Obsolete library document");
+  return serialLibrary(async () => {
+    await ensureLibrary();
+    const library = await readJson(libraryFile());
+    externalControl.updateLibrary(library, owner);
+    return library;
+  });
 });
 
-handleTrustedIpc("library:save", async (_event, library) => {
-  await ensureLibrary();
-  externalControl.updateLibrary(library);
-  await fs.writeFile(libraryFile(), JSON.stringify(library, null, 2));
-  return { ok: true };
+handleTrustedIpc("library:save", (_event, library, token) => {
+  const owner = token && externalControl.beginUpdate(token);
+  if (!owner) return { ok: false };
+  externalControl.updateLibrary(library, owner);
+  return serialLibrary(async () => {
+    await ensureLibrary();
+    await fs.writeFile(libraryFile(), JSON.stringify(library, null, 2));
+    return { ok: true };
+  });
 });
 
 handleTrustedIpc("library:reveal", async () => {
@@ -1357,7 +1387,8 @@ handleTrustedIpc("media:crop", async (_event, payload) => {
 
 handleTrustedIpc("hotkeys:register", async (_event, bindings) => registerHotkeys(bindings));
 
-handleTrustedIpc("hotkeys:capture", (_event, active) => {
+handleTrustedIpc("hotkeys:capture", (_event, active, token) => {
+  if (!controlRendererToken || token !== controlRendererToken) return { ok: false };
   hotkeyCaptureActive = Boolean(active);
   hotkeyEngine.setSuspended(hotkeyCaptureActive);
   return { ok: true };
@@ -1373,7 +1404,8 @@ handleTrustedIpc("control:ready", (_event, token) => {
   controlRendererReady = true;
   return { ok: true };
 });
-handleTrustedIpc("control:playbackResult", (_event, requestId, result) => {
+handleTrustedIpc("control:playbackResult", (_event, requestId, result, token) => {
+  if (!controlRendererToken || token !== controlRendererToken) return { ok: false };
   const resolve = pendingControlPlayback.get(requestId);
   if (!resolve) return { ok: false };
   if (!result || (result.ok !== true && (result.ok !== false || !["unavailable", "not-found", "internal-error"].includes(result.code)))) {
@@ -1383,8 +1415,10 @@ handleTrustedIpc("control:playbackResult", (_event, requestId, result) => {
   resolve(result.ok ? { ok: true } : { ok: false, code: result.code });
   return { ok: true };
 });
-handleTrustedIpc("control:state", (_event, state) => {
-  externalControl.updateLiveState(state);
+handleTrustedIpc("control:state", (_event, state, token) => {
+  const owner = token && externalControl.beginUpdate(token);
+  if (!owner) return { ok: false };
+  externalControl.updateLiveState(state, owner);
   return { ok: true };
 });
 
