@@ -58,9 +58,10 @@ import { acceleratorLooksReserved, formatBytes, formatDuration, getDefaultSoundE
 import { hotkeyFallsBackToTap, claimCaptureSlot, eventToToken, formatAccelerator, MODIFIER_TOKENS, normalizeAccelerator, orderTokens } from "./lib/hotkeys";
 import { fitPeaks, makeWaveform } from "./lib/waveform";
 import { installDevBridge } from "./lib/devBridge";
+import { dismissPluginUpdate, isPluginUpdateDismissed, pluginInstallError } from "./lib/streamdeckPrompts";
 import { TitleBar } from "./titleBar";
 import { cancelTopLevelDrag } from "./lib/drop";
-import type { AppCapabilities, CorsairState, HotkeyBinding, HotkeyResult, MediaImportResult, RetriggerMode, SoundBoard, SoundDeckPlatform, SoundEffects, SoundLibrary, SoundSlot, StartupSettings, UpdateChannel, UpdateChannelState, UpdateStatus, VirtualBackend } from "./types";
+import type { AppCapabilities, CorsairState, HotkeyBinding, HotkeyResult, MediaImportResult, RetriggerMode, SoundBoard, SoundDeckPlatform, SoundEffects, SoundLibrary, SoundSlot, StartupSettings, StreamDeckStatus, UpdateChannel, UpdateChannelState, UpdateStatus, VirtualBackend } from "./types";
 import "./styles.css";
 
 installDevBridge();
@@ -2555,6 +2556,54 @@ function ExternalControlSettings() {
   const [issue, setIssue] = useState("");
   const [portIssue, setPortIssue] = useState("");
   const [copied, setCopied] = useState(false);
+  const [pluginStatus, setPluginStatus] = useState<StreamDeckStatus | null>(null);
+  const [pluginIssue, setPluginIssue] = useState("");
+  const [openingPlugin, setOpeningPlugin] = useState(false);
+  const [dismissedPluginVersion, setDismissedPluginVersion] = useState("");
+
+  useEffect(() => {
+    let mounted = true;
+    let generation = 0;
+    const refresh = async () => {
+      const request = ++generation;
+      try {
+        const next = await window.sounddeck.getStreamDeckStatus();
+        if (!mounted || request !== generation) return;
+        setPluginStatus(next);
+        if (isPluginUpdateDismissed(next.bundledVersion)) setDismissedPluginVersion(next.bundledVersion);
+      } catch { /* Status is advisory; installing remains available. */ }
+    };
+    void refresh();
+    const unsubscribe = window.sounddeck.onControlStatus(() => void refresh());
+    const onFocus = () => void refresh();
+    window.addEventListener("focus", onFocus);
+    const timer = window.setInterval(() => void refresh(), 10_000);
+    return () => {
+      mounted = false;
+      unsubscribe();
+      window.removeEventListener("focus", onFocus);
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  async function openPlugin() {
+    setPluginIssue("");
+    setOpeningPlugin(true);
+    try {
+      const result = await window.sounddeck.installStreamDeckPlugin();
+      if (!result.ok) setPluginIssue(pluginInstallError(result.reason));
+    } catch {
+      setPluginIssue(pluginInstallError());
+    } finally {
+      setOpeningPlugin(false);
+    }
+  }
+
+  function dismissPluginNotice() {
+    if (!pluginStatus) return;
+    dismissPluginUpdate(pluginStatus.bundledVersion);
+    setDismissedPluginVersion(pluginStatus.bundledVersion);
+  }
 
   useEffect(() => {
     let mounted = true;
@@ -2612,6 +2661,17 @@ function ExternalControlSettings() {
   const portError = portIssue || status.error?.message;
   return (
     <SettingsCard title="External control" description="Control SoundDeck from other apps and scripts.">
+      <SettingsRow icon={<Gamepad2 size={16} />} title="Stream Deck plugin" description="Install the bundled plugin, then add its actions in Stream Deck." issue={pluginIssue && <span role="alert">{pluginIssue}</span>}>
+        <button className="settingsButton" disabled={openingPlugin} onClick={() => void openPlugin()}>Install Stream Deck plugin</button>
+      </SettingsRow>
+      {pluginStatus?.updateAvailable && dismissedPluginVersion !== pluginStatus.bundledVersion && (
+        <SettingsNotice tone="ready" icon={<Download size={16} />} title="Stream Deck plugin update available" action={<>
+          <button className="settingsButton" disabled={openingPlugin} onClick={() => void openPlugin()}>Update plugin</button>
+          <button className="settingsButton" onClick={dismissPluginNotice}>Dismiss</button>
+        </>}>
+          Stream Deck may ask you to confirm. Older versions may require removing the old plugin first.
+        </SettingsNotice>
+      )}
       <SettingsRow icon={<Radio size={16} />} title="Enable external control" description="Allow clients with your token to play sounds and switch boards." issue={issue && <span role="alert">{issue}</span>}>
         <StatusBadge state={status.listening ? "active" : status.error ? "unavailable" : "idle"}>{status.listening ? "Listening" : status.enabled ? "Offline" : "Off"}</StatusBadge>
         <Switch label="Enable external control" checked={status.enabled} onChange={(enabled) => void apply({ enabled })} />

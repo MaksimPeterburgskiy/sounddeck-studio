@@ -4,18 +4,22 @@ import replace from "@rollup/plugin-replace";
 import typescript from "@rollup/plugin-typescript";
 import { readFileSync } from "node:fs";
 import { builtinModules } from "node:module";
+import { stampManifest, toStreamDeckVersion } from "./scripts/version.mjs";
 
 const pkg = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8"));
+const app = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 const plugin = "com.sounddeck.studio.sdPlugin";
 const adaptedSdkModules = new Set();
 // Build-time only: the running plugin never reads its manifest.
 const manifestPath = new URL(`./${plugin}/manifest.json`, import.meta.url);
-const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-const [core, beta] = pkg.version.split("-beta.");
-const expectedVersion = `${core}.${beta ?? 99999}`;
-if (manifest.Version !== expectedVersion) {
+const committedManifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+// Validate the committed baseline; releases bump only the app package version.
+const expectedVersion = toStreamDeckVersion(pkg.version);
+if (committedManifest.Version !== expectedVersion) {
   throw new Error(`Manifest Version must be ${expectedVersion}; run pnpm run version:streamdeck.`);
 }
+// Stamp the build metadata in memory so stable and beta builds stay tree-clean.
+const manifest = stampManifest(committedManifest, app.version);
 if (manifest.Nodejs.Debug !== undefined && !process.env.ROLLUP_WATCH) throw new Error("Committed manifest must not enable Node debugging.");
 
 export default {
@@ -23,7 +27,7 @@ export default {
   output: { file: `${plugin}/bin/plugin.js`, format: "es", sourcemap: !!process.env.ROLLUP_WATCH },
   external: (id) => id.startsWith("node:") || builtinModules.includes(id),
   plugins: [
-    replace({ preventAssignment: true, __PLUGIN_VERSION__: JSON.stringify(pkg.version) }),
+    replace({ preventAssignment: true, __PLUGIN_VERSION__: JSON.stringify(app.version) }),
     {
       name: "sdk-v2-drm-safe-runtime",
       // SDK v2 otherwise reads manifest.json during registration and logs in

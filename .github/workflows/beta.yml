@@ -167,20 +167,28 @@ jobs:
       - name: Reverify VB-CABLE packaging input
         run: node scripts/verify-vbcable.mjs
 
-      # EP_DRAFT makes electron-builder upload into the existing draft release
-      # instead of publishing one of its own; the offline flag keeps packaging
-      # on the native tools verified by the fetch step above.
-      - name: Build and upload Windows installers to the draft release
-        run: pnpm exec electron-builder --win --publish always --config.publish.channel=beta
+      - name: Build and pack Stream Deck plugin
+        run: pnpm run pack:streamdeck
+
+      - name: Build Windows installers
+        run: pnpm exec electron-builder --win --publish never --config.publish.channel=beta
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          EP_DRAFT: "true"
           SOUNDDECK_NATIVE_TOOLS_OFFLINE: "1"
 
-      # The draft is only published after this job succeeds, so verifying the
-      # unpacked build after upload still gates the release.
       - name: Verify packaged Windows build
         run: node scripts/verify-windows-package.mjs release/win-unpacked --channel beta
+
+      - name: Upload Windows and Stream Deck artifacts to the draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $plugin = "streamdeck-plugin/dist/SoundDeck-Studio-StreamDeck-${{ needs.version.outputs.version }}.streamDeckPlugin"
+          if (-not (Test-Path $plugin -PathType Leaf)) { throw "No Stream Deck plugin artifact found." }
+          $patterns = @("release/*.exe", "release/*.exe.blockmap", "release/beta.yml", $plugin)
+          $artifactPaths = @($patterns | ForEach-Object {
+            Get-ChildItem $_ -File -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }
+          })
+          gh release upload "${{ needs.version.outputs.tag }}" --repo "${{ github.repository }}" @artifactPaths --clobber
 
   macos-package:
     needs: version
@@ -284,6 +292,7 @@ jobs:
           require_asset "SoundDeck-Studio-Setup-$VERSION.exe.blockmap"
           require_asset "SoundDeck-Studio-$VERSION.exe"
           require_asset "beta.yml"
+          require_asset "SoundDeck-Studio-StreamDeck-$VERSION.streamDeckPlugin"
           require_asset "SoundDeck.Studio-$VERSION.pkg"
           require_asset "SoundDeck.Studio-$VERSION.zip"
           require_asset "beta-mac.yml"

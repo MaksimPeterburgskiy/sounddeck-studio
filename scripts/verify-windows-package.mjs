@@ -3,6 +3,7 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { verifyNativeToolHashes, verifyPackagedProvenance } from "./native-tools.mjs";
+import { verifyStreamDeckResource } from "./verify-streamdeck-resource.mjs";
 import { verifyYtDlpRuntime } from "./verify-ytdlp-runtime.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -23,6 +24,7 @@ if (!/^[a-z][a-z0-9-]*$/.test(channel || "")) {
 const updaterFeedName = `${channel}.yml`;
 const appOutDir = positionals[0] || path.join("release", "win-unpacked");
 const releaseDir = path.dirname(appOutDir);
+await verifyStreamDeckResource(path.join(appOutDir, "resources"));
 const toolsDir = path.join(appOutDir, "resources", "native-tools");
 const assets = await verifyPackagedProvenance(toolsDir, "win32-x64");
 

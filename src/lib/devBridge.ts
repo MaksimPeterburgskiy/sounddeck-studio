@@ -148,6 +148,12 @@ export function installDevBridge() {
     async getControlSettings() {
       return { enabled: false, port: CONTROL_DEFAULT_PORT, token: "", allowLan: false, listening: false, clients: [], error: null };
     },
+    async installStreamDeckPlugin() {
+      return { ok: false, reason: "missing-file" };
+    },
+    async getStreamDeckStatus() {
+      return { bundledVersion: "", installed: false, source: "unknown", updateAvailable: false };
+    },
     async setControlSettings() {
       return { ...await this.getControlSettings(), error: { code: "unavailable", message: "Run in Electron to use external control." } };
     },
