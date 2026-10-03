@@ -144,8 +144,14 @@ function App() {
     waitForConfiguration: () => waitForAudioConfiguration(() => audioConfigurationRef.current)
   }), []);
   const soundTriggers = useMemo(() => new SoundTriggers(() => engineRef.current, () => audioConfigurationRef.current), []);
-  const stopSound = useCallback((soundId: string) => soundTriggers.stop(soundId), [soundTriggers]);
-  const stopAllSounds = useCallback(() => soundTriggers.stopAll(), [soundTriggers]);
+  const stopSound = useCallback((soundId: string) => {
+    window.sounddeck.cancelPendingControlPlayback(soundId);
+    soundTriggers.stop(soundId);
+  }, [soundTriggers]);
+  const stopAllSounds = useCallback(() => {
+    window.sounddeck.cancelPendingControlPlayback();
+    soundTriggers.stopAll();
+  }, [soundTriggers]);
   const deviceStatusRef = useRef<AudioDeviceStatus>(defaultAudioDeviceStatus);
   const previousMicrophoneDeviceStatusRef = useRef<AudioDeviceStatus["microphone"] | null>(null);
   const previousMonitorDeviceStatusRef = useRef<AudioDeviceStatus["monitor"] | null>(null);
@@ -627,7 +633,9 @@ function App() {
       return;
     }
     if (command === "sound.stop") {
-      stopSound(args.soundId);
+      // Preload already cancelled requests before this stop's arrival. Do not
+      // cancel later requests waiting for acceptance behind this callback.
+      soundTriggers.stop(args.soundId);
       return;
     }
     if (command === "board.cycle") {

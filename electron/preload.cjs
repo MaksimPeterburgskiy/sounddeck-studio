@@ -10,6 +10,24 @@ const controlReadyToken = new Promise((resolve) => {
 const controlCommandRequests = new Map();
 let controlCommandStarts = Promise.resolve();
 
+function cancelControlRequest(requestId, request) {
+  if (!request || request.cancelled) return;
+  request.cancelled = true;
+  if (request.started) {
+    try { void Promise.resolve(request.callback({ command: "control.cancel", requestId })).catch(() => {}); } catch {}
+  }
+}
+
+function cancelPendingControlPlayback(soundId) {
+  // Started playback is owned by SoundTriggers; include requests still waiting
+  // for receipt without running renderer callbacks before the stop snapshot.
+  const earlier = [...controlCommandRequests].filter(([, request]) =>
+    !request.started &&
+    (request.command.command === "sound.play" || request.command.command === "sound.press") &&
+    (soundId === undefined || request.command.args.soundId === soundId));
+  for (const [requestId, request] of earlier) cancelControlRequest(requestId, request);
+}
+
 contextBridge.exposeInMainWorld("sounddeck", {
   loadLibrary: () => controlReadyToken.then((token) => ipcRenderer.invoke("library:load", token)),
   saveLibrary: (library) => controlReadyToken.then((token) => ipcRenderer.invoke("library:save", library, token)),
@@ -58,6 +76,7 @@ contextBridge.exposeInMainWorld("sounddeck", {
   pushControlState: (state) => controlReadyToken.then((token) => ipcRenderer.invoke("control:state", state, token)),
 
   controlReady: () => controlReadyToken.then((token) => ipcRenderer.invoke("control:ready", token)),
+  cancelPendingControlPlayback: cancelPendingControlPlayback,
   onControlStatus: (callback) => {
     const listener = (_event, state) => callback(state);
     ipcRenderer.on("control-status", listener);
@@ -66,18 +85,15 @@ contextBridge.exposeInMainWorld("sounddeck", {
   onControlCommand: (callback) => {
     const listener = (_event, { requestId, ...command }) => {
       if (command.command === "control.cancel") {
-        const request = controlCommandRequests.get(requestId);
-        if (request) {
-          request.cancelled = true;
-          if (request.started) {
-            try { void Promise.resolve(request.callback({ ...command, requestId })).catch(() => {}); } catch {}
-          }
-        }
+        cancelControlRequest(requestId, controlCommandRequests.get(requestId));
         return Promise.resolve();
       }
+      // Apply the stop boundary at arrival, before later requests register while
+      // its ordered renderer callback waits for earlier acceptance replies.
+      if (command.command === "sound.stop") cancelPendingControlPlayback(command.args.soundId);
       // Register before receipt can yield, so cancellation cannot get lost
       // while main's acceptance reply is still in flight.
-      const request = { cancelled: false, started: false, callback };
+      const request = { cancelled: false, started: false, callback, command };
       if (requestId) controlCommandRequests.set(requestId, request);
       const start = controlCommandStarts.then(async () => {
         const token = await controlReadyToken;

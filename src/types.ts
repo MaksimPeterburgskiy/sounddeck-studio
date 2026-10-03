@@ -241,6 +241,7 @@ declare global {
       controlReady: () => Promise<{ ok: boolean }>;
       onControlStatus: (callback: (status: ControlStatus) => void) => () => void;
       onControlCommand: (callback: (command: RendererControlCommand) => RendererControlResult | void | Promise<RendererControlResult | void>) => () => void;
+      cancelPendingControlPlayback: (soundId?: string) => void;
       getCorsairStatus: () => Promise<CorsairState>;
       onCorsairStatus: (callback: (state: CorsairState) => void) => () => void;
       onCorsairKey: (callback: (key: string) => void) => () => void;

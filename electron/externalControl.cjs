@@ -569,13 +569,15 @@ function createExternalControlBridge({
         }
       };
       res.once("close", disconnected);
+      // An accepted press still needs cleanup if the client disconnects while
+      // its generated ID is waiting for the response to flush.
+      res.once("finish", () => res.removeListener("close", disconnected));
       if (res.destroyed) cancellation.abort();
       let result;
       try {
         result = await dispatch(command, args, cancellation);
       } finally {
         httpControllers.delete(cancellation);
-        res.removeListener("close", disconnected);
       }
       const status = result.ok ? 200 : result.code === "not-found" ? 404 : result.code === "busy" || result.code === "unavailable" || result.code === "disabled" ? 503 : result.code === "internal-error" ? 500 : 400;
       respond(res, status, result.ok && command === "sound.press" ? { ok: true, data: { pressId: args.pressId } } : result);

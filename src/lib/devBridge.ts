@@ -166,6 +166,7 @@ export function installDevBridge() {
     onControlCommand() {
       return () => undefined;
     },
+    cancelPendingControlPlayback() {},
     async getCorsairStatus() {
       return "unavailable";
     },

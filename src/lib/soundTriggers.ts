@@ -44,13 +44,13 @@ export class SoundTriggers {
   stop(soundId: string) {
     const release = this.presses.snapshotReleases(soundId);
     this.queue.cancel(soundId);
-    release();
     this.getEngine()?.stop(soundId);
+    release();
   }
   stopAll() {
     const release = this.presses.snapshotReleases();
     this.queue.cancelAll();
-    release();
     this.getEngine()?.stopAll();
+    release();
   }
 }
