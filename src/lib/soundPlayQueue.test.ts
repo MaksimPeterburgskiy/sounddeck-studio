@@ -28,4 +28,22 @@ describe("per-sound play queue", () => {
     expect(await next).toBe(true);
     expect(await queue("sound-a", async () => "played again")).toBe("played again");
   });
+
+  it("keeps plays after a stop serialized while cancelling older queued plays", async () => {
+    const queue = createSoundPlayQueue();
+    const preparation = deferred<void>();
+    const first = queue("sound-a", async (signal) => {
+      await preparation.promise;
+      return !signal.aborted;
+    });
+    const second = queue("sound-a", async (signal) => !signal.aborted);
+    queue.cancel("sound-a");
+    const laterPlay = vi.fn(async (signal: AbortSignal) => !signal.aborted);
+    const later = queue("sound-a", laterPlay);
+    await Promise.resolve();
+    expect(laterPlay).not.toHaveBeenCalled();
+    preparation.resolve();
+    expect(await Promise.all([first, second, later])).toEqual([false, false, true]);
+    expect(laterPlay).toHaveBeenCalledOnce();
+  });
 });
