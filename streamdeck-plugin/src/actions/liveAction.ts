@@ -5,6 +5,7 @@ import streamDeck, {
 } from "@elgato/streamdeck";
 import type { ControlCommandArgs, ControlCommandName } from "../../../src/lib/controlProtocol";
 import type { Connection } from "../connection";
+import { keyTitle } from "../render/keyTitle";
 import { keyImage } from "../render/keyImage";
 import type { ActionSettings } from "../settings";
 
@@ -31,9 +32,11 @@ export abstract class LiveAction extends SingletonAction<ActionSettings> {
     super();
     connection.subscribe(() => {
       this.refresh();
-      void this.sendInspector().catch(console.error);
+      void this.sendInspector().catch((error) => streamDeck.logger.error(error));
     });
   }
+
+  protected syncSettings(settings: ActionSettings): ActionSettings { return settings; }
 
   protected abstract visual(settings: ActionSettings): Visual;
   protected abstract press(ev: KeyDownEvent<ActionSettings>): Promise<void>;
@@ -52,7 +55,7 @@ export abstract class LiveAction extends SingletonAction<ActionSettings> {
     if (entry) entry.settings = ev.payload.settings;
     if (this.inspectorId === ev.action.id) {
       this.inspectorSettings = ev.payload.settings;
-      void this.sendInspector().catch(console.error);
+      void this.sendInspector().catch((error) => streamDeck.logger.error(error));
     }
     this.refresh();
   }
@@ -67,13 +70,17 @@ export abstract class LiveAction extends SingletonAction<ActionSettings> {
 
   protected async command<Name extends ControlCommandName>(ev: KeyDownEvent<ActionSettings>, name: Name, args: ControlCommandArgs[Name]): Promise<void> {
     const result = await this.connection.command(name, args);
-    if (!result.ok) await ev.action.showAlert();
+    if (!result.ok) {
+      streamDeck.logger.warn(`SoundDeck command ${name} failed: ${result.code}`);
+      await ev.action.showAlert();
+    }
   }
 
   private view(settings: ActionSettings): Visual {
     const visual = this.visual(settings);
     return this.connection.status === "connected" ? visual : {
-      ...visual, playing: undefined, active: false, state: 0,
+      ...visual, playing: undefined, playingRing: false, active: false, state: 0,
+      warningPosition: visual.glyph || visual.image || visual.icon ? "corner" : "center",
       dimmed: true, warning: this.connection.status !== "offline", title: this.connection.statusLabel,
     };
   }
@@ -103,6 +110,20 @@ export abstract class LiveAction extends SingletonAction<ActionSettings> {
     void (async () => {
       while (entry.dirty && this.visible.get(entry.action.id) === entry) {
         entry.dirty = false;
+        const previous = entry.settings;
+        const settings = this.syncSettings(previous);
+        if (settings !== previous) {
+          // Update our cache before saving so subsequent refreshes cannot restore stale metadata.
+          entry.settings = settings;
+          await entry.action.setSettings(settings);
+          if (this.visible.get(entry.action.id) !== entry) return;
+          if (entry.settings !== settings) { entry.dirty = true; continue; }
+          if (this.inspectorId === entry.action.id) {
+            this.inspectorSettings = settings;
+            await this.sendInspector();
+          }
+        }
+        if (this.visible.get(entry.action.id) !== entry) return;
         const visual = this.view(entry.settings);
         const image = keyImage(visual);
         // Both states receive the same live title/image, so a state transition
@@ -110,17 +131,20 @@ export abstract class LiveAction extends SingletonAction<ActionSettings> {
         if (visual.state !== undefined && entry.state !== visual.state) {
           await entry.action.setState(visual.state);
           entry.state = visual.state;
+          if (this.visible.get(entry.action.id) !== entry) return;
         }
         if (entry.image !== image) {
           await entry.action.setImage(image);
           entry.image = image;
+          if (this.visible.get(entry.action.id) !== entry) return;
         }
-        if (entry.title !== visual.title) {
-          await entry.action.setTitle(visual.title);
-          entry.title = visual.title;
+        const title = keyTitle(visual.title);
+        if (entry.title !== title) {
+          await entry.action.setTitle(title);
+          entry.title = title;
         }
       }
-    })().catch(console.error).finally(() => {
+    })().catch((error) => streamDeck.logger.error(error)).finally(() => {
       entry.rendering = false;
       // An unchanged render can exit synchronously while a following event
       // queues a change before this promise's finalizer runs.

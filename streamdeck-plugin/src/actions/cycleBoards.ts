@@ -6,7 +6,7 @@ import { LiveAction } from "./liveAction";
 export class CycleBoards extends LiveAction {
   protected override visual() {
     const board = this.connection.snapshot?.library.boards.find((item) => item.id === this.connection.snapshot?.activeBoardId);
-    return { title: board?.name ?? "Cycle boards", color: board?.color, symbol: "↻" };
+    return { title: board?.name ?? "Cycle boards", icon: "cycle-boards" as const, iconOn: true };
   }
   protected override async press(ev: KeyDownEvent<ActionSettings>): Promise<void> {
     await this.command(ev, "board.cycle", {});

@@ -36,13 +36,21 @@ highlighting, and a setting changed from either the app or the key. Re-import a
 board and check title fallback. Close the app completely, press a key, and check
 that it launches hidden; that first press is intentionally dropped.
 
-Node debugging is enabled in the manifest. Use VS Code's **Debug: Attach to Node
-Process**, selecting the plugin process. Stream Deck assigns an available Node
-inspector port; for a fixed Chrome/VS Code target, locally set `Nodejs.Debug` to
-`--inspect=127.0.0.1:12345` and attach to that port. Logs use the debugger console.
+The committed manifest disables Node debugging. For local development only,
+set `Nodejs.Debug` to `"enabled"` in your local manifest and use `pnpm watch`,
+which emits source maps. Attach VS Code to the plugin process. Restore that
+manifest change before a production build or pack; production builds reject
+debugging. Logs persist outside the plugin folder: macOS uses
+`~/Library/Logs/SoundDeck Studio/streamdeck`, Windows uses
+`%LOCALAPPDATA%/SoundDeck Studio/logs/streamdeck`, and Linux uses
+`$XDG_STATE_HOME/SoundDeck Studio/logs/streamdeck` (default `~/.local/state`).
+The SDK rotates ten log files. Debug sessions also log to the debugger console.
 Property inspectors can be inspected at `http://localhost:23654/` while visible.
 For a development Electron app, start the app normally before using the plugin;
 its discovered executable path alone cannot select this repository's entrypoint.
+Offline launching accepts absolute `.app` paths on macOS and fully qualified
+`.exe` paths on Windows. Portable Windows builds persist the original portable
+launcher rather than the temporary extracted Electron executable.
 
 The plugin discovers `external-control.json` in both `sounddeck-studio` and
 `SoundDeck Studio` user-data folders, choosing the newest file. It uses one
@@ -51,21 +59,25 @@ retries. It does not follow the app's `SOUNDDECK_USER_DATA` development override
 use its standard user-data folder for manual development checks. Linux/OpenDeck
 uses the XDG configuration folder on a best-effort basis.
 
-The property inspectors use the official template's sdpi-components v4 CDN;
-they need internet access on initial load. They receive library summaries and
-connection labels from the plugin; authentication tokens never go into action
+The property inspectors bundle sdpi-components **v4.0.1**, pinned to upstream
+commit `06185f14529f890a35cda283be1ec1b1445c7c58`, in `ui/sdpi-components.js`.
+Its MIT license is included as `ui/sdpi-components.LICENSE`; the bundled Lit
+license is also included in that file. Inspectors work without internet access.
+They receive library summaries and connection labels from the plugin; authentication tokens never go into action
 settings or the inspector.
 
 The Rollup setup mirrors Elgato's CLI template. This package uses TypeScript 6
 because `@rollup/plugin-typescript` requires the JavaScript compiler API removed
 in TypeScript 7; the root app keeps its existing TypeScript version. Plugin and
 app package versions currently match; update both when versioning this plugin.
-Build-time version injection also updates the numeric manifest version.
+Builds verify the numeric manifest version without changing it. After updating
+the plugin package version, run `pnpm run version:streamdeck` at the repository
+root to update the manifest deliberately.
 
 SDK v2 reads the manifest during registration and normally logs to the plugin
 folder. Two build-time adaptations embed the manifest metadata and select a
-console log target. The running bundle therefore never reads its manifest or
-writes inside its plugin folder, including when protected by Marketplace DRM.
+per-user rotating file log target. The running bundle therefore never reads its
+manifest or writes inside its plugin folder, including when protected by Marketplace DRM.
 Review these adaptations when upgrading the SDK. Generated `bin/` output is
 ignored; `pnpm run pack` produces a local `.streamDeckPlugin` for later packaging.
 

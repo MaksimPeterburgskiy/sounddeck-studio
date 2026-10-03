@@ -127,7 +127,7 @@ function resetControlRenderer() {
 const externalControl = createExternalControlBridge({
   userData: app.getPath("userData"),
   appVersion: app.getVersion(),
-  appPath: launcherPath(process.execPath, process.platform, app.isPackaged),
+  appPath: launcherPath(process.execPath, process.platform, app.isPackaged, process.env),
   onStateChange: (state) => sendToMainWindow("control-status", state),
   onCommand: ({ command, args }, signal) => {
     if (hotkeyCaptureActive) return { ok: false, code: "busy" };

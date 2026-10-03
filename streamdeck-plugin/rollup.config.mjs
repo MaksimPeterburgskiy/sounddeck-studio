@@ -2,7 +2,7 @@ import commonjs from "@rollup/plugin-commonjs";
 import nodeResolve from "@rollup/plugin-node-resolve";
 import replace from "@rollup/plugin-replace";
 import typescript from "@rollup/plugin-typescript";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { builtinModules } from "node:module";
 
 const pkg = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8"));
@@ -12,8 +12,11 @@ const adaptedSdkModules = new Set();
 const manifestPath = new URL(`./${plugin}/manifest.json`, import.meta.url);
 const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
 const [core, beta] = pkg.version.split("-beta.");
-manifest.Version = `${core}.${beta ?? 99999}`;
-writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+const expectedVersion = `${core}.${beta ?? 99999}`;
+if (manifest.Version !== expectedVersion) {
+  throw new Error(`Manifest Version must be ${expectedVersion}; run pnpm run version:streamdeck.`);
+}
+if (manifest.Nodejs.Debug !== undefined && !process.env.ROLLUP_WATCH) throw new Error("Committed manifest must not enable Node debugging.");
 
 export default {
   input: "src/plugin.ts",
@@ -24,7 +27,7 @@ export default {
     {
       name: "sdk-v2-drm-safe-runtime",
       // SDK v2 otherwise reads manifest.json during registration and logs in
-      // cwd()/logs. Embed the already-read metadata and keep logs on stdout.
+      // cwd()/logs. Embed metadata and redirect the existing rotating file target.
       transform(source, id) {
         if (id.endsWith("/@elgato/streamdeck/dist/plugin/manifest.js")) {
           adaptedSdkModules.add("manifest");
@@ -36,17 +39,18 @@ export default {
         }
         if (id.endsWith("/@elgato/streamdeck/dist/plugin/logging/index.js")) {
           adaptedSdkModules.add("logging");
-          if (!source.includes('dest: path.join(cwd(), "logs")')) {
+          if (!source.includes('dest: path.join(cwd(), "logs")')
+            || !source.includes('import { cwd } from "node:process";')
+            || !source.includes("new FileTarget(")) {
             throw new Error("SDK logging changed; review the DRM-safe build adaptation.");
           }
-          return { code: `import { ConsoleTarget, Logger } from "@elgato/utils/logging";
-            import { isDebugMode } from "../common/utils.js";
-            export const logger = new Logger({
-              level: isDebugMode() ? "debug" : "info",
-              minimumLevel: isDebugMode() ? "trace" : "debug",
-              targets: [new ConsoleTarget()]
-            });
-            process.once("uncaughtException", (err) => logger.error("Process encountered uncaught exception", err));`, map: null };
+          return { code: source
+            .replace('import { cwd } from "node:process";', 'import os from "node:os";')
+            .replace('path.join(cwd(), "logs")', `process.platform === "darwin"
+              ? path.join(os.homedir(), "Library", "Logs", "SoundDeck Studio", "streamdeck")
+              : process.platform === "win32"
+                ? path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local"), "SoundDeck Studio", "logs", "streamdeck")
+                : path.join(process.env.XDG_STATE_HOME || path.join(os.homedir(), ".local", "state"), "SoundDeck Studio", "logs", "streamdeck")`), map: null };
         }
         return null;
       }

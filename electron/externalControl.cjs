@@ -74,7 +74,12 @@ function validateCommand(command, args) {
   }
 }
 
-function launcherPath(execPath, platform = process.platform, packaged = false) {
+function launcherPath(execPath, platform = process.platform, packaged = false, env = process.env) {
+  // Portable Electron runs from a temporary extraction that disappears on exit.
+  const portable = env.PORTABLE_EXECUTABLE_FILE;
+  if (platform === "win32" && typeof portable === "string"
+    && path.win32.isAbsolute(portable) && /^(?:[a-z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+[\\/])/i.test(portable) && /\.exe$/i.test(portable)
+    && !/[\x00-\x1f\x7f]/.test(portable)) return portable;
   if (packaged && platform === "darwin") {
     const bundle = execPath.match(/^(.+\.app)\/Contents\/MacOS\/[^/]+$/);
     if (bundle) return bundle[1];

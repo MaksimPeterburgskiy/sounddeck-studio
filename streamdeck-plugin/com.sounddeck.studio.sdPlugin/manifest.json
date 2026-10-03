@@ -11,8 +11,7 @@
     "MinimumVersion": "7.1"
   },
   "Nodejs": {
-    "Version": "24",
-    "Debug": "enabled"
+    "Version": "24"
   },
   "OS": [
     {

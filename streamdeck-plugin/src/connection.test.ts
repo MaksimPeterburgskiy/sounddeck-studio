@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import http from "node:http";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import path from "node:path";
+import os from "node:os";
 import { createRequire } from "node:module";
 import { Connection } from "./connection";
 import { parseDiscovery, type DiscoveryFile } from "./discovery";
@@ -20,7 +21,7 @@ async function waitFor(predicate: () => boolean) {
   await vi.waitFor(() => expect(predicate()).toBe(true), { timeout: 3000, interval: 10 });
 }
 async function realServer(options: { cooldownMs?: number } = {}) {
-  const directory = await mkdtemp(path.join(process.cwd(), ".connection-test-"));
+  const directory = await mkdtemp(path.join(os.tmpdir(), ".connection-test-"));
   resources.push(() => rm(directory, { recursive: true, force: true }));
   const upgrades: http.IncomingHttpHeaders[] = [];
   const command = vi.fn(() => ({ ok: true }));
@@ -149,7 +150,7 @@ describe("shared connection", () => {
     expect(read).toHaveBeenCalledTimes(2);
     await vi.advanceTimersByTimeAsync(1);
     expect(connection.status).toBe("protocol-mismatch");
-    expect(connection.statusLabel).toBe("Update plugin");
+    expect(connection.statusLabel).toBe("Update\nplugin");
     connection.handleDisconnectedPress();
     expect(launch).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(2000 + 4000 + 8000 + 10_000 + 10_000);

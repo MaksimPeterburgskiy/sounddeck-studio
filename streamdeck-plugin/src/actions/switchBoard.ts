@@ -6,8 +6,8 @@ import { LiveAction } from "./liveAction";
 export class SwitchBoard extends LiveAction {
   protected override visual(settings: ActionSettings) {
     const board = this.connection.snapshot?.library.boards.find((item) => item.id === settings.boardId);
-    return board ? { title: board.name, color: board.color, active: board.id === this.connection.snapshot?.activeBoardId }
-      : { title: "⚠ Missing", warning: true, dimmed: true };
+    return board ? { title: board.name, glyph: Array.from(board.name)[0]?.toUpperCase(), color: board.color, active: board.id === this.connection.snapshot?.activeBoardId }
+      : { title: "Missing", warning: true, dimmed: true };
   }
   protected override async press(ev: KeyDownEvent<ActionSettings>): Promise<void> {
     const board = this.connection.snapshot?.library.boards.find((item) => item.id === ev.payload.settings.boardId);
