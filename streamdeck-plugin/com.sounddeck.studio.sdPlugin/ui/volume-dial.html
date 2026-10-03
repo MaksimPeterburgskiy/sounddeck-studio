@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>SoundDeck Studio</title>
+  <script src="sdpi-components.js"></script>
+  <link rel="stylesheet" href="inspector.css">
+  <style>#step-item[hidden] { display: none; }</style>
+</head>
+<body>
+  <sdpi-item label="Bus">
+    <sdpi-select setting="bus" default="micVirtual">
+      <option value="micVirtual">Mic → virtual mic</option>
+      <option value="micMonitor">Mic → headphones</option>
+      <option value="soundboardVirtual">Soundboard → virtual mic</option>
+      <option value="soundboardMonitor">Soundboard → headphones</option>
+    </sdpi-select>
+  </sdpi-item>
+  <sdpi-item id="step-item" label="Step per tick">
+    <sdpi-range setting="step" default="2" min="1" max="25" step="1" showlabels>
+      <span slot="min">1%</span>
+      <span slot="max">25%</span>
+    </sdpi-range>
+  </sdpi-item>
+  <p id="status" role="status"></p>
+  <script src="inspector.js"></script>
+</body>
+</html>
