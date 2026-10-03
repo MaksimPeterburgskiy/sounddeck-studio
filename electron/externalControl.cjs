@@ -8,6 +8,7 @@ const PROTOCOL_VERSION = 1;
 const DEFAULT_PORT = 41730;
 const MAX_PAYLOAD = 64 * 1024;
 const MAX_CLIENTS = 64;
+const MAX_PENDING_COMMANDS = 32;
 const MAX_BUFFERED = 8 * 1024 * 1024;
 
 function object(value) {
@@ -110,6 +111,7 @@ function createExternalControlBridge({
   const images = new Map();
   const clients = new Map();
   const failures = new Map();
+  const pendingHttpCommands = new Map();
 
   function getState() {
     return { ...settings, listening: Boolean(server?.listening), error, clients: [...clients.values()] };
@@ -313,6 +315,7 @@ function createExternalControlBridge({
         } else chunks.push(chunk);
       });
       req.on("error", () => reject(new Error("invalid-args")));
+      req.on("aborted", () => reject(new Error("invalid-args")));
       req.on("end", () => {
         if (bytes > MAX_PAYLOAD) return;
         try {
@@ -357,6 +360,12 @@ function createExternalControlBridge({
       allowedBody = ["direction"];
     } else if (url === "/v1/stop-all") command = "playback.stopAll";
     else return respond(res, 404, errorMessage("not-found"));
+    const address = req.socket.remoteAddress;
+    if ((pendingHttpCommands.get(address) || 0) >= MAX_PENDING_COMMANDS) {
+      return respond(res, 503, { ok: false, code: "busy" });
+    }
+    // Reserve before reading the body so streaming requests share the same bound.
+    pendingHttpCommands.set(address, (pendingHttpCommands.get(address) || 0) + 1);
     try {
       const body = await readBody(req);
       if (!fields(body, allowedBody)) return respond(res, 400, errorMessage("invalid-args"));
@@ -380,6 +389,10 @@ function createExternalControlBridge({
       respond(res, status, result);
     } catch (caught) {
       respond(res, caught.message === "payload-too-large" ? 413 : 400, errorMessage(caught.message));
+    } finally {
+      const remaining = pendingHttpCommands.get(address) - 1;
+      if (remaining) pendingHttpCommands.set(address, remaining);
+      else pendingHttpCommands.delete(address);
     }
   }
 
@@ -436,6 +449,10 @@ function createExternalControlBridge({
       }
       if (!fields(message, ["type", "id", "command", "args"]) || message.type !== "command" || !id(message.id) || typeof message.command !== "string") {
         return rejectSocket(ws, "invalid-message");
+      }
+      if (pendingCommands.size >= MAX_PENDING_COMMANDS) {
+        send(ws, { type: "result", id: message.id, ok: false, code: "busy" });
+        return;
       }
       const cancellation = new AbortController();
       pendingCommands.add(cancellation);

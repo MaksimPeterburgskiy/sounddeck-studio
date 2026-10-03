@@ -558,6 +558,96 @@ describe("external control protocol and dispatch", () => {
     expect(await connection.next()).toEqual({ type: "result", id: "route", ok: false, code: "unavailable" });
   });
 
+  it("bounds pending commands per WebSocket session and restores capacity after failure", async () => {
+    await create();
+    const connection = await session();
+    const other = await session();
+    const completions = [];
+    onCommand.mockImplementation(() => new Promise((resolve) => { completions.push(resolve); }));
+    const play = (client, id) => client.send({ type: "command", id, command: "sound.play", args: { soundId: "sound-new" } });
+    try {
+      for (let index = 0; index < 32; index += 1) play(connection, `pending-${index}`);
+      await vi.waitFor(() => expect(onCommand).toHaveBeenCalledTimes(32));
+      for (const id of ["overflow-1", "overflow-2"]) {
+        play(connection, id);
+        expect(await connection.next()).toEqual({ type: "result", id, ok: false, code: "busy" });
+      }
+      expect(onCommand).toHaveBeenCalledTimes(32);
+      expect(connection.ws.readyState).toBe(WebSocket.OPEN);
+      play(other, "independent");
+      await vi.waitFor(() => expect(onCommand).toHaveBeenCalledTimes(33));
+      completions[32]({ ok: true });
+      expect(await other.next()).toMatchObject({ id: "independent", ok: true });
+      completions[0]({ ok: false, code: "unavailable" });
+      expect(await connection.next()).toMatchObject({ id: "pending-0", ok: false, code: "unavailable" });
+      play(connection, "replacement");
+      await vi.waitFor(() => expect(onCommand).toHaveBeenCalledTimes(34));
+      completions[33]({ ok: true });
+      expect(await connection.next()).toMatchObject({ id: "replacement", ok: true });
+    } finally {
+      for (const complete of completions) complete({ ok: true });
+    }
+  });
+
+  it("bounds HTTP commands per address across connections and restores capacity after dispatch errors", async () => {
+    await create();
+    const completions = [];
+    onCommand.mockImplementation(() => new Promise((resolve, reject) => { completions.push({ resolve, reject }); }));
+    const play = (address) => request("/v1/sounds/sound-new/play", { method: "POST", address });
+    const pending = Array.from({ length: 32 }, () => play());
+    try {
+      await vi.waitFor(() => expect(onCommand).toHaveBeenCalledTimes(32));
+      for (let index = 0; index < 2; index += 1) {
+        expect(await play()).toEqual({ status: 503, body: { ok: false, code: "busy" } });
+      }
+      expect(onCommand).toHaveBeenCalledTimes(32);
+      expect((await request()).status).toBe(200);
+      expect((await request("/v1/library")).status).toBe(200);
+      const independent = play("127.0.0.2");
+      pending.push(independent);
+      await vi.waitFor(() => expect(onCommand).toHaveBeenCalledTimes(33));
+      completions[32].resolve({ ok: true });
+      expect(await independent).toEqual({ status: 200, body: { ok: true } });
+      completions[0].reject(new Error("Playback failed"));
+      expect(await pending[0]).toEqual({ status: 500, body: { ok: false, code: "internal-error" } });
+      const replacement = play();
+      pending.push(replacement);
+      await vi.waitFor(() => expect(onCommand).toHaveBeenCalledTimes(34));
+      completions[33].resolve({ ok: true });
+      expect(await replacement).toEqual({ status: 200, body: { ok: true } });
+    } finally {
+      for (const complete of completions) complete.resolve({ ok: true });
+      await Promise.all(pending);
+    }
+  });
+
+  it("counts streaming HTTP bodies toward the address limit and releases aborted bodies", async () => {
+    let listener;
+    await create({ createServer: (...args) => { listener = memoryServer(...args); return listener; } });
+    const incoming = [];
+    listener.on("request", (req) => { incoming.push(req); });
+    const state = bridge.getState();
+    const streaming = Array.from({ length: 32 }, () => {
+      const req = http.request({ createConnection: memoryConnect, hostname: "127.0.0.1", port: state.port,
+        method: "POST", path: "/v1/sounds/sound-new/play", headers: { Authorization: `Bearer ${state.token}`, "Transfer-Encoding": "chunked" } });
+      req.on("error", () => {});
+      req.write("{");
+      return req;
+    });
+    try {
+      await vi.waitFor(() => expect(incoming).toHaveLength(32));
+      expect(onCommand).not.toHaveBeenCalled();
+      expect(await request("/v1/sounds/sound-new/play", { method: "POST" })).toEqual({ status: 503, body: { ok: false, code: "busy" } });
+      const aborted = new Promise((resolve) => incoming[0].once("aborted", resolve));
+      streaming[0].destroy();
+      await aborted;
+      expect(await request("/v1/sounds/sound-new/play", { method: "POST" })).toEqual({ status: 200, body: { ok: true } });
+      expect(onCommand).toHaveBeenCalledOnce();
+    } finally {
+      for (const req of streaming) req.destroy();
+    }
+  });
+
   it("keeps a fully received HTTP command alive during dispatch and does not cancel a completed response", async () => {
     let listener;
     await create({ createServer: (...args) => { listener = memoryServer(...args); return listener; } });

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AudioEngine } from "./audioEngine";
 import { normalizeSoundEffects } from "./model";
-import { waitForAudioConfiguration } from "./controlReadiness";
+import { trackAudioConfiguration, waitForAudioConfiguration } from "./controlReadiness";
 import { createSoundPlayQueue } from "./soundPlayQueue";
 import { FakeAudioContext, deferred, makeAudioSettings, makeSound, voiceGains, waitForMockCalls } from "./testing/webAudioFakes";
 
@@ -283,6 +283,52 @@ describe("AudioEngine output routing", () => {
     expect(started).toBe(false);
     expect(virtualContext().bufferSources).toHaveLength(0);
     await engine.dispose();
+  });
+
+  it.each([false, true])("waits for device refresh and both monitor retry attempts before an external play (fallback succeeds: %s)", async (fallbackSucceeds) => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const settings = { ...playbackSettings, monitorDeviceId: "preferred-output" };
+    const engine = new AudioEngine(settings, vi.fn());
+    const configuration = { current: engine.configure(settings, "") };
+    await configuration.current;
+    const refresh = deferred<void>();
+    const preferred = deferred<void>();
+    const fallback = deferred<void>();
+    monitorContext().setSinkId.mockReturnValueOnce(preferred.promise).mockReturnValueOnce(fallback.promise);
+    // The renderer tracks the whole refresh, before enumeration can detect that
+    // the selected monitor has disappeared and begin retrying its sinks.
+    trackAudioConfiguration(configuration, refresh.promise.then(() => engine.retryPreferredDevices({ recheckMonitor: true })));
+    const play = vi.fn(() => engine.play(makeSound({ outputTarget: "monitor" })));
+    const result = vi.fn();
+    const pending = waitForAudioConfiguration(() => configuration.current).then(play).then(result);
+    try {
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(play).not.toHaveBeenCalled();
+      refresh.resolve();
+      await waitForMockCalls(monitorContext().setSinkId, 2);
+      expect(monitorContext().setSinkId).toHaveBeenLastCalledWith("preferred-output");
+      expect(play).not.toHaveBeenCalled();
+      preferred.reject(new DOMException("output unavailable", "NotFoundError"));
+      await waitForMockCalls(monitorContext().setSinkId, 3);
+      expect(monitorContext().setSinkId).toHaveBeenLastCalledWith("");
+      expect(play).not.toHaveBeenCalled();
+      expect(result).not.toHaveBeenCalled();
+      expect(monitorContext().bufferSources).toHaveLength(0);
+      if (fallbackSucceeds) fallback.resolve();
+      else fallback.reject(new DOMException("default unavailable", "NotFoundError"));
+      await pending;
+      expect(result).toHaveBeenCalledExactlyOnceWith(fallbackSucceeds);
+      expect(engine.getDeviceStatus().monitor.state).toBe(fallbackSucceeds ? "fallback" : "unavailable");
+      expect(monitorContext().bufferSources).toHaveLength(fallbackSucceeds ? 1 : 0);
+      expect(engine.isPlaying("sound-1")).toBe(fallbackSucceeds);
+    } finally {
+      refresh.resolve();
+      preferred.resolve();
+      fallback.resolve();
+      await pending;
+      await engine.dispose();
+    }
   });
 
   it("routes a monitor-target sound to the monitor context only", async () => {

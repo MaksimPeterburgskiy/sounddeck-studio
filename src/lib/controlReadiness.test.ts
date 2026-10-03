@@ -1,8 +1,58 @@
 import { describe, expect, it, vi } from "vitest";
-import { waitForAudioConfiguration } from "./controlReadiness";
+import { trackAudioConfiguration, waitForAudioConfiguration } from "./controlReadiness";
 import { deferred } from "./testing/webAudioFakes";
 
 describe("external control audio readiness", () => {
+  it("retains pending routing when overlapping settings or device retries finish first", async () => {
+    const configuration = { current: null as Promise<void> | null };
+    const earlier = deferred<void>();
+    const newer = deferred<void>();
+    trackAudioConfiguration(configuration, earlier.promise);
+    const ready = vi.fn();
+    const pending = waitForAudioConfiguration(() => configuration.current).then(ready);
+    trackAudioConfiguration(configuration, newer.promise);
+    newer.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(ready).not.toHaveBeenCalled();
+    earlier.resolve();
+    await pending;
+    expect(ready).toHaveBeenCalledOnce();
+  });
+
+  it("allows successful routing to supersede a failed operation", async () => {
+    const configuration = { current: null as Promise<void> | null };
+    const earlier = deferred<void>();
+    const newer = deferred<void>();
+    trackAudioConfiguration(configuration, earlier.promise);
+    const ready = vi.fn();
+    const pending = waitForAudioConfiguration(() => configuration.current).then(ready);
+    trackAudioConfiguration(configuration, newer.promise);
+    earlier.reject(new Error("Old routing failed"));
+    await Promise.resolve();
+    expect(ready).not.toHaveBeenCalled();
+    newer.resolve();
+    await pending;
+    expect(ready).toHaveBeenCalledOnce();
+  });
+
+  it("waits for older work to settle before reporting the latest routing failure", async () => {
+    const configuration = { current: null as Promise<void> | null };
+    const earlier = deferred<void>();
+    const newer = deferred<void>();
+    trackAudioConfiguration(configuration, earlier.promise);
+    const tracked = trackAudioConfiguration(configuration, newer.promise);
+    const settled = vi.fn();
+    const pending = tracked.catch(settled);
+    newer.reject(new Error("Latest routing failed"));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(settled).not.toHaveBeenCalled();
+    earlier.resolve();
+    await pending;
+    expect(settled).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ message: "Latest routing failed" }));
+  });
+
   it("waits for configuration that starts before an unconfigured wait settles", async () => {
     let configuration: Promise<void> | null = null;
     const ready = vi.fn();
