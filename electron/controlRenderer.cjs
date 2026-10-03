@@ -4,19 +4,33 @@ function createControlRenderer({ send, timeoutMs = 5000 }) {
   const pending = new Map();
 
   function cancelPending() {
-    for (const request of pending.values()) {
+    const requests = [...pending.values()];
+    pending.clear();
+    for (const request of requests) {
       request.cleanup();
+      request.cancel();
       request.resolve({ ok: false, code: "unavailable" });
     }
-    pending.clear();
   }
 
   function dispatch(message, signal) {
     if (signal?.aborted) return Promise.resolve({ ok: false, code: "unavailable" });
     return new Promise((resolve) => {
       const requestId = randomUUID();
-      const cancel = () => {
+      const sendCancellation = () => {
         try { send({ command: "control.cancel", requestId }); } catch {}
+      };
+      const cancel = () => {
+        const request = pending.get(requestId);
+        if (!request) return;
+        // Plays and commands awaiting receipt can fail immediately. Accepted
+        // mutations must let the FIFO distinguish queued work from applied work.
+        if (message.command === "sound.play" || !request.received) {
+          cleanup();
+          pending.delete(requestId);
+          resolve({ ok: false, code: "unavailable" });
+        }
+        sendCancellation();
       };
       const cleanup = () => {
         clearTimeout(timer);
@@ -27,10 +41,10 @@ function createControlRenderer({ send, timeoutMs = 5000 }) {
       const timer = setTimeout(() => {
         cleanup();
         pending.delete(requestId);
-        cancel();
+        sendCancellation();
         resolve({ ok: false, code: "unavailable" });
       }, timeoutMs);
-      pending.set(requestId, { resolve, cleanup, timer, message });
+      pending.set(requestId, { resolve, cleanup, timer, message, cancel: sendCancellation, received: false });
       signal?.addEventListener("abort", cancel, { once: true });
       try {
         send({ ...message, requestId });
@@ -46,6 +60,7 @@ function createControlRenderer({ send, timeoutMs = 5000 }) {
     const request = pending.get(requestId);
     if (!request) return false;
     clearTimeout(request.timer);
+    request.received = true;
     return true;
   }
 

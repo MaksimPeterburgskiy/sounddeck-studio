@@ -597,13 +597,20 @@ describe("external control protocol and dispatch", () => {
     expect(await connection.next()).toEqual({ type: "result", id: "route", ok: false, code: "unavailable" });
   });
 
-  it("bounds pending commands per WebSocket session and restores capacity after failure", async () => {
+  it.each([
+    ["sound.play", { soundId: "sound-new" }],
+    ["setting.set", { key: "micPassthrough", value: true }],
+    ["setting.toggle", { key: "micPassthrough" }],
+    ["volume.set", { bus: "micVirtual", value: 0.5 }],
+    ["volume.adjust", { bus: "micVirtual", delta: 0.1 }],
+    ["volume.mute", { bus: "micVirtual" }]
+  ])("bounds pending %s commands per WebSocket session and restores capacity after failure", async (command, args) => {
     await create();
     const connection = await session();
     const other = await session();
     const completions = [];
     onCommand.mockImplementation(() => new Promise((resolve) => { completions.push(resolve); }));
-    const play = (client, id) => client.send({ type: "command", id, command: "sound.play", args: { soundId: "sound-new" } });
+    const play = (client, id) => client.send({ type: "command", id, command, args });
     try {
       for (let index = 0; index < 32; index += 1) play(connection, `pending-${index}`);
       await vi.waitFor(() => expect(onCommand).toHaveBeenCalledTimes(32));
@@ -628,11 +635,18 @@ describe("external control protocol and dispatch", () => {
     }
   });
 
-  it("bounds HTTP commands per address across connections and restores capacity after dispatch errors", async () => {
+  it.each([
+    ["/v1/sounds/sound-new/play", {}],
+    ["/v1/settings/micPassthrough", { value: true }],
+    ["/v1/settings/micPassthrough", { toggle: true }],
+    ["/v1/volumes/micVirtual", { value: 0.5 }],
+    ["/v1/volumes/micVirtual", { delta: 0.1 }],
+    ["/v1/volumes/micVirtual", { toggleMute: true }]
+  ])("bounds HTTP %s commands per address across connections and restores capacity after dispatch errors (%j)", async (url, body) => {
     await create();
     const completions = [];
     onCommand.mockImplementation(() => new Promise((resolve, reject) => { completions.push({ resolve, reject }); }));
-    const play = (address) => request("/v1/sounds/sound-new/play", { method: "POST", address });
+    const play = (address) => request(url, { method: "POST", body, address });
     const pending = Array.from({ length: 32 }, () => play());
     try {
       await vi.waitFor(() => expect(onCommand).toHaveBeenCalledTimes(32));
@@ -731,7 +745,10 @@ describe("external control protocol and dispatch", () => {
     expect((await other).body).toEqual({ ok: true });
   });
 
-  it.each(["HTTP", "WebSocket"])("cancels disconnected %s mutations before application while applied mutations finish", async (transport) => {
+  it.each([
+    ...["disconnect", "token", "disable", "port", "LAN", "stop"].map((reason) => ["HTTP", reason]),
+    ...["disconnect", "token", "disable", "port", "LAN", "stop", "invalid-message", "backpressure", "socket-error"].map((reason) => ["WebSocket", reason])
+  ])("cancels queued %s mutations on %s while applied mutations finish", async (transport, reason) => {
     let settings = { ...audioSettings };
     let finishSave;
     const saving = new Promise((resolve) => { finishSave = resolve; });
@@ -762,7 +779,12 @@ describe("external control protocol and dispatch", () => {
       });
     } });
     onCommand.mockImplementation((command, signal) => renderer.dispatch(command, signal));
-    await create();
+    let serverSocket;
+    await create({ createWebSocketServer: (options) => {
+      const server = new WebSocketServer(options);
+      server.on("connection", (ws) => { serverSocket = ws; });
+      return server;
+    } });
     const disconnected = [];
     let connection;
     const submit = async (value) => {
@@ -782,20 +804,43 @@ describe("external control protocol and dispatch", () => {
     await vi.waitFor(() => expect(persisted).toEqual([0.6]));
     await submit(0.9);
     await vi.waitFor(() => expect(onCommand).toHaveBeenCalledTimes(2));
-    const other = request("/v1/volumes/micVirtual", { method: "POST", body: { delta: 0.2 } });
-    await vi.waitFor(() => expect(onCommand).toHaveBeenCalledTimes(3));
-    if (connection) connection.ws.terminate();
-    for (const req of disconnected) req.destroy();
+    let other;
+    if (reason === "disconnect") {
+      other = request("/v1/volumes/micVirtual", { method: "POST", body: { delta: 0.2 } });
+      await vi.waitFor(() => expect(onCommand).toHaveBeenCalledTimes(3));
+      if (connection) connection.ws.terminate();
+      for (const req of disconnected) req.destroy();
+    } else if (reason === "token") await bridge.regenerateToken();
+    else if (reason === "disable") await bridge.setSettings({ enabled: false });
+    else if (reason === "port") await bridge.setSettings({ port: bridge.getState().port + 1 });
+    else if (reason === "LAN") await bridge.setSettings({ allowLan: true });
+    else if (reason === "stop") await bridge.stop();
+    else if (reason === "invalid-message") serverSocket.emit("message", Buffer.from("{"), false);
+    else if (reason === "backpressure") {
+      Object.defineProperty(serverSocket, "bufferedAmount", { configurable: true, value: 8 * 1024 * 1024 + 1 });
+      bridge.updateLiveState({ activeBoardId: "board-b", playback: [] });
+    } else serverSocket.emit("error", new Error("Socket failed"));
+    if (reason !== "disconnect") {
+      expect(onCommand.mock.calls.every(([, signal]) => signal.aborted)).toBe(true);
+      expect([...requests.values()].every((cancellation) => cancellation.signal.aborted)).toBe(true);
+    }
     await vi.waitFor(() => expect(onCommand.mock.calls.slice(0, 2).every(([, signal]) => signal.aborted)).toBe(true));
     expect(settings.micVirtualVolume).toBe(0.6);
     finishSave();
-    expect(await other).toEqual({ status: 200, body: { ok: true, data: { bus: "micVirtual", value: 0.8, muted: false } } });
-    expect(persisted).toEqual([0.6, 0.8]);
-    expect(completed).toEqual([
+    const expected = [
       { ok: true, data: { bus: "micVirtual", value: 0.6, muted: false } },
-      { ok: false, code: "unavailable" },
-      { ok: true, data: { bus: "micVirtual", value: 0.8, muted: false } }
-    ]);
+      { ok: false, code: "unavailable" }
+    ];
+    if (other) {
+      expect(await other).toEqual({ status: 200, body: { ok: true, data: { bus: "micVirtual", value: 0.8, muted: false } } });
+      expect(persisted).toEqual([0.6, 0.8]);
+      expected.push({ ok: true, data: { bus: "micVirtual", value: 0.8, muted: false } });
+    } else {
+      await vi.waitFor(() => expect(completed).toHaveLength(2));
+      expect(persisted).toEqual([0.6]);
+      expect(settings.micVirtualVolume).toBe(0.6);
+    }
+    expect(completed).toEqual(expected);
     expect(requests.size).toBe(0);
   });
 
@@ -811,7 +856,11 @@ describe("external control protocol and dispatch", () => {
     await vi.waitFor(() => expect(onCommand.mock.lastCall[1].aborted).toBe(true));
   });
 
-  it.each(["token", "disable", "port", "LAN", "stop", "invalid-message", "backpressure", "socket-error"])("aborts every pending session play synchronously on %s revocation", async (reason) => {
+  it.each(["token", "disable", "port", "LAN", "stop", "invalid-message", "backpressure", "socket-error"].flatMap((reason) => [
+    [reason, "sound.play", { soundId: "sound-new" }],
+    [reason, "setting.toggle", { key: "micPassthrough" }],
+    [reason, "volume.adjust", { bus: "micVirtual", delta: 0.2 }]
+  ]))("aborts every pending session command synchronously on %s revocation (%s)", async (reason, command, args) => {
     let serverSocket;
     await create({ createWebSocketServer: (options) => {
       const server = new WebSocketServer(options);
@@ -827,7 +876,7 @@ describe("external control protocol and dispatch", () => {
       played();
       return { ok: true };
     });
-    for (const id of ["first", "second"]) connection.send({ type: "command", id, command: "sound.play", args: { soundId: "sound-new" } });
+    for (const id of ["first", "second"]) connection.send({ type: "command", id, command, args });
     await vi.waitFor(() => expect(onCommand).toHaveBeenCalledTimes(2));
     const closed = vi.fn();
     serverSocket.on("close", closed);
@@ -865,7 +914,11 @@ describe("external control protocol and dispatch", () => {
     serverSocket.terminate();
   });
 
-  it.each(["token", "disable", "port", "LAN", "stop"])("aborts dispatched HTTP plays at %s revocation before response closure", async (reason) => {
+  it.each(["token", "disable", "port", "LAN", "stop"].flatMap((reason) => [
+    [reason, "/v1/sounds/sound-new/play", {}],
+    [reason, "/v1/settings/micPassthrough", { toggle: true }],
+    [reason, "/v1/volumes/micVirtual", { delta: 0.2 }]
+  ]))("aborts dispatched HTTP commands at %s revocation before response closure (%s)", async (reason, url, body) => {
     let listener;
     await create({ createServer: (...args) => { listener = memoryServer(...args); return listener; } });
     let response;
@@ -875,7 +928,7 @@ describe("external control protocol and dispatch", () => {
       await new Promise((resolve) => { finish = resolve; });
       return signal.aborted ? { ok: false, code: "unavailable" } : { ok: true };
     });
-    const pending = request("/v1/sounds/sound-new/play", { method: "POST" }).catch(() => null);
+    const pending = request(url, { method: "POST", body }).catch(() => null);
     await vi.waitFor(() => expect(onCommand).toHaveBeenCalledOnce());
     const signal = onCommand.mock.lastCall[1];
     const closed = vi.fn();
