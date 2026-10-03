@@ -45,7 +45,142 @@ function setup() {
 }
 function event(action: unknown, settings: ActionSettings = {}, extra = {}) { return { action, payload: { settings, ...extra } } as never; }
 
+function deferCommands(connection: ReturnType<typeof setup>["connection"]) {
+  const acknowledgements: Array<{ resolve: (result: ControlResult) => void; reject: (error: Error) => void }> = [];
+  connection.command.mockImplementation(() => new Promise((resolve, reject) => {
+    acknowledgements.push({ resolve, reject });
+  }));
+  return acknowledgements;
+}
+
 describe("volume keys", () => {
+  it.each(["up", "down"] as const)("coalesces ticks behind both initial and repeat acknowledgements for %s", async (mode) => {
+    vi.useFakeTimers();
+    const { connection, key, volume } = setup();
+    const acknowledgements = deferCommands(connection);
+    const delta = mode === "up" ? 0.07 : -0.07;
+    const down = event(key, { bus: "micMonitor", mode, step: 7 });
+    const first = volume.onKeyDown(down);
+    await vi.advanceTimersByTimeAsync(650); // ticks at 400, 525, and 650 ms
+    expect(connection.command).toHaveBeenCalledExactlyOnceWith("volume.adjust", { bus: "micMonitor", delta });
+    acknowledgements[0].resolve(success); await flush();
+    expect(connection.command).toHaveBeenCalledTimes(2);
+    expect(connection.command).toHaveBeenLastCalledWith("volume.adjust", { bus: "micMonitor", delta: delta * 3 });
+    await vi.advanceTimersByTimeAsync(250);
+    expect(connection.command).toHaveBeenCalledTimes(2);
+    acknowledgements[1].resolve(success); await flush();
+    expect(connection.command).toHaveBeenCalledTimes(3);
+    expect(connection.command).toHaveBeenLastCalledWith("volume.adjust", { bus: "micMonitor", delta: delta * 2 });
+    volume.onKeyUp(down);
+    acknowledgements[2].resolve(success); await first;
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("bounds accumulated repeat ticks during a long acknowledgement", async () => {
+    vi.useFakeTimers();
+    const { connection, key, volume } = setup();
+    const acknowledgements = deferCommands(connection);
+    const first = volume.onKeyDown(event(key));
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(connection.command).toHaveBeenCalledTimes(1);
+    acknowledgements[0].resolve(success); await flush();
+    expect(connection.command).toHaveBeenCalledTimes(2);
+    expect(connection.command).toHaveBeenLastCalledWith("volume.adjust", { bus: "micVirtual", delta: 0.4 });
+    volume.onKeyUp(event(key));
+    acknowledgements[1].resolve(success); await first;
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(["initial", "repeat"].flatMap((stage) =>
+    ["up", "disappear", "disconnect", "bus", "mode", "step", "failure", "rejection"].map((stop) => ({ stage, stop })),
+  ))("discards accumulated ticks behind a pending $stage command on $stop", async ({ stage, stop }) => {
+    vi.useFakeTimers();
+    const { connection, key, volume } = setup();
+    let first = Promise.resolve();
+    if (stage === "repeat") await volume.onKeyDown(event(key));
+    const acknowledgements = deferCommands(connection);
+    if (stage === "initial") first = volume.onKeyDown(event(key));
+    await vi.advanceTimersByTimeAsync(650);
+    const sent = stage === "initial" ? 1 : 2;
+    expect(connection.command).toHaveBeenCalledTimes(sent);
+    if (stop === "up") volume.onKeyUp(event(key));
+    if (stop === "disappear") volume.onWillDisappear(event(key));
+    if (stop === "bus") volume.onDidReceiveSettings(event(key, { bus: "micMonitor" }));
+    if (stop === "mode") volume.onDidReceiveSettings(event(key, { mode: "down" }));
+    if (stop === "step") volume.onDidReceiveSettings(event(key, { step: 6 }));
+    if (stop === "disconnect") {
+      connection.session = null; connection.status = "offline"; connection.emit();
+      connection.session = {}; connection.status = "connected"; connection.emit();
+    }
+    if (stop === "rejection") acknowledgements[0].reject(new Error("Command failed"));
+    else acknowledgements[0].resolve(stop === "failure" ? { type: "result", id: "ack", ok: false, code: "busy" } : success);
+    await first; await flush();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(connection.command).toHaveBeenCalledTimes(sent);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(["up", "disappear", "disconnect", "settings"])("keeps the command slot occupied across %s and a new press", async (stop) => {
+    vi.useFakeTimers();
+    const { connection, key, volume } = setup();
+    const acknowledgements = deferCommands(connection);
+    const first = volume.onKeyDown(event(key));
+    await vi.advanceTimersByTimeAsync(650);
+    if (stop === "up") volume.onKeyUp(event(key));
+    if (stop === "disappear") volume.onWillDisappear(event(key));
+    if (stop === "settings") volume.onDidReceiveSettings(event(key, { bus: "micMonitor" }));
+    if (stop === "disconnect") {
+      connection.session = null; connection.status = "offline"; connection.emit();
+      connection.session = {}; connection.status = "connected"; connection.emit();
+    }
+    await volume.onKeyDown(event(key, { bus: "micMonitor", mode: "down", step: 3 }));
+    expect(connection.command).toHaveBeenCalledTimes(1);
+    acknowledgements[0].resolve(success); await flush();
+    expect(connection.command).toHaveBeenCalledTimes(2);
+    expect(connection.command).toHaveBeenLastCalledWith("volume.adjust", { bus: "micMonitor", delta: -0.03 });
+    volume.onKeyUp(event(key));
+    acknowledgements[1].resolve(success); await first;
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("allows different keys to adjust independently while their acknowledgements are pending", async () => {
+    vi.useFakeTimers();
+    const { connection, key, volume } = setup();
+    const acknowledgements = deferCommands(connection);
+    const other = { ...key, id: "other" };
+    const first = volume.onKeyDown(event(key));
+    const second = volume.onKeyDown(event(other, { mode: "down" }));
+    await vi.advanceTimersByTimeAsync(650);
+    expect(connection.command.mock.calls).toEqual([
+      ["volume.adjust", { bus: "micVirtual", delta: 0.05 }],
+      ["volume.adjust", { bus: "micVirtual", delta: -0.05 }],
+    ]);
+    volume.onKeyUp(event(key)); volume.onKeyUp(event(other));
+    acknowledgements[0].resolve(success); acknowledgements[1].resolve(success);
+    await Promise.all([first, second]);
+    expect(connection.command).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(["up", "down"] as const)("drops a queued %s batch when the acknowledgement snapshot reaches the limit", async (mode) => {
+    vi.useFakeTimers();
+    const { connection, key, volume } = setup();
+    const acknowledgements = deferCommands(connection);
+    const first = volume.onKeyDown(event(key, { mode }));
+    await vi.advanceTimersByTimeAsync(650);
+    connection.snapshot.volumes.micVirtual.value = mode === "up" ? 1 : 0;
+    acknowledgements[0].resolve(success); await first;
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(connection.command).toHaveBeenCalledTimes(1);
+    connection.snapshot.volumes.micVirtual.value = 0.5;
+    await vi.advanceTimersByTimeAsync(125);
+    expect(connection.command).toHaveBeenCalledTimes(2);
+    expect(connection.command).toHaveBeenLastCalledWith("volume.adjust", { bus: "micVirtual", delta: mode === "up" ? 0.05 : -0.05 });
+    volume.onKeyUp(event(key));
+    acknowledgements[1].resolve(success); await flush();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it.each([
     { bus: "micVirtual", mode: "up", limit: 1, away: 0.8, delta: 0.05 },
     { bus: "soundboardMonitor", mode: "down", limit: 0, away: 0.2, delta: -0.05 },
@@ -141,11 +276,13 @@ describe("volume keys", () => {
     const down = volume.onKeyDown(event(key));
     volume.onDidReceiveSettings(event(key, { bus: "micVirtual", mode: "up", step: 4.6, title: "Custom" }));
     await vi.advanceTimersByTimeAsync(525);
-    expect(connection.command).toHaveBeenCalledTimes(3);
+    expect(connection.command).toHaveBeenCalledTimes(1);
     volume.onDidReceiveSettings(event(key, {}));
     await vi.advanceTimersByTimeAsync(125);
-    expect(connection.command).toHaveBeenCalledTimes(4);
+    expect(connection.command).toHaveBeenCalledTimes(1);
     resolve(success); await down;
+    expect(connection.command).toHaveBeenCalledTimes(2);
+    expect(connection.command).toHaveBeenLastCalledWith("volume.adjust", { bus: "micVirtual", delta: expect.closeTo(0.15) });
     volume.onKeyUp(event(key));
     expect(vi.getTimerCount()).toBe(0);
   });
