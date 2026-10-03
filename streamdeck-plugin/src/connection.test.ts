@@ -117,6 +117,38 @@ describe("shared connection", () => {
     await waitFor(() => connection.status === "connected");
   });
 
+  it("recovers from auth-error when the unchanged listener stops, launching only on throttled presses", async () => {
+    const { bridge, readDiscovery, upgrades } = await realServer({ cooldownMs: 1500 });
+    const file = await readDiscovery();
+    const staleFile = { ...file, state: { ...file.state!, token: "wrong" } };
+    const reads = vi.fn(async () => staleFile);
+    const launch = vi.fn();
+    let now = 0;
+    const connection = new Connection("0.1.22", { discover: reads, launch, now: () => now, retryMinMs: 20, retryMaxMs: 40 });
+    resources.push(() => connection.stop());
+    connection.start();
+    await waitFor(() => upgrades.length >= 6 && connection.status === "auth-error");
+    connection.handleDisconnectedPress();
+    expect(launch).not.toHaveBeenCalled();
+    await bridge.stop();
+    await waitFor(() => connection.status === "offline");
+    expect(connection.statusLabel).toBe("Offline");
+    const priorReads = reads.mock.calls.length;
+    await waitFor(() => reads.mock.calls.length >= priorReads + 3);
+    expect(connection.status).toBe("offline");
+    expect(launch).not.toHaveBeenCalled();
+    connection.handleDisconnectedPress();
+    connection.handleDisconnectedPress();
+    now = 29_999;
+    connection.handleDisconnectedPress();
+    expect(launch).toHaveBeenCalledTimes(1);
+    expect(launch).toHaveBeenCalledWith(file.state!.appPath);
+    now = 30_000;
+    connection.handleDisconnectedPress();
+    expect(launch).toHaveBeenCalledTimes(2);
+    expect((await connection.command("playback.stopAll", {})).ok).toBe(false);
+  });
+
   it("does not resurrect a connection when discovery completes after stop", async () => {
     let complete!: (value: DiscoveryFile | null) => void;
     const read = vi.fn(() => new Promise<DiscoveryFile | null>((resolve) => { complete = resolve; }));
@@ -169,8 +201,8 @@ describe("shared connection", () => {
     const connection = new Connection("0.1.22", { discover: reads, launch, now: () => now, retryMinMs: 40, retryMaxMs: 80 });
     resources.push(() => connection.stop());
     connection.start();
-    await waitFor(() => reads.mock.calls.length >= 2 && connection.status === "protocol-mismatch");
-    expect(connection.statusLabel).toBe("Update\nplugin");
+    await waitFor(() => reads.mock.calls.length >= 2 && connection.status === "offline");
+    expect(connection.statusLabel).toBe("Offline");
     expect(launch).not.toHaveBeenCalled();
     await waitFor(() => {
       connection.handleDisconnectedPress();
