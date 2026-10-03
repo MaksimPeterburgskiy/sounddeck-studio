@@ -12,7 +12,7 @@ export interface DiscoveryOptions {
 export interface DiscoveryFile { path: string; state: ControlDiscovery | null }
 
 export function discoveryPaths({ platform = process.platform, home = os.homedir(), env = process.env }: DiscoveryOptions = {}): string[] {
-  const paths = platform === "win32" ? path.win32 : path;
+  const paths = platform === "win32" ? path.win32 : path.posix;
   const base = platform === "darwin" ? paths.join(home, "Library", "Application Support")
     : platform === "win32" ? (env.APPDATA || paths.join(home, "AppData", "Roaming"))
       : (env.XDG_CONFIG_HOME || paths.join(home, ".config"));
