@@ -62,16 +62,18 @@ function createStreamDeckInstaller({
     let installed = false;
     let installedVersion;
     let source = "unknown";
+    let distribution;
     if (installedPath) {
       try { installed = (await fileSystem.stat(installedPath)).isDirectory(); } catch { /* Absent or inaccessible installation. */ }
-      // DRM protects manifests after Maker Console processing. There is no
-      // documented Marketplace-origin field in the manifest or SDK hello;
-      // encryption alone does not establish installation provenance.
+      // Version detection is separate from provenance: only the build-time
+      // marker reported by our plugin identifies a GitHub sideload. A readable
+      // manifest or authenticated control token alone cannot establish this.
       const client = getClients().find((client) => client.name === PLUGIN_CLIENT && normalizedVersion(client.version));
       if (client) {
         installed = true;
         installedVersion = normalizedVersion(client.version);
         source = "client";
+        distribution = client.distribution;
       } else if (installed) {
         try {
           const manifest = JSON.parse(await fileSystem.readFile(path.join(installedPath, "manifest.json"), "utf8"));
@@ -82,7 +84,7 @@ function createStreamDeckInstaller({
     }
     return {
       bundledVersion, installed, ...(installedVersion ? { installedVersion } : {}), source,
-      updateAvailable: isOlderVersion(installedVersion, bundledVersion) && await bundledFileExists()
+      updateAvailable: distribution === "github" && isOlderVersion(installedVersion, bundledVersion) && await bundledFileExists()
     };
   }
 

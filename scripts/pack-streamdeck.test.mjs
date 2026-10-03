@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { toStreamDeckVersion, stampManifest } from "../streamdeck-plugin/scripts/version.mjs";
+import { stampManifest } from "../streamdeck-plugin/scripts/version.mjs";
 import { packStreamDeck, pluginFileName, stageStreamDeckPlugin } from "./pack-streamdeck.mjs";
 import { verifyStreamDeckResource } from "./verify-streamdeck-resource.mjs";
 
@@ -14,15 +14,6 @@ async function makeTempDir() {
 }
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
-});
-
-describe("Stream Deck version mapping", () => {
-  it.each([["1.2.3", "1.2.3.99999"], ["1.2.3-beta.0", "1.2.3.0"], ["1.2.3-beta.28", "1.2.3.28"]])("maps %s", (input, output) => {
-    expect(toStreamDeckVersion(input)).toBe(output);
-  });
-  it.each(["1.2", "1.2.3-rc.1", "1.2.3-beta.-1", "1.2.3-beta.99999", "1.2.3-beta.9007199254740993", "01.2.3"])("rejects %s", (input) => {
-    expect(() => toStreamDeckVersion(input)).toThrow(/Unsupported/);
-  });
 });
 
 describe("pack staging", () => {

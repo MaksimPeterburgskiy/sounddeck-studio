@@ -8,6 +8,7 @@
 // loops below become redundant and can go.
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
+import { validateBuilderPublishing } from "./validate-builder-publishing.mjs";
 
 const repoRoot = process.cwd();
 const workflowsDir = path.join(repoRoot, ".github", "workflows");
@@ -26,10 +27,7 @@ for (const [name, source] of workflows) {
       `${name} uses a mutable action reference: ${match[1]}`
     );
   }
-  for (const line of source.split("\n")) {
-    if (!/\belectron-builder\s+--/.test(line) || /^\s*#/.test(line)) continue;
-    assert(/--publish\s+never\b/.test(line), `${name} electron-builder invocations must explicitly disable publishing.`);
-  }
+  validateBuilderPublishing(source, name);
   for (const match of source.matchAll(/uses:\s*actions\/checkout@[a-f0-9]{40}[\s\S]*?(?=\n\s*-\s+[\w-]+:|$)/g)) {
     assert(
       /persist-credentials:\s*false/.test(match[0]),
@@ -41,7 +39,6 @@ for (const [name, source] of workflows) {
 
 const release = requiredWorkflow("release.yml");
 assert(/^permissions:\s*\n\s+contents:\s*read/m.test(release), "Release workflow must default to contents: read.");
-assert(!/--publish\s+always/.test(release), "Release builds must not publish directly.");
 assert(/gh release create[\s\S]{0,200}--draft/.test(release), "Release workflow must create a draft release.");
 assert(/--draft=false/.test(release), "Release workflow must publish the draft once packaging succeeds.");
 

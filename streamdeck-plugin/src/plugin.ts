@@ -14,7 +14,9 @@ import { VolumeMute } from "./actions/volumeMute";
 import { VolumeDial } from "./actions/volumeDial";
 
 declare const __PLUGIN_VERSION__: string;
+declare const __PLUGIN_DISTRIBUTION__: "github" | "marketplace";
 const connection = new Connection(__PLUGIN_VERSION__, {
+  distribution: __PLUGIN_DISTRIBUTION__,
   launch(appPath) {
     try {
       launchApp(appPath, process.platform, undefined, (error) => streamDeck.logger.error("SoundDeck launch failed", error));

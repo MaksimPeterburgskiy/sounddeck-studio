@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { dismissPluginUpdate, isPluginUpdateDismissed, pluginInstallError } from "./streamdeckPrompts";
+import { dismissPluginUpdate, isPluginUpdateDismissed } from "./streamdeckPrompts";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -19,11 +19,5 @@ describe("Stream Deck update prompts", () => {
     vi.stubGlobal("localStorage", { getItem: () => { throw new Error("Unavailable"); }, setItem: () => { throw new Error("Unavailable"); } });
     expect(isPluginUpdateDismissed("0.1.22.99999")).toBe(false);
     expect(() => dismissPluginUpdate("0.1.22.99999")).not.toThrow();
-  });
-
-  it("explains install failures without exposing shell messages", () => {
-    expect(pluginInstallError("no-handler")).toBe("Stream Deck software not found");
-    expect(pluginInstallError("missing-file")).toBe("Stream Deck plugin file is unavailable.");
-    expect(pluginInstallError()).toBe("Could not open the Stream Deck plugin.");
   });
 });

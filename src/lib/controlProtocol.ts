@@ -66,6 +66,7 @@ export type ControlCommand = {
 export interface ControlClient {
   name: string;
   version: string;
+  distribution?: "github" | "marketplace";
 }
 
 export interface ControlHello {

@@ -242,10 +242,12 @@ jobs:
           $windowsInstaller = $assetNames | Where-Object { $_ -eq "SoundDeck-Studio-Setup-$version.exe" } | Select-Object -First 1
           $windowsPortable = $assetNames | Where-Object { $_ -eq "SoundDeck-Studio-$version.exe" } | Select-Object -First 1
           $macInstaller = $assetNames | Where-Object { $_ -like "SoundDeck*.pkg" } | Select-Object -First 1
+          $streamDeckPlugin = $assetNames | Where-Object { $_ -eq "SoundDeck-Studio-StreamDeck-$version.streamDeckPlugin" } | Select-Object -First 1
 
           if (-not $windowsInstaller) { throw "Could not find Windows installer asset for $tag." }
           if (-not $windowsPortable) { throw "Could not find Windows portable asset for $tag." }
           if (-not $macInstaller) { throw "Could not find macOS pkg asset for $tag." }
+          if (-not $streamDeckPlugin) { throw "Could not find Stream Deck plugin asset for $tag." }
 
           function AssetUrl($assetName) {
             $encoded = [System.Uri]::EscapeDataString($assetName)
@@ -262,6 +264,7 @@ jobs:
             "| [$windowsInstaller]($(AssetUrl $windowsInstaller)) | **Recommended for Windows.** Installer with auto-update; sets up the VB-CABLE virtual mic if needed. |",
             "| [$macInstaller]($(AssetUrl $macInstaller)) | **Recommended for macOS.** Signed and notarized package with auto-update; installs SoundDeck Studio and the bundled BlackHole 2ch virtual audio driver. |",
             "| [$windowsPortable]($(AssetUrl $windowsPortable)) | Windows portable. No installation, but no auto-update either. |",
+            "| [$streamDeckPlugin]($(AssetUrl $streamDeckPlugin)) | Stream Deck plugin; also installable from Settings. |",
             "",
             "> On macOS, microphone passthrough, recording, and global hotkeys may require approving SoundDeck Studio in System Settings -> Privacy & Security.",
             "",

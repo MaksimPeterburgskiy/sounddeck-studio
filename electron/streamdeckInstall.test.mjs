@@ -53,18 +53,30 @@ describe("Stream Deck version detection", () => {
   });
 
   it("prefers the authenticated plugin client's app version over the manifest", async () => {
-    const { installer } = await fixture({ clients: [{ name: "SoundDeck Stream Deck plugin", version: "0.1.22" }], manifest: manifest("0.1.21.99999") });
+    const { installer } = await fixture({ clients: [{ name: "SoundDeck Stream Deck plugin", version: "0.1.22", distribution: "github" }], manifest: manifest("0.1.21.99999") });
     expect(await installer.status()).toEqual({ bundledVersion: "0.1.22.99999", installed: true, installedVersion: "0.1.22.99999", source: "client", updateAvailable: false });
   });
 
-  it("uses the client even with a DRM-unreadable manifest", async () => {
-    const { installer } = await fixture({ clients: [{ name: "SoundDeck Stream Deck plugin", version: "0.1.22-beta.4" }], manifest: Buffer.from([0, 255, 23, 89, 0]) });
+  it("offers updates for a GitHub client even with an unreadable manifest", async () => {
+    const { installer } = await fixture({ clients: [{ name: "SoundDeck Stream Deck plugin", version: "0.1.22-beta.4", distribution: "github" }], manifest: Buffer.from([0, 255, 23, 89, 0]) });
     expect(await installer.status()).toMatchObject({ installed: true, installedVersion: "0.1.22.4", source: "client", updateAvailable: true });
+  });
+
+  it.each(["marketplace", undefined, "other"])("suppresses updates for client distribution %s regardless of manifest readability", async (distribution) => {
+    for (const installedManifest of [manifest("0.1.21.99999"), Buffer.from([0, 255, 23, 89, 0])]) {
+      const { installer } = await fixture({ clients: [{ name: "SoundDeck Stream Deck plugin", version: "0.1.22-beta.4", distribution }], manifest: installedManifest });
+      expect(await installer.status()).toMatchObject({ installed: true, installedVersion: "0.1.22.4", source: "client", updateAvailable: false });
+    }
+  });
+
+  it("identifies a connected GitHub sideload without an installed folder", async () => {
+    const { installer } = await fixture({ clients: [{ name: "SoundDeck Stream Deck plugin", version: "0.1.21", distribution: "github" }] });
+    expect(await installer.status()).toMatchObject({ installed: true, source: "client", updateAvailable: true });
   });
 
   it("falls back to a readable manifest and ignores unrelated clients", async () => {
     const { installer } = await fixture({ clients: [{ name: "Other tool", version: "0.1.22" }, { name: "SoundDeck Stream Deck plugin", version: "invalid" }], manifest: manifest("0.1.21.99999") });
-    expect(await installer.status()).toMatchObject({ installed: true, installedVersion: "0.1.21.99999", source: "manifest", updateAvailable: true });
+    expect(await installer.status()).toMatchObject({ installed: true, installedVersion: "0.1.21.99999", source: "manifest", updateAvailable: false });
   });
 
   it.each([Buffer.from([255, 0, 9]), "not JSON", manifest("bad"), { UUID: "other.plugin", Version: "0.1.21.99999" }])("keeps unreadable or unverified manifests unknown", async (manifest) => {
@@ -74,7 +86,7 @@ describe("Stream Deck version detection", () => {
 
   it("does not notify for a missing installation or bundle", async () => {
     expect(await (await fixture()).installer.status()).toMatchObject({ installed: false, source: "unknown", updateAvailable: false });
-    expect(await (await fixture({ bundled: false, manifest: manifest("0.1.21.99999") })).installer.status()).toMatchObject({ installed: true, updateAvailable: false });
+    expect(await (await fixture({ bundled: false, clients: [{ name: "SoundDeck Stream Deck plugin", version: "0.1.21", distribution: "github" }] })).installer.status()).toMatchObject({ installed: true, updateAvailable: false });
   });
 
   it("reports unknown on Linux even with a connected client", async () => {

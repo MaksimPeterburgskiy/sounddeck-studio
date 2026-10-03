@@ -1,13 +1,14 @@
 import WebSocket from "ws";
 import {
   CONTROL_PROTOCOL_VERSION, type ControlCommandArgs, type ControlCommandName, type ControlDiscovery,
-  type ControlEvent, type ControlHello, type ControlResult, type ControlServerMessage, type ControlSnapshot,
+  type ControlClient, type ControlEvent, type ControlHello, type ControlResult, type ControlServerMessage, type ControlSnapshot,
 } from "../../src/lib/controlProtocol";
 import { discover, discoveryStatus, protocolLabel, type ConnectionStatus, type DiscoveryFile } from "./discovery";
 import { LaunchThrottle } from "./launch";
 
 export type { ConnectionStatus } from "./discovery";
 export interface ConnectionOptions {
+  distribution?: ControlClient["distribution"];
   discover?: () => Promise<DiscoveryFile | null>;
   launch?: (appPath: string) => void;
   now?: () => number;
@@ -145,7 +146,7 @@ export class Connection {
       if (!current()) return socket.terminate();
       const hello: ControlHello = {
         type: "hello", protocol: CONTROL_PROTOCOL_VERSION, token: file.state!.token,
-        client: { name: "SoundDeck Stream Deck plugin", version: this.version },
+        client: { name: "SoundDeck Stream Deck plugin", version: this.version, ...(this.options.distribution ? { distribution: this.options.distribution } : {}) },
       };
       socket.send(JSON.stringify(hello));
       this.handshakeTimer = setTimeout(() => socket.terminate(), this.options.handshakeTimeoutMs ?? 5000);
