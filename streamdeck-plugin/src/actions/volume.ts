@@ -1,14 +1,23 @@
-import streamDeck, { action, type KeyDownEvent, type KeyUpEvent, type WillDisappearEvent, type DidReceiveSettingsEvent } from "@elgato/streamdeck";
+import streamDeck, { action, type KeyAction, type KeyDownEvent, type KeyUpEvent, type WillDisappearEvent, type DidReceiveSettingsEvent } from "@elgato/streamdeck";
+import type { ControlVolumeBus } from "../../../src/lib/controlProtocol";
 import type { Connection } from "../connection";
 import type { ActionSettings } from "../settings";
 import { volumeBus, volumeStep, volumeVisual } from "../volume";
 import { LiveAction } from "./liveAction";
 
-type Repeat = { settings: ActionSettings; session: object; timer?: ReturnType<typeof setTimeout>; interval?: ReturnType<typeof setInterval> };
+// Keep at most one second of repeat ticks while an acknowledgement is pending.
+const MAX_REPEAT_TICKS = 8;
+type Repeat = {
+  action: KeyAction<ActionSettings>; settings: ActionSettings; session: object;
+  bus: ControlVolumeBus; delta: number; initial: boolean; ticks: number; once: boolean;
+  timer?: ReturnType<typeof setTimeout>; interval?: ReturnType<typeof setInterval>;
+};
 
 @action({ UUID: "com.sounddeck.studio.volume" })
 export class Volume extends LiveAction {
   private readonly held = new Map<string, Repeat>();
+  // Cancellation removes unsent input, but cannot free an already-sent command.
+  private readonly pending = new Set<string>();
 
   constructor(connection: Connection) {
     super(connection);
@@ -28,31 +37,58 @@ export class Volume extends LiveAction {
     if (!bus || !["up", "down"].includes(mode)) { await ev.action.showAlert(); return; }
     const delta = volumeStep(ev.payload.settings, 5) * (mode === "down" ? -1 : 1);
     const session = this.connection.session;
-    const repeat: Repeat | undefined = session && !ev.payload.isInMultiAction ? { session, settings: ev.payload.settings } : undefined;
-    const adjust = async (repeating = false) => {
-      if (repeat && (this.held.get(ev.action.id) !== repeat || this.connection.session !== session)) return;
-      const value = this.connection.snapshot?.volumes[bus]?.value;
-      if (repeating && value !== undefined && (delta > 0 ? value >= 1 : value <= 0)) return;
-      try {
-        const result = await this.connection.command("volume.adjust", { bus, delta });
-        if (!result.ok && this.held.get(ev.action.id) === repeat) this.stopRepeat(ev.action.id);
-        await this.reportResult(ev.action, "volume.adjust", result);
-      } catch (error) {
-        if (this.held.get(ev.action.id) === repeat) this.stopRepeat(ev.action.id);
-        streamDeck.logger.error(error);
-      }
+    if (!session) return;
+    const repeat: Repeat = {
+      action: ev.action, session, settings: ev.payload.settings, bus, delta,
+      initial: true, ticks: 0, once: !!ev.payload.isInMultiAction,
     };
-    if (repeat) {
-      this.held.set(ev.action.id, repeat);
+    this.held.set(ev.action.id, repeat);
+    if (!repeat.once) {
+      const tick = () => {
+        if (this.held.get(ev.action.id) !== repeat || this.connection.session !== session) return;
+        if (this.atLimit(repeat)) { repeat.ticks = 0; return; }
+        repeat.ticks = Math.min(MAX_REPEAT_TICKS, repeat.ticks + 1);
+        void this.drain(ev.action.id);
+      };
       // Arm before awaiting the first acknowledgement so an early up cancels it.
       repeat.timer = setTimeout(() => {
-        repeat.interval = setInterval(() => { void adjust(true); }, 125);
+        repeat.interval = setInterval(tick, 125);
         repeat.interval.unref?.();
-        void adjust(true);
+        tick();
       }, 400);
       repeat.timer.unref?.();
     }
-    await adjust();
+    await this.drain(ev.action.id);
+  }
+
+  private atLimit(repeat: Repeat): boolean {
+    const value = this.connection.snapshot?.volumes[repeat.bus]?.value;
+    return value !== undefined && (repeat.delta > 0 ? value >= 1 : value <= 0);
+  }
+
+  private async drain(id: string): Promise<void> {
+    if (this.pending.has(id)) return;
+    this.pending.add(id);
+    try {
+      let repeat: Repeat | undefined;
+      while ((repeat = this.held.get(id)) && this.connection.session === repeat.session) {
+        if (!repeat.initial && this.atLimit(repeat)) repeat.ticks = 0;
+        if (!repeat.initial && !repeat.ticks) break;
+        const ticks = repeat.initial ? 1 : repeat.ticks;
+        if (repeat.initial) repeat.initial = false;
+        else repeat.ticks = 0;
+        try {
+          const result = await this.connection.command("volume.adjust", { bus: repeat.bus, delta: repeat.delta * ticks });
+          if ((!result.ok || repeat.once) && this.held.get(id) === repeat) this.stopRepeat(id);
+          await this.reportResult(repeat.action, "volume.adjust", result);
+        } catch (error) {
+          if (this.held.get(id) === repeat) this.stopRepeat(id);
+          streamDeck.logger.error(error);
+        }
+      }
+    } finally {
+      this.pending.delete(id);
+    }
   }
 
   override onKeyUp(ev: KeyUpEvent<ActionSettings>): void { this.stopRepeat(ev.action.id); }
