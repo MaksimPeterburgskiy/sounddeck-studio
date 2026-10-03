@@ -50,6 +50,60 @@ afterEach(() => {
 });
 
 describe("AudioEngine output routing", () => {
+  it.each([
+    ["sound", "routing"], ["sound", "decode"], ["sound", "resume"],
+    ["all", "routing"], ["all", "decode"], ["all", "resume"]
+  ])("cancels pending and queued plays on %s stop during %s preparation", async (stop, preparation) => {
+    const engine = new AudioEngine(dualRouteSettings, vi.fn());
+    const sound = makeSound({ outputTarget: "virtual", retriggerMode: "restart" });
+    const otherSound = makeSound({ id: "sound-2", mediaPath: "other.wav", outputTarget: "virtual" });
+    const ready = deferred<void>();
+    if (preparation === "routing") virtualContext().setSinkId.mockReturnValueOnce(ready.promise);
+    const configuration = engine.configure(dualRouteSettings, "cable-device");
+    if (preparation !== "routing") {
+      await configuration;
+      if (preparation === "decode") {
+        const decode = decodeContext().decodeAudioData.getMockImplementation()!;
+        decodeContext().decodeAudioData.mockImplementation(async () => {
+          await ready.promise;
+          return decode();
+        });
+      } else {
+        virtualContext().resume.mockReturnValue(ready.promise);
+      }
+    }
+    const queue = createSoundPlayQueue();
+    const trigger = (slot = sound) => queue(slot.id, async (signal) => {
+      if (signal.aborted) return false;
+      await waitForAudioConfiguration(() => configuration);
+      if (signal.aborted) return false;
+      return engine.play(slot, signal);
+    });
+    const first = trigger();
+    const queued = trigger();
+    const other = trigger(otherSound);
+    if (preparation === "routing") await waitForMockCalls(virtualContext().setSinkId, 1);
+    else if (preparation === "decode") await waitForMockCalls(decodeContext().decodeAudioData, 2);
+    else await waitForMockCalls(virtualContext().resume, 2);
+    expect(virtualContext().bufferSources).toHaveLength(0);
+    if (stop === "sound") {
+      queue.cancel(sound.id);
+      engine.stop(sound.id);
+    } else {
+      // External stop-all and the stop-all hotkey use this same renderer path.
+      queue.cancelAll();
+      engine.stopAll();
+    }
+    ready.resolve();
+    expect(await Promise.all([first, queued, other])).toEqual([false, false, stop === "sound"]);
+    expect(virtualContext().bufferSources).toHaveLength(stop === "sound" ? 1 : 0);
+    expect(engine.isPlaying(sound.id)).toBe(false);
+    expect(engine.isPlaying(otherSound.id)).toBe(stop === "sound");
+    expect(await trigger()).toBe(true);
+    expect(engine.isPlaying(sound.id)).toBe(true);
+    await engine.dispose();
+  });
+
   it.each(["decode", "routing"])("serializes external and hotkey toggle plays while %s is pending", async (preparation) => {
     const engine = new AudioEngine(dualRouteSettings, vi.fn());
     const sound = makeSound({ outputTarget: "virtual", retriggerMode: "stop" });

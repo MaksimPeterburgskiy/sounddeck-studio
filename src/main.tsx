@@ -129,6 +129,14 @@ function App() {
   const engineRef = useRef<AudioEngine | null>(null);
   const audioConfigurationRef = useRef<Promise<void> | null>(null);
   const queueSoundPlay = useMemo(() => createSoundPlayQueue(), []);
+  const stopSound = useCallback((soundId: string) => {
+    queueSoundPlay.cancel(soundId);
+    engineRef.current?.stop(soundId);
+  }, [queueSoundPlay]);
+  const stopAllSounds = useCallback(() => {
+    queueSoundPlay.cancelAll();
+    engineRef.current?.stopAll();
+  }, [queueSoundPlay]);
   const deviceStatusRef = useRef<AudioDeviceStatus>(defaultAudioDeviceStatus);
   const previousMicrophoneDeviceStatusRef = useRef<AudioDeviceStatus["microphone"] | null>(null);
   const previousMonitorDeviceStatusRef = useRef<AudioDeviceStatus["monitor"] | null>(null);
@@ -413,9 +421,9 @@ function App() {
     if (activeBoard) previousBoardRef.current = { id: activeBoard.id, soundIds: activeBoard.sounds.map((sound) => sound.id) };
     if (!previous || !activeBoard || previous.id === activeBoard.id) return;
     for (const soundId of previous.soundIds) {
-      if (engineRef.current?.isPlaying(soundId)) engineRef.current.stop(soundId);
+      stopSound(soundId);
     }
-  }, [activeBoard]);
+  }, [activeBoard, stopSound]);
 
   useEffect(() => {
     void window.sounddeck.pushControlState({ playback: controlPlayback }).catch(() => undefined);
@@ -532,15 +540,18 @@ function App() {
     void registerHotkeys(library);
   }, [library, draggingSoundId, registerHotkeys, corsairConnected]);
 
-  const triggerSound = useCallback((sound: SoundSlot, external = false): Promise<ControlPlaybackResult> => queueSoundPlay(sound.id, async () => {
+  const triggerSound = useCallback((sound: SoundSlot, external = false): Promise<ControlPlaybackResult> => queueSoundPlay(sound.id, async (signal) => {
     try {
+      if (signal.aborted) return { ok: false, code: "unavailable" };
       if (external) await waitForAudioConfiguration(() => audioConfigurationRef.current);
+      if (signal.aborted) return { ok: false, code: "unavailable" };
       if (sound.retriggerMode === "stop" && engineRef.current?.isPlaying(sound.id)) {
-        engineRef.current.stop(sound.id);
+        stopSound(sound.id);
         setMessage(`Stopped ${sound.title}`);
         return { ok: true };
       }
-      const started = await engineRef.current?.play(sound);
+      const started = await engineRef.current?.play(sound, signal);
+      if (signal.aborted) return { ok: false, code: "unavailable" };
       setMessage(started === false ? `No output route enabled for ${sound.title}` : `Triggered ${sound.title}`);
       if (external && !started) return { ok: false, code: "unavailable" };
       if (!sound.duration || !sound.waveform) {
@@ -549,16 +560,17 @@ function App() {
       }
       return started ? { ok: true } : { ok: false, code: "unavailable" };
     } catch (error) {
+      if (signal.aborted) return { ok: false, code: "unavailable" };
       setMessage(`Could not play ${sound.title}`);
       console.error(error);
       return { ok: false, code: "internal-error" };
     }
-  }), [activeBoard?.id, queueSoundPlay]);
+  }), [activeBoard?.id, queueSoundPlay, stopSound]);
 
   useEffect(() => {
     return window.sounddeck.onHotkeyTrigger((binding) => {
       if (binding.type === "stop-all") {
-        engineRef.current?.stopAll();
+        stopAllSounds();
         setMessage("Stopped all sounds");
         return;
       }
@@ -578,7 +590,7 @@ function App() {
       const sound = library?.boards.flatMap((board) => board.sounds).find((candidate) => candidate.id === binding.soundId);
       if (sound) void triggerSound(sound);
     });
-  }, [library, triggerSound]);
+  }, [library, triggerSound, stopAllSounds]);
 
   useEffect(() => window.sounddeck.onControlCommand((request) => {
     const { command, args } = request;
@@ -589,13 +601,13 @@ function App() {
       return;
     }
     if (command === "sound.stop") {
-      engineRef.current?.stop(args.soundId);
+      stopSound(args.soundId);
       return;
     }
     if (command === "board.cycle") {
       cycleBoard(args.direction);
     }
-  }), [library, triggerSound]);
+  }), [library, triggerSound, stopSound]);
 
   // Command subscriptions are installed, but initial audio routing may still
   // be pending when the library first becomes available.
@@ -690,7 +702,7 @@ function App() {
   }
 
   function deleteSound(soundId: string) {
-    engineRef.current?.stop(soundId);
+    stopSound(soundId);
     if (library) {
       const board = library.boards.find((candidate) => candidate.id === library.activeBoardId);
       const removed = board?.sounds.filter((sound) => sound.id === soundId) || [];
@@ -706,7 +718,7 @@ function App() {
   }
 
   function moveSound(soundId: string, targetBoardId: string) {
-    engineRef.current?.stop(soundId);
+    stopSound(soundId);
     updateLibrary((current) => {
       const sourceBoard = current.boards.find((board) => board.sounds.some((sound) => sound.id === soundId));
       const targetBoard = current.boards.find((board) => board.id === targetBoardId);
@@ -956,7 +968,7 @@ function App() {
       }
 
       const boardToDelete = current.boards.find((board) => board.id === boardId);
-      boardToDelete?.sounds.forEach((sound) => engineRef.current?.stop(sound.id));
+      boardToDelete?.sounds.forEach((sound) => stopSound(sound.id));
       const remaining = current.boards.filter((board) => board.id !== boardId);
       const deletedIndex = current.boards.findIndex((board) => board.id === boardId);
       const fallback = remaining[Math.max(0, Math.min(deletedIndex, remaining.length - 1))];
@@ -979,7 +991,7 @@ function App() {
     if (library) {
       const boardId = library.activeBoardId;
       const current = library.boards.find((board) => board.id === boardId);
-      current?.sounds.forEach((sound) => engineRef.current?.stop(sound.id));
+      current?.sounds.forEach((sound) => stopSound(sound.id));
       if (current) deleteMediaFiles(current.sounds, library.boards.map((board) => board.id === boardId ? { ...imported, id: boardId } : board));
     }
     updateLibrary((current) => ({
@@ -1225,7 +1237,7 @@ function App() {
                   playing={playingIds.includes(sound.id)}
                   hotkeyProblem={hotkeyResults.some((result) => result.soundId === sound.id && !result.ok)}
                   onPlay={() => void triggerSound(sound)}
-                  onStop={() => engineRef.current?.stop(sound.id)}
+                  onStop={() => stopSound(sound.id)}
                   onEditClip={() => setEditingClipId(sound.id)}
                   onSelect={() => setSelectedSoundId(sound.id)}
                   onDelete={() => deleteSound(sound.id)}

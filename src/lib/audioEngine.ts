@@ -208,13 +208,13 @@ export class AudioEngine {
     return buffer;
   }
 
-  async play(sound: SoundSlot) {
-    if (!this.hasLiveRoute(sound.outputTarget)) return false;
+  async play(sound: SoundSlot, signal?: AbortSignal) {
+    if (signal?.aborted || !this.hasLiveRoute(sound.outputTarget)) return false;
     const buffer = await this.preload(sound);
     // Settings may have changed while decoding; re-check before any side effects.
-    if (this.disposed || !this.hasLiveRoute(sound.outputTarget)) return false;
+    if (signal?.aborted || this.disposed || !this.hasLiveRoute(sound.outputTarget)) return false;
     await Promise.all([this.monitorContext.resume(), this.virtualContext.resume()]);
-    if (this.disposed || !this.hasLiveRoute(sound.outputTarget)) return false;
+    if (signal?.aborted || this.disposed || !this.hasLiveRoute(sound.outputTarget)) return false;
     // Only stop other voices once nothing else can bail out; a muted trigger must not silence what is playing.
     if (sound.soloPlay) this.stopAllExcept(sound.id);
     if (sound.retriggerMode === "restart") this.stop(sound.id);
