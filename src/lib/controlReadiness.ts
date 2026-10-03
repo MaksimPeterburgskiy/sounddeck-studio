@@ -1,9 +1,13 @@
-// Settings can change while the initial routes are opening. Wait for the
-// latest configuration before accepting commands from external clients.
+// Settings can change while routes are opening. Wait for the latest
+// configuration at startup and before every external play command.
 export async function waitForAudioConfiguration(getConfiguration: () => Promise<void> | null) {
   let configuration;
   do {
     configuration = getConfiguration();
-    await configuration;
+    try {
+      await configuration;
+    } catch (error) {
+      if (configuration === getConfiguration()) throw error;
+    }
   } while (configuration !== getConfiguration());
 }

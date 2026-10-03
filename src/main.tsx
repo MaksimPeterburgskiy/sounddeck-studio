@@ -46,7 +46,7 @@ import {
 import { AudioEngine } from "./lib/audioEngine";
 import { CONTROL_DEFAULT_PORT } from "./lib/controlProtocol";
 import { waitForAudioConfiguration } from "./lib/controlReadiness";
-import type { ControlPlaybackVoice, ControlSettingsPatch, ControlStatus } from "./lib/controlProtocol";
+import type { ControlPlaybackResult, ControlPlaybackVoice, ControlSettingsPatch, ControlStatus } from "./lib/controlProtocol";
 import type { AudioDeviceStatus, MicrophoneProcessingStatus } from "./lib/audioEngine";
 import { findVirtualAudioCandidates, getDefaultDeviceLabel, isSelectableMediaDevice, makeMicrophoneConstraints, normalizeMonitorDeviceId, normalizeSelectableDeviceId } from "./lib/devices";
 import type { VirtualAudioCandidate } from "./lib/devices";
@@ -416,9 +416,8 @@ function App() {
   }, [activeBoard]);
 
   useEffect(() => {
-    if (!activeBoard) return;
-    void window.sounddeck.pushControlState({ activeBoardId: activeBoard.id, playback: controlPlayback }).catch(() => undefined);
-  }, [activeBoard?.id, controlPlayback]);
+    void window.sounddeck.pushControlState({ playback: controlPlayback }).catch(() => undefined);
+  }, [controlPlayback]);
 
   const selectedSound = useMemo(() => activeBoard?.sounds.find((sound) => sound.id === selectedSoundId) || null, [activeBoard, selectedSoundId]);
   const editingClipSound = useMemo(() => activeBoard?.sounds.find((sound) => sound.id === editingClipId) || null, [activeBoard, editingClipId]);
@@ -531,22 +530,26 @@ function App() {
     void registerHotkeys(library);
   }, [library, draggingSoundId, registerHotkeys, corsairConnected]);
 
-  const triggerSound = useCallback(async (sound: SoundSlot) => {
+  const triggerSound = useCallback(async (sound: SoundSlot, external = false): Promise<ControlPlaybackResult> => {
     try {
+      if (external) await waitForAudioConfiguration(() => audioConfigurationRef.current);
       if (sound.retriggerMode === "stop" && engineRef.current?.isPlaying(sound.id)) {
         engineRef.current.stop(sound.id);
         setMessage(`Stopped ${sound.title}`);
-        return;
+        return { ok: true };
       }
       const started = await engineRef.current?.play(sound);
       setMessage(started === false ? `No output route enabled for ${sound.title}` : `Triggered ${sound.title}`);
+      if (external && !started) return { ok: false, code: "unavailable" };
       if (!sound.duration || !sound.waveform) {
         const buffer = await engineRef.current?.preload(sound);
         if (buffer) updateSound(sound.id, { duration: buffer.duration, waveform: makeWaveform(buffer), updatedAt: now() });
       }
+      return started ? { ok: true } : { ok: false, code: "unavailable" };
     } catch (error) {
       setMessage(`Could not play ${sound.title}`);
       console.error(error);
+      return { ok: false, code: "internal-error" };
     }
   }, [activeBoard?.id]);
 
@@ -575,7 +578,14 @@ function App() {
     });
   }, [library, triggerSound]);
 
-  useEffect(() => window.sounddeck.onControlCommand(({ command, args }) => {
+  useEffect(() => window.sounddeck.onControlCommand((request) => {
+    const { command, args } = request;
+    if (command === "sound.play") {
+      const sound = library?.boards.flatMap((board) => board.sounds).find((candidate) => candidate.id === args.soundId);
+      const result = sound ? triggerSound(sound, true) : Promise.resolve<ControlPlaybackResult>({ ok: false, code: "not-found" });
+      void result.then((result) => window.sounddeck.completeControlPlayback(request.requestId, result)).catch(() => undefined);
+      return;
+    }
     if (command === "sound.stop") {
       engineRef.current?.stop(args.soundId);
       return;
@@ -583,7 +593,7 @@ function App() {
     if (command === "board.cycle") {
       cycleBoard(args.direction);
     }
-  }), []);
+  }), [library, triggerSound]);
 
   // Command subscriptions are installed, but initial audio routing may still
   // be pending when the library first becomes available.

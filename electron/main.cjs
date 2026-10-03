@@ -61,6 +61,7 @@ if (!app.requestSingleInstanceLock()) {
 
 let mainWindow;
 let controlRendererReady = false;
+const pendingControlPlayback = new Map();
 let tray;
 let isQuitting = false;
 let allowWindowCloseForUpdate = false;
@@ -90,6 +91,11 @@ function handleTrustedIpc(channel, handler) {
   });
 }
 
+function clearPendingControlPlayback() {
+  for (const resolve of pendingControlPlayback.values()) resolve({ ok: false, code: "unavailable" });
+  pendingControlPlayback.clear();
+}
+
 const hotkeyEngine = createHotkeyEngine({
   onTrigger: (binding) => sendToMainWindow("hotkey-trigger", binding)
 });
@@ -116,9 +122,15 @@ const externalControl = createExternalControlBridge({
   onCommand: ({ command, args }) => {
     if (hotkeyCaptureActive) return { ok: false, code: "busy" };
     if (!controlRendererReady || !mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return { ok: false, code: "unavailable" };
+    if (command === "sound.play") {
+      const requestId = crypto.randomUUID();
+      return new Promise((resolve) => {
+        pendingControlPlayback.set(requestId, resolve);
+        sendToMainWindow("control-command", { command, args, requestId });
+      });
+    }
     const binding = { accelerator: "" };
-    if (command === "sound.play") Object.assign(binding, { type: "sound", soundId: args.soundId });
-    else if (command === "playback.stopAll") binding.type = "stop-all";
+    if (command === "playback.stopAll") binding.type = "stop-all";
     else if (command === "board.activate") Object.assign(binding, { type: "board", boardId: args.boardId });
     else {
       sendToMainWindow("control-command", { command, args });
@@ -132,6 +144,7 @@ const externalControl = createExternalControlBridge({
 const shutdownLifecycle = createShutdownLifecycle({
   onShutdown: () => {
     isQuitting = true;
+    clearPendingControlPlayback();
     hotkeyCaptureActive = false;
     hotkeyEngine.stop();
     corsair.stop();
@@ -806,6 +819,7 @@ async function createWindow() {
   controlRendererReady = false;
   const clearControlRendererState = () => {
     controlRendererReady = false;
+    clearPendingControlPlayback();
     externalControl.updateLiveState({ activeBoardId: externalControl.getSnapshot().activeBoardId, playback: [] });
   };
   window.webContents.on("did-start-navigation", (details) => {
@@ -1347,6 +1361,16 @@ handleTrustedIpc("control:setSettings", (_event, patch) => externalControl.setSe
 handleTrustedIpc("control:regenerateToken", () => externalControl.regenerateToken());
 handleTrustedIpc("control:ready", () => {
   controlRendererReady = true;
+  return { ok: true };
+});
+handleTrustedIpc("control:playbackResult", (_event, requestId, result) => {
+  const resolve = pendingControlPlayback.get(requestId);
+  if (!resolve) return { ok: false };
+  if (!result || (result.ok !== true && (result.ok !== false || !["unavailable", "not-found", "internal-error"].includes(result.code)))) {
+    throw new Error("Invalid control playback result");
+  }
+  pendingControlPlayback.delete(requestId);
+  resolve(result.ok ? { ok: true } : { ok: false, code: result.code });
   return { ok: true };
 });
 handleTrustedIpc("control:state", (_event, state) => {

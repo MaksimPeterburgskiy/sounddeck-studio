@@ -79,7 +79,7 @@ async function boot(storageError) {
   });
   await vi.waitFor(() => expect(finishLoading).toBeTypeOf("function"));
   const event = { sender: window.webContents, senderFrame: window.webContents.mainFrame };
-  return { window, bridge, onCommand, event, fileSystem, invoke: (name, sender = event) => handlers.get(name)(sender),
+  return { window, bridge, onCommand, event, fileSystem, invoke: (name, sender = event, ...args) => handlers.get(name)(sender, ...args),
     loaded: async () => { finishLoading(); await startup; } };
 }
 
@@ -171,6 +171,43 @@ describe("main-process external control lifecycle", () => {
     }
     app.window.emit("closed");
     expect(app.onCommand(command).code).toBe("unavailable");
+    await app.bridge.stop();
+  });
+
+  it.each([{ ok: true }, { ok: false, code: "unavailable" }, { ok: false, code: "internal-error" }])("waits for the renderer playback result %j", async (result) => {
+    const app = await boot();
+    await app.loaded();
+    await app.invoke("control:getSettings");
+    app.invoke("control:ready");
+    const command = { command: "sound.play", args: { soundId: "sound-a" } };
+    const completed = vi.fn();
+    const pending = app.onCommand(command).then(completed);
+    const [channel, request] = app.window.webContents.send.mock.lastCall;
+    expect(channel).toBe("control-command");
+    expect(request).toMatchObject(command);
+    expect(request.requestId).toBeTypeOf("string");
+    await Promise.resolve();
+    expect(completed).not.toHaveBeenCalled();
+    expect(() => app.invoke("control:playbackResult", { ...app.event, senderFrame: { url: app.event.senderFrame.url } }, request.requestId, result)).toThrow("Untrusted IPC sender");
+    expect(() => app.invoke("control:playbackResult", app.event, request.requestId, { ok: "yes" })).toThrow("Invalid control playback result");
+    expect(app.invoke("control:playbackResult", app.event, request.requestId, result)).toEqual({ ok: true });
+    await pending;
+    expect(completed).toHaveBeenCalledExactlyOnceWith(result);
+    expect(app.invoke("control:playbackResult", app.event, request.requestId, result)).toEqual({ ok: false });
+    await app.bridge.stop();
+  });
+
+  it.each(["did-start-navigation", "render-process-gone", "destroyed", "closed"])("fails pending playback when the renderer emits %s", async (name) => {
+    const app = await boot();
+    await app.loaded();
+    await app.invoke("control:getSettings");
+    app.invoke("control:ready");
+    const pending = app.onCommand({ command: "sound.play", args: { soundId: "sound-a" } });
+    const requestId = app.window.webContents.send.mock.lastCall[1].requestId;
+    const target = name === "closed" ? app.window : app.window.webContents;
+    target.emit(name, { isMainFrame: true, isSameDocument: false });
+    expect(await pending).toEqual({ ok: false, code: "unavailable" });
+    if (name !== "closed") expect(app.invoke("control:playbackResult", app.event, requestId, { ok: true })).toEqual({ ok: false });
     await app.bridge.stop();
   });
 

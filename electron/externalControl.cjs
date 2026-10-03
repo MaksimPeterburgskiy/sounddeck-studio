@@ -118,21 +118,24 @@ function createExternalControlBridge({
   }
 
   function updateLiveState(state) {
-    if (!fields(state, ["activeBoardId", "playback"]) || typeof state.activeBoardId !== "string"
-      || (state.activeBoardId !== "" && !id(state.activeBoardId)) || !Array.isArray(state.playback)
+    if (!fields(state, ["activeBoardId", "playback"]) || (state.activeBoardId !== undefined && (typeof state.activeBoardId !== "string"
+      || (state.activeBoardId !== "" && !id(state.activeBoardId)))) || !Array.isArray(state.playback)
       || state.playback.length > 4096 || !state.playback.every((voice) => fields(voice, ["soundId", "startedAt", "duration", "loop"])
         && id(voice.soundId) && Number.isFinite(voice.startedAt) && voice.startedAt >= 0
         && Number.isFinite(voice.duration) && voice.duration > 0 && typeof voice.loop === "boolean")) {
       throw new Error("Invalid control state");
     }
-    const boardChanged = live.activeBoardId !== state.activeBoardId;
+    const activeBoardId = state.activeBoardId ?? live.activeBoardId;
+    const boardChanged = live.activeBoardId !== activeBoardId;
     const playbackChanged = JSON.stringify(live.playback) !== JSON.stringify(state.playback);
-    live = { activeBoardId: state.activeBoardId, playback: state.playback.map((voice) => ({ ...voice })) };
+    live = { activeBoardId, playback: state.playback.map((voice) => ({ ...voice })) };
     if (boardChanged) event("board.changed", { activeBoardId: live.activeBoardId });
     if (playbackChanged) event("playback.changed", live.playback);
   }
 
   function updateLibrary(value) {
+    const requestedBoardId = value?.activeBoardId ?? "";
+    if (typeof requestedBoardId !== "string" || (requestedBoardId !== "" && !id(requestedBoardId))) throw new Error("Invalid active board");
     const boards = (Array.isArray(value?.boards) ? value.boards : []).map((board) => ({
       id: board.id, name: board.name, color: board.color,
       sounds: (Array.isArray(board.sounds) ? board.sounds : []).map((sound) => ({
@@ -146,12 +149,16 @@ function createExternalControlBridge({
       }
     }
     const changed = JSON.stringify(library.boards) !== JSON.stringify(boards);
+    const activeBoardId = boards.find((board) => board.id === requestedBoardId)?.id || boards[0]?.id || "";
+    const boardChanged = live.activeBoardId !== activeBoardId;
     // Images are fetched separately, but replacing one must invalidate client caches.
     const fingerprint = crypto.createHash("sha256").update(JSON.stringify([...images])).digest("hex");
     const imageChanged = imageFingerprint !== fingerprint;
     imageFingerprint = fingerprint;
     library = { boards };
+    live = { ...live, activeBoardId };
     if (changed || imageChanged) event("library.changed", getLibrary());
+    if (boardChanged) event("board.changed", { activeBoardId });
   }
 
   async function dispatch(command, args) {
@@ -463,7 +470,7 @@ function createExternalControlBridge({
       if (loadLibrary) {
         const value = await loadLibrary();
         updateLibrary(value);
-        updateLiveState({ activeBoardId: value.activeBoardId || "", playback: [] });
+        updateLiveState({ playback: [] });
       }
       error = null;
       await listen();

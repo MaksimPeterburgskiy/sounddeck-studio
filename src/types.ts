@@ -1,4 +1,4 @@
-import type { ControlLiveState, ControlSettingsPatch, ControlStatus, RendererControlCommand } from "./lib/controlProtocol";
+import type { ControlLiveState, ControlPlaybackResult, ControlSettingsPatch, ControlStatus, RendererControlCommand } from "./lib/controlProtocol";
 
 export type OutputTarget = "monitor" | "virtual" | "both";
 export type RetriggerMode = "restart" | "overlap" | "stop";
@@ -223,7 +223,8 @@ declare global {
       getControlSettings: () => Promise<ControlStatus>;
       setControlSettings: (patch: ControlSettingsPatch) => Promise<ControlStatus>;
       regenerateControlToken: () => Promise<ControlStatus>;
-      pushControlState: (state: ControlLiveState) => Promise<{ ok: boolean }>;
+      pushControlState: (state: Pick<ControlLiveState, "playback">) => Promise<{ ok: boolean }>;
+      completeControlPlayback: (requestId: string, result: ControlPlaybackResult) => Promise<{ ok: boolean }>;
       controlReady: () => Promise<{ ok: boolean }>;
       onControlStatus: (callback: (status: ControlStatus) => void) => () => void;
       onControlCommand: (callback: (command: RendererControlCommand) => void) => () => void;

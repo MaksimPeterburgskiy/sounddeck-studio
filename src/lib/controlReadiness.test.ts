@@ -27,4 +27,20 @@ describe("external control audio readiness", () => {
     await expect(pending).rejects.toThrow("Configuration failed");
     expect(ready).not.toHaveBeenCalled();
   });
+
+  it("waits for the latest configuration even if a superseded one rejects", async () => {
+    const previous = deferred<void>();
+    const latest = deferred<void>();
+    let configuration = previous.promise;
+    const play = vi.fn();
+    const pending = waitForAudioConfiguration(() => configuration).then(play);
+    configuration = latest.promise;
+    previous.reject(new Error("Superseded configuration failed"));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(play).not.toHaveBeenCalled();
+    latest.resolve();
+    await pending;
+    expect(play).toHaveBeenCalledOnce();
+  });
 });
