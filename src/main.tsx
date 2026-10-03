@@ -49,7 +49,7 @@ import type { ControlPlaybackVoice, ControlSettingsPatch, ControlStatus } from "
 import type { AudioDeviceStatus, MicrophoneProcessingStatus } from "./lib/audioEngine";
 import { findVirtualAudioCandidates, getDefaultDeviceLabel, isSelectableMediaDevice, makeMicrophoneConstraints, normalizeMonitorDeviceId, normalizeSelectableDeviceId } from "./lib/devices";
 import type { VirtualAudioCandidate } from "./lib/devices";
-import { acceleratorLooksReserved, formatBytes, formatDuration, getDefaultSoundEffects, makeBoard, normalizeLibrary, normalizeSoundEffects, now, RETRIGGER_MODES, retriggerModeLabel, soundEffectsAreActive, soundEffectsAreDefault, soundFromImport } from "./lib/model";
+import { acceleratorLooksReserved, formatBytes, formatDuration, getDefaultSoundEffects, makeBoard, nextBoard, normalizeLibrary, normalizeSoundEffects, now, RETRIGGER_MODES, retriggerModeLabel, soundEffectsAreActive, soundEffectsAreDefault, soundFromImport } from "./lib/model";
 import { claimCaptureSlot, eventToToken, formatAccelerator, MODIFIER_TOKENS, normalizeAccelerator, orderTokens } from "./lib/hotkeys";
 import { makeWaveform } from "./lib/waveform";
 import { installDevBridge } from "./lib/devBridge";
@@ -556,19 +556,16 @@ function App() {
         return;
       }
       if (binding.type === "board") {
-        const board = library?.boards.find((candidate) => candidate.id === binding.boardId);
-        if (board) {
-          updateLibrary((current) => ({ ...current, activeBoardId: board.id }));
+        updateLibrary((current) => {
+          const board = current.boards.find((candidate) => candidate.id === binding.boardId);
+          if (!board) return current;
           setMessage(`Switched to ${board.name}`);
-        }
+          return { ...current, activeBoardId: board.id };
+        });
         return;
       }
       if (binding.type === "cycle-board") {
-        if (!library || library.boards.length < 2) return;
-        const index = library.boards.findIndex((board) => board.id === library.activeBoardId);
-        const next = library.boards[(index + 1) % library.boards.length];
-        updateLibrary((current) => ({ ...current, activeBoardId: next.id }));
-        setMessage(`Switched to ${next.name}`);
+        cycleBoard();
         return;
       }
       const sound = library?.boards.flatMap((board) => board.sounds).find((candidate) => candidate.id === binding.soundId);
@@ -582,14 +579,24 @@ function App() {
       return;
     }
     if (command === "board.cycle") {
-      updateLibrary((current) => {
-        if (current.boards.length < 2) return current;
-        const index = current.boards.findIndex((board) => board.id === current.activeBoardId);
-        const next = current.boards[(index + (args.direction ?? 1) + current.boards.length) % current.boards.length];
-        return { ...current, activeBoardId: next.id };
-      });
+      cycleBoard(args.direction);
     }
   }), []);
+
+  // Both command subscriptions and the audio engine are installed before this
+  // effect runs with the initialized library.
+  useEffect(() => {
+    if (hasLibrary) void window.sounddeck.controlReady().catch(() => undefined);
+  }, [hasLibrary]);
+
+  function cycleBoard(direction: 1 | -1 = 1) {
+    updateLibrary((current) => {
+      const next = nextBoard(current, direction);
+      if (!next) return current;
+      setMessage(`Switched to ${next.name}`);
+      return { ...current, activeBoardId: next.id };
+    });
+  }
 
   function updateLibrary(updater: (current: SoundLibrary) => SoundLibrary) {
     setLibrary((current) => current ? updater(current) : current);

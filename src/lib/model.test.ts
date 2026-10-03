@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { acceleratorLooksReserved, formatBytes, formatDuration, normalizeLibrary, normalizeRetriggerMode, normalizeSoundEffects, retriggerModeLabel, soundEffectsAreActive, soundEffectsAreDefault, soundFromImport } from "./model";
+import { acceleratorLooksReserved, formatBytes, formatDuration, nextBoard, normalizeLibrary, normalizeRetriggerMode, normalizeSoundEffects, retriggerModeLabel, soundEffectsAreActive, soundEffectsAreDefault, soundFromImport } from "./model";
 import type { SoundLibrary, SoundSlot } from "../types";
 
 function soundWithVolume(id: string, volume: number): SoundSlot {
@@ -27,6 +27,23 @@ function soundWithVolume(id: string, volume: number): SoundSlot {
 }
 
 describe("model helpers", () => {
+  it("cycles consecutive current states in either direction and wraps", () => {
+    const boards = ["a", "b", "c"].map((id) => ({ id, name: id.toUpperCase(), color: "#fff", icon: "zap", createdAt: "", updatedAt: "", sounds: [] }));
+    for (const [direction, expected] of [[1, ["b", "c", "a"]], [-1, ["c", "b", "a"]]] as const) {
+      let current = { boards, activeBoardId: "a" };
+      for (const id of expected) {
+        const next = nextBoard(current, direction)!;
+        expect(next.id).toBe(id);
+        current = { ...current, activeBoardId: next.id };
+      }
+    }
+    const activated = { boards, activeBoardId: "b" };
+    expect(nextBoard(activated)?.id).toBe("c");
+    expect(nextBoard(activated, -1)?.id).toBe("a");
+    expect(nextBoard({ boards: [], activeBoardId: "" })).toBeUndefined();
+    expect(nextBoard({ boards: boards.slice(0, 1), activeBoardId: "a" })).toBeUndefined();
+  });
+
   it("normalizes missing settings and keeps a valid active board", () => {
     const library = normalizeLibrary({
       version: 1,

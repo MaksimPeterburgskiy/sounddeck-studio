@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import http from "node:http";
 import { Duplex } from "node:stream";
 import { mkdtemp, readFile, writeFile, chmod, stat, rm } from "node:fs/promises";
+import * as fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { WebSocket } from "ws";
@@ -168,6 +169,41 @@ function upgradeStatus(headers) {
 }
 
 describe("external control discovery and listener", () => {
+  it.each(["readFile", "mkdir", "writeFile", "chmod", "rename"])("reports initialization %s failures without rejecting or listening", async (method) => {
+    if (method === "chmod" && process.platform === "win32") return;
+    const onStateChange = vi.fn();
+    const code = method === "readFile" ? "EISDIR" : method === "writeFile" ? "ENOSPC" : "EACCES";
+    const fileSystem = { ...fs, [method]: vi.fn(async () => { throw Object.assign(new Error("private path"), { code }); }) };
+    bridge = createExternalControlBridge({ userData: directory, appVersion: "1", appPath: "app", fileSystem, onStateChange });
+    expect(await bridge.start()).toMatchObject({ listening: false, error: { code } });
+    expect(onStateChange.mock.lastCall[0]).toMatchObject({ listening: false, error: { code } });
+  });
+
+  it.each(["setSettings", "regenerateToken"])("disables the listener on %s persistence failure and allows retry", async (operation) => {
+    let fail = false;
+    const fileSystem = { ...fs, rename: async (...args) => {
+      if (fail) throw Object.assign(new Error("full disk"), { code: "ENOSPC" });
+      return fs.rename(...args);
+    } };
+    const initial = await create({ fileSystem });
+    const connection = await session();
+    fail = true;
+    expect(await bridge[operation]({ port: initial.port + 1 })).toMatchObject({ listening: false, error: { code: "ENOSPC" }, token: initial.token, port: initial.port });
+    await connection.closed;
+    fail = false;
+    expect(await bridge.setSettings({ enabled: true })).toMatchObject({ listening: true, error: null });
+  });
+
+  it("contains corrupt library and invalid live-state initialization failures", async () => {
+    await create();
+    await bridge.stop();
+    const file = path.join(directory, "library.json");
+    await writeFile(file, "{corrupt");
+    expect(await bridge.start(async () => JSON.parse(await readFile(file, "utf8")))).toMatchObject({ listening: false, error: { code: "initialization-error" } });
+    expect(await readFile(file, "utf8")).toBe("{corrupt");
+    expect(await bridge.start(async () => ({ ...library, activeBoardId: "invalid board id" }))).toMatchObject({ listening: false, error: { code: "initialization-error" } });
+  });
+
   it("keeps disabled installations offline and persists only discovery settings with user-only permissions", async () => {
     const createServer = vi.fn(http.createServer);
     await create({ createServer, defaultPort: DEFAULT_PORT }, false);
@@ -249,6 +285,36 @@ describe("external control discovery and listener", () => {
 });
 
 describe("external control authentication", () => {
+  it.each([
+    ["Origin: https://evil.example", 403],
+    ["Host: evil.example:41730", 403],
+    ["", 404]
+  ])("handles a connection reset while rejecting an upgrade with %s", async (header, status) => {
+    let rejectedSocket;
+    let response;
+    await create({ createServer: (...args) => {
+      const listener = memoryServer(...args);
+      listener.on("connection", (socket) => {
+        rejectedSocket = socket;
+        socket._write = (chunk, _encoding, callback) => {
+          response = chunk.toString();
+          callback(Object.assign(new Error("Connection reset"), { code: "ECONNRESET" }));
+        };
+      });
+      return listener;
+    } });
+    const port = bridge.getState().port;
+    const socket = memoryConnect({ port });
+    socket.on("error", () => {});
+    const closed = new Promise((resolve) => socket.once("close", resolve));
+    const host = header.startsWith("Host:") ? header : `Host: 127.0.0.1:${port}`;
+    socket.write(`GET ${header ? "/" : "/invalid"} HTTP/1.1\r\n${host}\r\n${header.startsWith("Origin:") ? `${header}\r\n` : ""}Connection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n`);
+    await closed;
+    expect(response).toContain(`HTTP/1.1 ${status}`);
+    expect(rejectedSocket.destroyed).toBe(true);
+    expect(bridge.getState()).toMatchObject({ listening: true, error: null });
+  });
+
   it("rejects HTTP missing/bad tokens and any Origin, and enforces the exact local Host", async () => {
     await create();
     expect((await request("/v1/state", { authorize: false })).status).toBe(401);
@@ -288,7 +354,7 @@ describe("external control authentication", () => {
   it("throttles repeated auth failures across HTTP and WebSocket, then recovers after cooldown", async () => {
     let time = 1000;
     await create({ now: () => time });
-    for (let attempt = 0; attempt < 4; attempt += 1) expect((await request("/v1/state", { authorize: false })).status).toBe(401);
+    for (let attempt = 0; attempt < 4; attempt += 1) expect((await request("/v1/state", { headers: { Authorization: "Bearer wrong" } })).status).toBe(401);
     const connection = await client();
     connection.send(hello({ token: "wrong" }));
     expect((await connection.next()).code).toBe("unauthorized");
@@ -299,6 +365,26 @@ describe("external control authentication", () => {
     expect(await upgradeStatus({})).toBe(429);
     time += 30001;
     expect((await request()).status).toBe(200);
+  });
+
+  it("does not count missing credentials, malformed credential-free hellos or hello timeouts", async () => {
+    await create({ helloTimeoutMs: 10 });
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      for (const Authorization of [undefined, "Bearer ", "Basic wrong"]) {
+        expect((await request("/v1/state", { authorize: false, headers: Authorization === undefined ? {} : { Authorization } })).status).toBe(401);
+      }
+      for (const token of [undefined, ""]) {
+        const connection = await client();
+        connection.send(hello({ token, extra: true }));
+        expect((await connection.next()).code).toBe("invalid-message");
+        await connection.closed;
+      }
+      const timedOut = await client();
+      expect((await timedOut.next()).code).toBe("unauthorized");
+      await timedOut.closed;
+    }
+    expect((await request()).status).toBe(200);
+    await session();
   });
 
   it("rotates the token, disconnects authenticated clients, and rejects the previous token", async () => {
@@ -318,10 +404,13 @@ describe("external control authentication", () => {
 describe("external control protocol and dispatch", () => {
   it("reports protocol mismatches with the server version, rejecting noninteger protocols", async () => {
     await create();
-    const connection = await client();
-    connection.send(hello({ protocol: 2 }));
-    expect(await connection.next()).toMatchObject({ type: "error", code: "protocol-mismatch", protocol: 1 });
-    await connection.closed;
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      const connection = await client();
+      connection.send({ type: "hello", protocol: 2, token: "wrong", future: true });
+      expect(await connection.next()).toMatchObject({ type: "error", code: "protocol-mismatch", protocol: 1 });
+      await connection.closed;
+    }
+    await session();
     const invalid = await client();
     invalid.send(hello({ protocol: 1.5 }));
     expect((await invalid.next()).code).toBe("invalid-message");
