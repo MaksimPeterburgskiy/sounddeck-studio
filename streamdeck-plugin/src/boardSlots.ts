@@ -33,8 +33,7 @@ export function slotBoard(library: ControlLibrary | undefined, settings: ActionS
  */
 export class BoardSlots {
   private readonly keys = new Map<string, VisibleSlotKey>();
-  private readonly pages = new Map<string, number>();
-  private readonly layoutTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly requestedPages = new Map<string, number>();
   private readonly listeners = new Set<() => void>();
   private library?: ControlLibrary;
 
@@ -44,50 +43,26 @@ export class BoardSlots {
   }
   private notify(): void { for (const listener of this.listeners) listener(); }
 
-  private clamp(deviceId: string): boolean {
-    const page = this.page(deviceId);
-    if (!page.size || !this.pages.has(deviceId) || this.pages.get(deviceId) === page.index) return false;
-    this.pages.set(deviceId, page.index);
-    return true;
-  }
-  private settleLayout(deviceId: string): void {
-    clearTimeout(this.layoutTimers.get(deviceId));
-    // Page/folder switches arrive as a burst of disappear/appear events. Render
-    // the current layout immediately, but only save clamps after it settles.
-    const timer = setTimeout(() => {
-      this.layoutTimers.delete(deviceId);
-      if (this.clamp(deviceId)) this.notify();
-    }, 100);
-    timer.unref();
-    this.layoutTimers.set(deviceId, timer);
-  }
-
   updateLibrary(library: ControlLibrary): void {
     if (this.library === library) return;
-    if (this.library?.activeBoardId !== library.activeBoardId) this.pages.clear();
+    if (this.library?.activeBoardId !== library.activeBoardId) this.requestedPages.clear();
     this.library = library;
-    for (const deviceId of this.pages.keys()) {
-      if (!this.layoutTimers.has(deviceId)) this.clamp(deviceId);
-    }
     this.notify();
   }
   appear(key: VisibleSlotKey): void {
     this.keys.set(key.id, key);
-    this.settleLayout(key.deviceId);
     this.notify();
   }
   disappear(id: string): void {
     const key = this.keys.get(id);
     if (!key) return;
     this.keys.delete(id);
-    this.settleLayout(key.deviceId);
     this.notify();
   }
   settings(id: string, settings: ActionSettings): void {
     const key = this.keys.get(id);
     if (!key) return;
     this.keys.set(id, { ...key, settings });
-    this.settleLayout(key.deviceId);
     this.notify();
   }
   private groups(deviceId: string): Map<string, VisibleSlotKey[]> {
@@ -108,14 +83,17 @@ export class BoardSlots {
     // every represented board. Fixed keys cannot increase the page count.
     const count = Math.max(1, ...groups.map((group) =>
       Math.ceil((slotBoard(this.library, group[0].settings)?.sounds.length ?? 0) / group.length)));
-    const index = Math.min(this.pages.get(deviceId) ?? 0, count - 1);
+    // Derive the effective page without overwriting the request: visible groups
+    // can be incomplete during page/folder transitions, regardless of timing.
+    const index = Math.min(this.requestedPages.get(deviceId) ?? 0, count - 1);
     return { size, index, count, label: `${index + 1} / ${count}`, previous: index > 0, next: index < count - 1 };
   }
   move(deviceId: string, direction: 1 | -1): void {
     const page = this.page(deviceId);
     const next = Math.max(0, Math.min(page.count - 1, page.index + direction));
-    if (next === page.index) return;
-    this.pages.set(deviceId, next);
+    // Explicit paging starts from the effective page, even at a boundary.
+    if (next === (this.requestedPages.get(deviceId) ?? 0)) return;
+    this.requestedPages.set(deviceId, next);
     this.notify();
   }
   board(id: string) {

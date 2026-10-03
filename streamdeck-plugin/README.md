@@ -20,13 +20,17 @@ still page with the other auto slots on their device. Empty slots are blank and
 do nothing; a missing board shows a warning.
 
 Next page and Previous page show the current page (for example, **2 / 4**) and
-are dimmed at the ends, where pressing does nothing. Each device keeps its own
-page index, including inside folders and on multi-page profiles. Each group uses
-its own visible auto-slot count as its page size and advances by that many sounds.
+are dimmed at the ends, where pressing does not advance the page. Each device keeps
+its own requested page index, including inside folders and on multi-page profiles.
+Each group uses its own visible auto-slot count as its page size and advances by
+that many sounds.
 The device uses the largest page count among its groups, so every represented
 board stays fully reachable; shorter groups show empty slots on later pages.
-Switching the active board resets every device to page 1; shrinking a board
-clamps the page to the last available page. Fixed slots never affect page counts.
+The displayed page is clamped to the currently available pages without changing
+the requested index, so restoring a larger board or layout restores that page
+regardless of key appearance timing. Pressing either paging key saves a new request
+from the displayed page, including at the ends. Switching the active board resets
+every device to page 1. Fixed slots never affect page counts.
 Board slot, Next page, and Previous page are unavailable in multi-actions because
 they depend on the visible device layout. Use Play sound for multi-actions.
 

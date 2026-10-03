@@ -1,11 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ControlLibrary } from "../../src/lib/controlProtocol";
 import { autoSlots, BOARD_SLOT, BoardSlots, slotBoard, type VisibleSlotKey } from "./boardSlots";
 import type { ActionSettings } from "./settings";
 
-beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
-const settle = () => vi.advanceTimersByTime(100);
 
 function library(a = 8, b = 3, activeBoardId = "a"): ControlLibrary {
   return { activeBoardId, boards: [["a", a], ["b", b]].map(([id, length]) => ({
@@ -21,7 +19,6 @@ function setup(...keys: VisibleSlotKey[]) {
   const slots = new BoardSlots();
   slots.updateLibrary(library());
   for (const item of keys) slots.appear(item);
-  settle();
   return slots;
 }
 
@@ -81,7 +78,6 @@ describe("board slot mapping", () => {
     slots.settings("follow", { slot: "invalid" });
     expect(slots.sound("follow")).toBeUndefined();
     slots.settings("follow", {});
-    settle();
     slots.updateLibrary(library(8, 3, "b"));
     expect(slots.sound("follow")?.id).toBe("b1");
     expect(slots.sound("pinned")?.id).toBe("b1");
@@ -138,7 +134,7 @@ describe("board slot paging", () => {
     ]);
   });
 
-  it("clamps to the remaining groups after a pinned board shrinks or disappears", () => {
+  it("derives the effective page when a pinned board shrinks or disappears, preserving the request", () => {
     const slots = setup(key("follow"), key("pin", 0, 1, "deck", { boardId: "b" }));
     slots.updateLibrary(library(3, 8));
     for (let page = 0; page < 7; page++) slots.move("deck", 1);
@@ -147,14 +143,16 @@ describe("board slot paging", () => {
     expect(slots.sound("follow")?.id).toBe("a3");
     expect(slots.sound("pin")).toBeNull();
     slots.updateLibrary(library(3, 8));
-    expect(slots.page("deck")).toMatchObject({ label: "3 / 8", index: 2 });
-    expect(slots.sound("pin")?.id).toBe("b3");
-    slots.move("deck", 1);
+    expect(slots.page("deck")).toMatchObject({ label: "8 / 8", index: 7 });
+    expect(slots.sound("pin")?.id).toBe("b8");
     const data = library(3, 8);
     data.boards = data.boards.filter((board) => board.id !== "b");
     slots.updateLibrary(data);
     expect(slots.page("deck").label).toBe("3 / 3");
     expect(slots.sound("pin")).toBeUndefined();
+    slots.updateLibrary(library(3, 8));
+    expect(slots.page("deck").label).toBe("8 / 8");
+    expect(slots.sound("pin")?.id).toBe("b8");
   });
 
   it("keeps offsets per device with different visible key counts, labels pages and does nothing at the ends", () => {
@@ -174,7 +172,7 @@ describe("board slot paging", () => {
     expect(slots.page("absent")).toMatchObject({ label: "1 / 1", size: 0, next: false, previous: false });
   });
 
-  it("resets all device pages on active board change and clamps a shrinking board without later restoring the old offset", () => {
+  it("restores requested pages after board expansion and resets all devices on active board change", () => {
     const slots = setup(key("one"), key("two", 0, 1), key("mini", 0, 0, "mini"));
     for (let i = 0; i < 3; i++) { slots.move("deck", 1); slots.move("mini", 1); }
     slots.updateLibrary(library(3));
@@ -182,7 +180,8 @@ describe("board slot paging", () => {
     expect(slots.sound("two")).toBeNull();
     expect(slots.page("mini")).toMatchObject({ label: "3 / 3", index: 2 });
     slots.updateLibrary(library(8));
-    expect(slots.page("deck").label).toBe("2 / 4");
+    expect(slots.page("deck").label).toBe("4 / 4");
+    expect(slots.page("mini").label).toBe("4 / 8");
     slots.updateLibrary(library(8, 3, "b"));
     expect(slots.page("deck")).toMatchObject({ label: "1 / 2", index: 0 });
     expect(slots.page("mini")).toMatchObject({ label: "1 / 3", index: 0 });
@@ -212,7 +211,6 @@ describe("board slot paging", () => {
     slots.move("deck", 1);
     slots.disappear("old-one"); slots.disappear("old-two");
     expect(slots.page("deck").label).toBe("1 / 1");
-    settle();
     slots.updateLibrary(library());
     slots.appear(key("new-one"));
     expect(slots.page("deck")).toMatchObject({ label: "2 / 8", size: 1, index: 1 });
@@ -223,29 +221,31 @@ describe("board slot paging", () => {
     expect(slots.sound("new-two")?.id).toBe("a4");
   });
 
-  it("persists clamps when changing a pinned board to follow, without restoring the old page on expansion", () => {
+  it("preserves the request when changing a pinned board to follow and back", () => {
     const slots = setup(key("follow"), key("pin", 0, 1, "deck", { boardId: "b" }));
     slots.updateLibrary(library(3, 8));
     for (let i = 0; i < 3; i++) slots.move("deck", 1);
     expect(slots.page("deck").label).toBe("4 / 8");
     slots.settings("pin", {});
     expect(slots.page("deck").label).toBe("2 / 2");
-    settle();
     slots.settings("pin", { boardId: "b" });
-    expect(slots.page("deck").label).toBe("2 / 8");
-    expect(slots.sound("follow")?.id).toBe("a2");
-    expect(slots.sound("pin")?.id).toBe("b2");
+    expect(slots.page("deck").label).toBe("4 / 8");
+    expect(slots.sound("follow")).toBeNull();
+    expect(slots.sound("pin")?.id).toBe("b4");
   });
 
-  it("persists clamps after the visible auto slot count grows and settles", () => {
+  it("preserves the request when visible auto slots are added, made fixed and removed", () => {
     const slots = setup(key("one"));
     for (let i = 0; i < 7; i++) slots.move("deck", 1);
     slots.appear(key("two", 0, 1));
     expect(slots.page("deck").label).toBe("4 / 4");
-    settle();
+    slots.settings("two", { slot: 1 });
+    expect(slots.page("deck").label).toBe("8 / 8");
+    expect(slots.sound("one")?.id).toBe("a8");
+    slots.settings("two", {});
+    expect(slots.page("deck").label).toBe("4 / 4");
     slots.disappear("two");
-    settle();
-    expect(slots.page("deck").label).toBe("4 / 8");
+    expect(slots.page("deck").label).toBe("8 / 8");
   });
 
   it("preserves hidden device pages through library updates while clamping a visible device", () => {
@@ -255,15 +255,13 @@ describe("board slot paging", () => {
     slots.disappear("one");
     slots.disappear("two");
     slots.appear(key("fixed", 0, 0, "deck", { slot: 1 }));
-    settle();
     slots.updateLibrary(library(1));
     expect(slots.page("mini").label).toBe("1 / 1");
     slots.updateLibrary(library());
     slots.appear(key("one"));
     slots.appear(key("two", 0, 1));
-    settle();
     expect(slots.page("deck").label).toBe("2 / 4");
-    expect(slots.page("mini").label).toBe("1 / 8");
+    expect(slots.page("mini").label).toBe("2 / 8");
   });
 
   it("preserves a mixed layout's page through library updates while its keys are hidden", () => {
@@ -273,35 +271,45 @@ describe("board slot paging", () => {
     slots.disappear("follow");
     slots.disappear("pin");
     slots.appear(key("fixed", 0, 0, "deck", { slot: 1 }));
-    settle();
     slots.updateLibrary(library(1, 1));
     slots.updateLibrary(library(3, 8));
     slots.appear(key("follow"));
     slots.appear(key("pin", 0, 1, "deck", { boardId: "b" }));
-    settle();
     expect(slots.page("deck").label).toBe("7 / 8");
     expect(slots.sound("pin")?.id).toBe("b7");
     expect(slots.sound("follow")).toBeNull();
     expect(slots.sound("fixed")?.id).toBe("a1");
   });
 
-  it("retains a page when a library update arrives during a partial page/folder transition", () => {
+  it.each([0, 101, 60_000])("retains page 7 across partial transitions with %i ms between appearances", (delay) => {
+    vi.useFakeTimers();
     const slots = setup(key("follow"), key("pin", 0, 1, "deck", { boardId: "b" }));
     slots.updateLibrary(library(3, 8));
-    for (let i = 0; i < 3; i++) slots.move("deck", 1);
+    for (let i = 0; i < 6; i++) slots.move("deck", 1);
     slots.disappear("follow");
     slots.disappear("pin");
     slots.updateLibrary(library(3, 8));
     slots.appear(key("follow"));
-    expect(slots.page("deck").label).toBe("3 / 3");
+    expect(slots.page("deck")).toMatchObject({ label: "3 / 3", previous: true, next: false });
+    expect(slots.sound("follow")?.id).toBe("a3");
+    vi.advanceTimersByTime(delay);
     slots.updateLibrary(library(3, 8));
-    vi.advanceTimersByTime(50);
     slots.appear(key("pin", 0, 1, "deck", { boardId: "b" }));
-    vi.advanceTimersByTime(50);
-    expect(slots.page("deck").label).toBe("4 / 8");
-    settle();
-    expect(slots.page("deck").label).toBe("4 / 8");
-    expect(slots.sound("pin")?.id).toBe("b4");
+    expect(slots.page("deck").label).toBe("7 / 8");
+    expect(slots.sound("pin")?.id).toBe("b7");
     expect(slots.sound("follow")).toBeNull();
+  });
+
+  it.each([[-1, 1], [1, 2]] as const)("saves paging direction %i from the effective page, including at the end", (direction, expected) => {
+    const slots = setup(key("one"), key("mini", 0, 0, "mini"));
+    for (let i = 0; i < 6; i++) { slots.move("deck", 1); slots.move("mini", 1); }
+    slots.updateLibrary(library(3));
+    expect(slots.page("deck").index).toBe(2);
+    slots.move("deck", direction);
+    expect(slots.page("deck").index).toBe(expected);
+    slots.updateLibrary(library());
+    expect(slots.page("deck").index).toBe(expected);
+    expect(slots.sound("one")?.id).toBe(`a${expected + 1}`);
+    expect(slots.page("mini").index).toBe(6);
   });
 });
