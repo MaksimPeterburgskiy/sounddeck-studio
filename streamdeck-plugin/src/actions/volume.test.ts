@@ -136,6 +136,7 @@ describe("volume keys", () => {
     acknowledgements[0].resolve(success); await flush();
     expect(connection.command).toHaveBeenCalledTimes(2);
     expect(connection.command).toHaveBeenLastCalledWith("volume.adjust", { bus: "micVirtual", delta: mode === "up" ? 0.05 : -0.05 });
+    connection.snapshot.volumes.micVirtual.muted = false;
     acknowledgements[1].resolve(success); await first;
     await vi.advanceTimersByTimeAsync(1000);
     expect(connection.command).toHaveBeenCalledTimes(2);
@@ -278,6 +279,7 @@ describe("volume keys", () => {
     const { connection, key, volume } = setup();
     const level = connection.snapshot.volumes[bus];
     level.value = away;
+    level.muted = false;
     const down = event(key, { bus, mode });
     await volume.onKeyDown(down);
     await vi.advanceTimersByTimeAsync(400);
@@ -301,10 +303,44 @@ describe("volume keys", () => {
     vi.useFakeTimers();
     const { connection, key, volume } = setup();
     connection.snapshot.volumes.micVirtual = { value: mode === "up" ? 1 : 0, muted: true };
+    connection.command.mockImplementation(async () => {
+      connection.snapshot.volumes.micVirtual.muted = false;
+      return success;
+    });
     const down = event(key, { mode });
     await volume.onKeyDown(down);
     await vi.advanceTimersByTimeAsync(1000);
     expect(connection.command).toHaveBeenCalledExactlyOnceWith("volume.adjust", { bus: "micVirtual", delta: mode === "up" ? 0.05 : -0.05 });
+    volume.onKeyUp(down);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(["up", "down"] as const)("unmutes a bus muted while a held %s key is paused at the limit", async (mode) => {
+    vi.useFakeTimers();
+    const { connection, key, volume } = setup();
+    const level = connection.snapshot.volumes.micVirtual;
+    const delta = mode === "up" ? 0.05 : -0.05;
+    level.value = mode === "up" ? 0.95 : 0.05;
+    connection.command.mockImplementation(async (_name, args) => {
+      level.value = Math.min(1, Math.max(0, level.value + (args as { delta: number }).delta));
+      level.muted = false;
+      return success;
+    });
+    const down = event(key, { mode });
+    await volume.onKeyDown(down);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(level.value).toBe(mode === "up" ? 1 : 0);
+    expect(connection.command).toHaveBeenCalledTimes(1);
+
+    level.muted = true;
+    connection.emit();
+    await vi.advanceTimersByTimeAsync(125);
+    expect(connection.command).toHaveBeenCalledTimes(2);
+    expect(connection.command).toHaveBeenLastCalledWith("volume.adjust", { bus: "micVirtual", delta });
+    expect(level.muted).toBe(false);
+    expect(level.value).toBe(mode === "up" ? 1 : 0);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(connection.command).toHaveBeenCalledTimes(2);
     volume.onKeyUp(down);
     expect(vi.getTimerCount()).toBe(0);
   });
