@@ -39,6 +39,8 @@ Native clients must omit `Origin`: every HTTP request or WebSocket upgrade carry
 
 Five failed authentication attempts with nonempty credentials from one remote address trigger a 30-second cooldown, shared across HTTP and WebSocket. Missing credentials and hello timeouts do not count toward the cooldown. Messages and HTTP bodies are limited to 64 KiB. WebSocket input must be text JSON. At most 64 WebSocket sessions, including unauthenticated sessions, are admitted. Unknown fields, commands and invalid argument types are rejected. IDs contain only letters, digits, `_` and `-`, up to 128 characters. Titles are nonempty strings up to 256 characters. No command accepts file paths.
 
+Each authenticated WebSocket session admits at most **32 pending commands**. HTTP admits at most **32 pending POST commands per remote client address**, shared across connections and including requests still receiving their bodies. Additional commands return `busy` without being queued or dispatched: WebSocket replies use the command's correlation ID and leave the session open; HTTP replies use status **503** and `{ok:false,code:"busy"}`. Capacity is restored when pending work settles, including failed or cancelled commands. HTTP GET snapshots remain available at the limit.
+
 ## WebSocket
 
 Connect to `ws://127.0.0.1:41730/` and send a valid hello within **5 seconds**:
@@ -74,7 +76,7 @@ Responses carry the same ID:
 {"type":"result","id":"c7","ok":false,"code":"not-found"}
 ```
 
-A successful `sound.play` result confirms the sound's tap/retrigger action after the latest audio route configuration settles, not audio completion. If no output route is enabled for the sound, it returns `unavailable`. Disconnecting cancels that client’s plays that have not started; voices already started continue. Stops cancel earlier queued plays, while later plays remain queued. Other playback/board results acknowledge dispatch to the app. Commands respect the sound's existing tap/retrigger behavior. Trigger commands return `busy` while a hotkey is being captured and `unavailable` if the renderer is absent or still initializing, including during a reload; cached library/image queries still work.
+A successful `sound.play` result confirms the sound's tap/retrigger action after the latest audio route configuration, including device refresh and preferred-device retries, settles, not audio completion. If no output route is enabled for the sound, it returns `unavailable`. Disconnecting cancels that client’s plays that have not started; voices already started continue. Stops cancel earlier queued plays, while later plays remain queued. Other playback/board results acknowledge dispatch to the app. Commands respect the sound's existing tap/retrigger behavior. Trigger commands return `busy` while a hotkey is being captured and `unavailable` if the renderer is absent or still initializing, including during a reload; cached library/image queries still work.
 
 | Command | Args | Result data |
 | --- | --- | --- |
@@ -146,7 +148,7 @@ Session/HTTP errors use `{type:"error",code,message,protocol:1}`; WebSocket comm
 | `unknown-command` | Command not recognized |
 | `not-found` | Sound, board or endpoint missing / 404 |
 | `payload-too-large` | Body exceeds 64 KiB / 413; oversized WS frames close with code 1009 |
-| `busy` | Hotkey capture active, or session capacity reached / 503 |
+| `busy` | Hotkey capture active, session capacity reached, or pending command limit reached / 503 |
 | `unavailable` | Renderer unavailable or still initializing / 503 |
 | `internal-error` | Command could not be dispatched / 500 |
 

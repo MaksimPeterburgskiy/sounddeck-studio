@@ -45,7 +45,7 @@ import {
 } from "lucide-react";
 import { AudioEngine } from "./lib/audioEngine";
 import { CONTROL_DEFAULT_PORT } from "./lib/controlProtocol";
-import { waitForAudioConfiguration } from "./lib/controlReadiness";
+import { trackAudioConfiguration, waitForAudioConfiguration } from "./lib/controlReadiness";
 import { createSoundPlayQueue } from "./lib/soundPlayQueue";
 import type { ControlPlaybackResult, ControlPlaybackVoice, ControlSettingsPatch, ControlStatus } from "./lib/controlProtocol";
 import type { AudioDeviceStatus, MicrophoneProcessingStatus } from "./lib/audioEngine";
@@ -327,7 +327,7 @@ function App() {
         setDeviceStatus(status);
       }
     );
-    audioConfigurationRef.current = engineRef.current.configure(engineSettings, library.settings.virtualOutputDeviceId);
+    trackAudioConfiguration(audioConfigurationRef, engineRef.current.configure(engineSettings, library.settings.virtualOutputDeviceId));
   }, [library?.settings]);
 
   useEffect(() => {
@@ -482,18 +482,22 @@ function App() {
     }
   }, []);
 
-  const refreshDevicesAndRetryPreferredDevices = useCallback(async () => {
-    const list = await refreshDevices();
-    const currentDeviceStatus = deviceStatusRef.current;
-    const micNeedsRetry = currentDeviceStatus.microphone.state === "fallback" || currentDeviceStatus.microphone.state === "unavailable";
-    const monitorNeedsRetry = currentDeviceStatus.monitor.state === "fallback" || currentDeviceStatus.monitor.state === "unavailable";
-    const monitorMissing =
-      currentDeviceStatus.monitor.state === "selected" &&
-      currentDeviceStatus.monitor.requestedDeviceId !== "" &&
-      !list.some((device) => device.kind === "audiooutput" && device.deviceId === currentDeviceStatus.monitor.requestedDeviceId);
-    if (micNeedsRetry || monitorNeedsRetry || monitorMissing) {
-      await engineRef.current?.retryPreferredDevices({ recheckMonitor: monitorMissing });
-    }
+  const refreshDevicesAndRetryPreferredDevices = useCallback(() => {
+    const retry = (async () => {
+      const list = await refreshDevices();
+      const currentDeviceStatus = deviceStatusRef.current;
+      const micNeedsRetry = currentDeviceStatus.microphone.state === "fallback" || currentDeviceStatus.microphone.state === "unavailable";
+      const monitorNeedsRetry = currentDeviceStatus.monitor.state === "fallback" || currentDeviceStatus.monitor.state === "unavailable";
+      const monitorMissing =
+        currentDeviceStatus.monitor.state === "selected" &&
+        currentDeviceStatus.monitor.requestedDeviceId !== "" &&
+        !list.some((device) => device.kind === "audiooutput" && device.deviceId === currentDeviceStatus.monitor.requestedDeviceId);
+      if (micNeedsRetry || monitorNeedsRetry || monitorMissing) {
+        await engineRef.current?.retryPreferredDevices({ recheckMonitor: monitorMissing });
+      }
+    })();
+    // Track enumeration too: the selected sink can disappear before retry starts.
+    return trackAudioConfiguration(audioConfigurationRef, retry);
   }, [refreshDevices]);
 
   useEffect(() => {
