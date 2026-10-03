@@ -1,3 +1,4 @@
+import type { ControlPlaybackVoice } from "./controlProtocol";
 import type { AudioSettings, OutputTarget, SoundEffects, SoundSlot } from "../types";
 import { makeMicrophoneConstraints, normalizeSelectableDeviceId } from "./devices";
 import { normalizeSoundEffects } from "./model";
@@ -29,6 +30,7 @@ interface ActiveVoice {
   gains: GainNode[];
   effects: ActiveEffectChain[];
   startedAt: number;
+  epochStartedAt: number;
   fadeOutMs: number;
   trimStart: number;
   clipDuration: number;
@@ -109,9 +111,11 @@ export class AudioEngine {
   private micAppliedVirtualSinkReady = false;
   private disposed = false;
   private settings: AudioSettings;
+  // A new monitor context uses the system default until a sink switch is attempted.
+  private monitorSinkReady = true;
   private virtualSinkId = "";
   private virtualSinkReady = false;
-  private statusCallback: (status: EngineStatus, activeSoundIds: string[]) => void;
+  private statusCallback: (status: EngineStatus, activeSoundIds: string[], playback: ControlPlaybackVoice[]) => void;
   private processingStatusCallback: (status: MicrophoneProcessingStatus) => void;
   private processingStatus: MicrophoneProcessingStatus = disabledMicrophoneProcessingStatus;
   private deviceStatusCallback: (status: AudioDeviceStatus) => void;
@@ -119,7 +123,7 @@ export class AudioEngine {
 
   constructor(
     settings: AudioSettings,
-    statusCallback: (status: EngineStatus, activeSoundIds: string[]) => void,
+    statusCallback: (status: EngineStatus, activeSoundIds: string[], playback: ControlPlaybackVoice[]) => void,
     processingStatusCallback: (status: MicrophoneProcessingStatus) => void = () => undefined,
     deviceStatusCallback: (status: AudioDeviceStatus) => void = () => undefined
   ) {
@@ -206,13 +210,15 @@ export class AudioEngine {
     return buffer;
   }
 
-  async play(sound: SoundSlot) {
-    if (!this.hasLiveRoute(sound.outputTarget)) return false;
+  async play(sound: SoundSlot, signal?: AbortSignal, waitForRouting?: () => Promise<void>) {
+    if (signal?.aborted || !this.hasLiveRoute(sound.outputTarget)) return false;
     const buffer = await this.preload(sound);
+    if (waitForRouting) await waitForRouting();
     // Settings may have changed while decoding; re-check before any side effects.
-    if (this.disposed || !this.hasLiveRoute(sound.outputTarget)) return false;
+    if (signal?.aborted || this.disposed || !this.hasLiveRoute(sound.outputTarget)) return false;
     await Promise.all([this.monitorContext.resume(), this.virtualContext.resume()]);
-    if (this.disposed || !this.hasLiveRoute(sound.outputTarget)) return false;
+    if (waitForRouting) await waitForRouting();
+    if (signal?.aborted || this.disposed || !this.hasLiveRoute(sound.outputTarget)) return false;
     // Only stop other voices once nothing else can bail out; a muted trigger must not silence what is playing.
     if (sound.soloPlay) this.stopAllExcept(sound.id);
     if (sound.retriggerMode === "restart") this.stop(sound.id);
@@ -229,6 +235,7 @@ export class AudioEngine {
       gains: [],
       effects: [],
       startedAt: performance.now(),
+      epochStartedAt: Date.now(),
       fadeOutMs: sound.fadeOutMs,
       trimStart,
       clipDuration,
@@ -315,13 +322,16 @@ export class AudioEngine {
   /** Apply new per-sound effects to any currently playing voices and preview audio. */
   setSoundEffects(soundId: string, effects: SoundEffects | undefined) {
     const normalized = normalizeSoundEffects(effects);
-    for (const voice of this.active.get(soundId) || []) {
+    const voices = this.active.get(soundId) || [];
+    for (const voice of voices) {
       const currentElapsed = this.voiceElapsed(voice);
       voice.positionOffset = currentElapsed;
       voice.startedAt = performance.now();
       voice.rate = this.effectivePlaybackRate(voice.baseRate, normalized);
+      voice.epochStartedAt = Date.now() - (currentElapsed / voice.rate) * 1000;
       for (const chain of voice.effects) this.applyEffectsToChain(chain, normalized, true);
     }
+    if (voices.length) this.emitStatus();
     if (this.previewVoice?.soundId === soundId) {
       const position = this.getPreviewPosition();
       if (position !== null) {
@@ -624,7 +634,10 @@ export class AudioEngine {
   }
 
   private hasLiveRoute(target: OutputTarget) {
-    const monitorEnabled = (target === "monitor" || target === "both") && this.settings.monitorToHeadphones;
+    const monitorEnabled =
+      (target === "monitor" || target === "both") &&
+      this.settings.monitorToHeadphones &&
+      this.monitorSinkReady;
     const virtualEnabled =
       (target === "virtual" || target === "both") &&
       this.settings.soundboardToVirtualMic &&
@@ -717,6 +730,7 @@ export class AudioEngine {
     const requestedDeviceId = normalizeSelectableDeviceId(this.settings.monitorDeviceId);
     const result = await this.setSink(this.monitorContext, requestedDeviceId, true);
     if (generation !== this.configureGeneration || this.disposed) return;
+    this.monitorSinkReady = result !== "failed";
     const sinkId = (this.monitorContext as { sinkId?: unknown }).sinkId;
     this.setMonitorDeviceStatus({
       state: result === "selected" ? "selected" : result === "fallback" ? "fallback" : "unavailable",
@@ -1145,6 +1159,12 @@ export class AudioEngine {
   }
 
   private emitStatus() {
-    this.statusCallback(this.active.size ? "playing" : "idle", [...this.active.keys()]);
+    const playback = [...this.active.values()].flat().map((voice) => ({
+      soundId: voice.soundId,
+      startedAt: voice.epochStartedAt,
+      duration: voice.clipDuration / voice.rate,
+      loop: voice.loop
+    }));
+    this.statusCallback(this.active.size ? "playing" : "idle", [...this.active.keys()], playback);
   }
 }

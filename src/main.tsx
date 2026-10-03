@@ -44,10 +44,14 @@ import {
   X
 } from "lucide-react";
 import { AudioEngine } from "./lib/audioEngine";
+import { CONTROL_DEFAULT_PORT } from "./lib/controlProtocol";
+import { beginAudioConfiguration, trackAudioConfiguration, waitForAudioConfiguration, watchAudioDeviceChanges } from "./lib/controlReadiness";
+import { createSoundPlayQueue } from "./lib/soundPlayQueue";
+import type { ControlPlaybackResult, ControlPlaybackVoice, ControlSettingsPatch, ControlStatus } from "./lib/controlProtocol";
 import type { AudioDeviceStatus, MicrophoneProcessingStatus } from "./lib/audioEngine";
 import { findVirtualAudioCandidates, getDefaultDeviceLabel, isSelectableMediaDevice, makeMicrophoneConstraints, normalizeMonitorDeviceId, normalizeSelectableDeviceId } from "./lib/devices";
 import type { VirtualAudioCandidate } from "./lib/devices";
-import { acceleratorLooksReserved, formatBytes, formatDuration, getDefaultSoundEffects, makeBoard, normalizeLibrary, normalizeSoundEffects, now, RETRIGGER_MODES, retriggerModeLabel, soundEffectsAreActive, soundEffectsAreDefault, soundFromImport } from "./lib/model";
+import { acceleratorLooksReserved, formatBytes, formatDuration, getDefaultSoundEffects, makeBoard, nextBoard, normalizeLibrary, normalizeSoundEffects, now, RETRIGGER_MODES, retriggerModeLabel, soundEffectsAreActive, soundEffectsAreDefault, soundFromImport } from "./lib/model";
 import { claimCaptureSlot, eventToToken, formatAccelerator, MODIFIER_TOKENS, normalizeAccelerator, orderTokens } from "./lib/hotkeys";
 import { makeWaveform } from "./lib/waveform";
 import { installDevBridge } from "./lib/devBridge";
@@ -92,6 +96,7 @@ function App() {
   const [hotkeyResults, setHotkeyResults] = useState<HotkeyResult[]>([]);
   const [engineStatus, setEngineStatus] = useState<EngineStatus>("idle");
   const [playingIds, setPlayingIds] = useState<string[]>([]);
+  const [controlPlayback, setControlPlayback] = useState<ControlPlaybackVoice[]>([]);
   const [microphoneProcessingStatus, setMicrophoneProcessingStatus] = useState<MicrophoneProcessingStatus>(defaultMicrophoneProcessingStatus);
   const [deviceStatus, setDeviceStatus] = useState<AudioDeviceStatus>(defaultAudioDeviceStatus);
   const [editingClipId, setEditingClipId] = useState<string>("");
@@ -122,6 +127,18 @@ function App() {
   const [startupUpdateStatus, setStartupUpdateStatus] = useState<StartupUpdateStatus>("idle");
   const startupSettingsRequestTokenRef = useRef(0);
   const engineRef = useRef<AudioEngine | null>(null);
+  const audioConfigurationRef = useRef<Promise<void> | null>(null);
+  const pendingAudioSettingsRef = useRef<ReturnType<typeof beginAudioConfiguration>[]>([]);
+  const controlRequests = useRef(new Map<string, AbortController>());
+  const queueSoundPlay = useMemo(() => createSoundPlayQueue(), []);
+  const stopSound = useCallback((soundId: string) => {
+    queueSoundPlay.cancel(soundId);
+    engineRef.current?.stop(soundId);
+  }, [queueSoundPlay]);
+  const stopAllSounds = useCallback(() => {
+    queueSoundPlay.cancelAll();
+    engineRef.current?.stopAll();
+  }, [queueSoundPlay]);
   const deviceStatusRef = useRef<AudioDeviceStatus>(defaultAudioDeviceStatus);
   const previousMicrophoneDeviceStatusRef = useRef<AudioDeviceStatus["microphone"] | null>(null);
   const previousMonitorDeviceStatusRef = useRef<AudioDeviceStatus["monitor"] | null>(null);
@@ -280,6 +297,8 @@ function App() {
 
   useEffect(() => {
     const disposeAudio = () => {
+      queueSoundPlay.cancelAll();
+      for (const complete of pendingAudioSettingsRef.current.splice(0)) complete(Promise.resolve());
       const engine = engineRef.current;
       engineRef.current = null;
       void engine?.dispose();
@@ -291,7 +310,7 @@ function App() {
     };
   }, []);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!library) return;
     const engineSettings = {
       ...library.settings,
@@ -299,9 +318,10 @@ function App() {
     };
     if (!engineRef.current) engineRef.current = new AudioEngine(
       engineSettings,
-      (status, activeIds) => {
+      (status, activeIds, playback) => {
         setEngineStatus(status);
         setPlayingIds(activeIds);
+        setControlPlayback(playback);
       },
       setMicrophoneProcessingStatus,
       (status) => {
@@ -309,7 +329,9 @@ function App() {
         setDeviceStatus(status);
       }
     );
-    void engineRef.current.configure(engineSettings, library.settings.virtualOutputDeviceId);
+    const work = engineRef.current.configure(engineSettings, library.settings.virtualOutputDeviceId);
+    for (const complete of pendingAudioSettingsRef.current.splice(0)) complete(work);
+    trackAudioConfiguration(audioConfigurationRef, work);
   }, [library?.settings]);
 
   useEffect(() => {
@@ -405,9 +427,13 @@ function App() {
     if (activeBoard) previousBoardRef.current = { id: activeBoard.id, soundIds: activeBoard.sounds.map((sound) => sound.id) };
     if (!previous || !activeBoard || previous.id === activeBoard.id) return;
     for (const soundId of previous.soundIds) {
-      if (engineRef.current?.isPlaying(soundId)) engineRef.current.stop(soundId);
+      stopSound(soundId);
     }
-  }, [activeBoard]);
+  }, [activeBoard, stopSound]);
+
+  useEffect(() => {
+    void window.sounddeck.pushControlState({ playback: controlPlayback }).catch(() => undefined);
+  }, [controlPlayback]);
 
   const selectedSound = useMemo(() => activeBoard?.sounds.find((sound) => sound.id === selectedSoundId) || null, [activeBoard, selectedSoundId]);
   const editingClipSound = useMemo(() => activeBoard?.sounds.find((sound) => sound.id === editingClipId) || null, [activeBoard, editingClipId]);
@@ -460,18 +486,20 @@ function App() {
     }
   }, []);
 
-  const refreshDevicesAndRetryPreferredDevices = useCallback(async () => {
-    const list = await refreshDevices();
-    const currentDeviceStatus = deviceStatusRef.current;
-    const micNeedsRetry = currentDeviceStatus.microphone.state === "fallback" || currentDeviceStatus.microphone.state === "unavailable";
-    const monitorNeedsRetry = currentDeviceStatus.monitor.state === "fallback" || currentDeviceStatus.monitor.state === "unavailable";
-    const monitorMissing =
-      currentDeviceStatus.monitor.state === "selected" &&
-      currentDeviceStatus.monitor.requestedDeviceId !== "" &&
-      !list.some((device) => device.kind === "audiooutput" && device.deviceId === currentDeviceStatus.monitor.requestedDeviceId);
-    if (micNeedsRetry || monitorNeedsRetry || monitorMissing) {
-      await engineRef.current?.retryPreferredDevices({ recheckMonitor: monitorMissing });
-    }
+  const refreshDevicesAndRetryPreferredDevices = useCallback(() => {
+    return (async () => {
+      const list = await refreshDevices();
+      const currentDeviceStatus = deviceStatusRef.current;
+      const micNeedsRetry = currentDeviceStatus.microphone.state === "fallback" || currentDeviceStatus.microphone.state === "unavailable";
+      const monitorNeedsRetry = currentDeviceStatus.monitor.state === "fallback" || currentDeviceStatus.monitor.state === "unavailable";
+      const monitorMissing =
+        currentDeviceStatus.monitor.state === "selected" &&
+        currentDeviceStatus.monitor.requestedDeviceId !== "" &&
+        !list.some((device) => device.kind === "audiooutput" && device.deviceId === currentDeviceStatus.monitor.requestedDeviceId);
+      if (micNeedsRetry || monitorNeedsRetry || monitorMissing) {
+        await engineRef.current?.retryPreferredDevices({ recheckMonitor: monitorMissing });
+      }
+    })();
   }, [refreshDevices]);
 
   useEffect(() => {
@@ -481,19 +509,7 @@ function App() {
   useEffect(() => {
     const mediaDevices = navigator.mediaDevices;
     if (!mediaDevices?.addEventListener) return;
-    let retryTimer: ReturnType<typeof setTimeout> | null = null;
-    const handleDeviceChange = () => {
-      if (retryTimer !== null) clearTimeout(retryTimer);
-      retryTimer = setTimeout(() => {
-        retryTimer = null;
-        void refreshDevicesAndRetryPreferredDevices();
-      }, 600);
-    };
-    mediaDevices.addEventListener("devicechange", handleDeviceChange);
-    return () => {
-      mediaDevices.removeEventListener("devicechange", handleDeviceChange);
-      if (retryTimer !== null) clearTimeout(retryTimer);
-    };
+    return watchAudioDeviceChanges(mediaDevices, audioConfigurationRef, refreshDevicesAndRetryPreferredDevices);
   }, [refreshDevicesAndRetryPreferredDevices]);
 
   const registerHotkeys = useCallback(async (current: SoundLibrary) => {
@@ -520,52 +536,106 @@ function App() {
     void registerHotkeys(library);
   }, [library, draggingSoundId, registerHotkeys, corsairConnected]);
 
-  const triggerSound = useCallback(async (sound: SoundSlot) => {
+  const triggerSound = useCallback((sound: SoundSlot, external = false, cancellation?: AbortSignal): Promise<ControlPlaybackResult> => queueSoundPlay(sound.id, async (signal) => {
     try {
+      if (signal.aborted) return { ok: false, code: "unavailable" };
+      if (external) await waitForAudioConfiguration(() => audioConfigurationRef.current);
+      if (signal.aborted) return { ok: false, code: "unavailable" };
       if (sound.retriggerMode === "stop" && engineRef.current?.isPlaying(sound.id)) {
         engineRef.current.stop(sound.id);
         setMessage(`Stopped ${sound.title}`);
-        return;
+        return { ok: true };
       }
-      const started = await engineRef.current?.play(sound);
-      setMessage(started === false ? `No output route enabled for ${sound.title}` : `Triggered ${sound.title}`);
+      const started = await engineRef.current?.play(sound, signal, external ? () => waitForAudioConfiguration(() => audioConfigurationRef.current) : undefined);
+      if (!started) {
+        setMessage(`No output route enabled for ${sound.title}`);
+        return { ok: false, code: "unavailable" };
+      }
+      setMessage(`Triggered ${sound.title}`);
       if (!sound.duration || !sound.waveform) {
-        const buffer = await engineRef.current?.preload(sound);
-        if (buffer) updateSound(sound.id, { duration: buffer.duration, waveform: makeWaveform(buffer), updatedAt: now() });
+        void engineRef.current?.preload(sound).then((buffer) => {
+          updateSound(sound.id, { duration: buffer.duration, waveform: makeWaveform(buffer), updatedAt: now() });
+        }).catch(() => undefined);
       }
+      return { ok: true };
     } catch (error) {
+      if (signal.aborted) return { ok: false, code: "unavailable" };
       setMessage(`Could not play ${sound.title}`);
       console.error(error);
+      return { ok: false, code: "internal-error" };
     }
-  }, [activeBoard?.id]);
+  }, cancellation), [activeBoard?.id, queueSoundPlay]);
 
   useEffect(() => {
     return window.sounddeck.onHotkeyTrigger((binding) => {
       if (binding.type === "stop-all") {
-        engineRef.current?.stopAll();
+        stopAllSounds();
         setMessage("Stopped all sounds");
         return;
       }
       if (binding.type === "board") {
-        const board = library?.boards.find((candidate) => candidate.id === binding.boardId);
-        if (board) {
-          updateLibrary((current) => ({ ...current, activeBoardId: board.id }));
+        updateLibrary((current) => {
+          const board = current.boards.find((candidate) => candidate.id === binding.boardId);
+          if (!board) return current;
           setMessage(`Switched to ${board.name}`);
-        }
+          return { ...current, activeBoardId: board.id };
+        });
         return;
       }
       if (binding.type === "cycle-board") {
-        if (!library || library.boards.length < 2) return;
-        const index = library.boards.findIndex((board) => board.id === library.activeBoardId);
-        const next = library.boards[(index + 1) % library.boards.length];
-        updateLibrary((current) => ({ ...current, activeBoardId: next.id }));
-        setMessage(`Switched to ${next.name}`);
+        cycleBoard();
         return;
       }
       const sound = library?.boards.flatMap((board) => board.sounds).find((candidate) => candidate.id === binding.soundId);
       if (sound) void triggerSound(sound);
     });
-  }, [library, triggerSound]);
+  }, [library, triggerSound, stopAllSounds]);
+
+  useEffect(() => window.sounddeck.onControlCommand((request) => {
+    if (request.command === "sound.cancel") {
+      controlRequests.current.get(request.requestId)?.abort();
+      return;
+    }
+    const { command, args } = request;
+    if (command === "sound.play") {
+      const sound = library?.boards.flatMap((board) => board.sounds).find((candidate) => candidate.id === args.soundId);
+      const cancellation = new AbortController();
+      controlRequests.current.set(request.requestId, cancellation);
+      const result = sound ? triggerSound(sound, true, cancellation.signal) : Promise.resolve<ControlPlaybackResult>({ ok: false, code: "not-found" });
+      void result.then((result) => {
+        controlRequests.current.delete(request.requestId);
+        return window.sounddeck.completeControlPlayback(request.requestId, result);
+      }).catch(() => undefined);
+      return;
+    }
+    if (command === "sound.stop") {
+      stopSound(args.soundId);
+      return;
+    }
+    if (command === "board.cycle") {
+      cycleBoard(args.direction);
+    }
+  }), [library, triggerSound, stopSound]);
+
+  // Command subscriptions are installed, but initial audio routing may still
+  // be pending when the library first becomes available.
+  useEffect(() => {
+    if (!hasLibrary) return;
+    let cancelled = false;
+    void waitForAudioConfiguration(() => audioConfigurationRef.current).then(() => {
+      if (!cancelled) return window.sounddeck.controlReady();
+    }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [hasLibrary]);
+
+  function cycleBoard(direction: 1 | -1 = 1) {
+    updateLibrary((current) => {
+      const next = nextBoard(current, direction);
+      if (!next) return current;
+      setMessage(`Switched to ${next.name}`);
+      return { ...current, activeBoardId: next.id };
+    });
+  }
 
   function updateLibrary(updater: (current: SoundLibrary) => SoundLibrary) {
     setLibrary((current) => current ? updater(current) : current);
@@ -640,7 +710,7 @@ function App() {
   }
 
   function deleteSound(soundId: string) {
-    engineRef.current?.stop(soundId);
+    stopSound(soundId);
     if (library) {
       const board = library.boards.find((candidate) => candidate.id === library.activeBoardId);
       const removed = board?.sounds.filter((sound) => sound.id === soundId) || [];
@@ -656,7 +726,7 @@ function App() {
   }
 
   function moveSound(soundId: string, targetBoardId: string) {
-    engineRef.current?.stop(soundId);
+    stopSound(soundId);
     updateLibrary((current) => {
       const sourceBoard = current.boards.find((board) => board.sounds.some((sound) => sound.id === soundId));
       const targetBoard = current.boards.find((board) => board.id === targetBoardId);
@@ -906,7 +976,7 @@ function App() {
       }
 
       const boardToDelete = current.boards.find((board) => board.id === boardId);
-      boardToDelete?.sounds.forEach((sound) => engineRef.current?.stop(sound.id));
+      boardToDelete?.sounds.forEach((sound) => stopSound(sound.id));
       const remaining = current.boards.filter((board) => board.id !== boardId);
       const deletedIndex = current.boards.findIndex((board) => board.id === boardId);
       const fallback = remaining[Math.max(0, Math.min(deletedIndex, remaining.length - 1))];
@@ -929,7 +999,7 @@ function App() {
     if (library) {
       const boardId = library.activeBoardId;
       const current = library.boards.find((board) => board.id === boardId);
-      current?.sounds.forEach((sound) => engineRef.current?.stop(sound.id));
+      current?.sounds.forEach((sound) => stopSound(sound.id));
       if (current) deleteMediaFiles(current.sounds, library.boards.map((board) => board.id === boardId ? { ...imported, id: boardId } : board));
     }
     updateLibrary((current) => ({
@@ -942,6 +1012,8 @@ function App() {
   }
 
   function changeSettings(patch: Partial<SoundLibrary["settings"]>) {
+    if (!library) return;
+    pendingAudioSettingsRef.current.push(beginAudioConfiguration(audioConfigurationRef));
     const normalizedPatch = { ...patch };
     if ("microphoneDeviceId" in normalizedPatch) {
       normalizedPatch.microphoneDeviceId = normalizeSelectableDeviceId(normalizedPatch.microphoneDeviceId);
@@ -1175,7 +1247,7 @@ function App() {
                   playing={playingIds.includes(sound.id)}
                   hotkeyProblem={hotkeyResults.some((result) => result.soundId === sound.id && !result.ok)}
                   onPlay={() => void triggerSound(sound)}
-                  onStop={() => engineRef.current?.stop(sound.id)}
+                  onStop={() => stopSound(sound.id)}
                   onEditClip={() => setEditingClipId(sound.id)}
                   onSelect={() => setSelectedSoundId(sound.id)}
                   onDelete={() => deleteSound(sound.id)}
@@ -1215,7 +1287,7 @@ function App() {
             activeMicrophoneLabel={activeMicrophoneLabel}
             preferredMonitorLabel={preferredMonitorLabel}
             activeMonitorLabel={activeMonitorLabel}
-            onRefresh={refreshDevicesAndRetryPreferredDevices}
+            onRefresh={() => trackAudioConfiguration(audioConfigurationRef, refreshDevicesAndRetryPreferredDevices())}
             onChange={changeSettings}
           />
         )}
@@ -2364,6 +2436,93 @@ function StatusBadge({ state, children }: { state: string; children: React.React
   return <em className="settingsBadge" data-state={state}>{children}</em>;
 }
 
+function ExternalControlSettings() {
+  const [status, setStatus] = useState<ControlStatus>({ enabled: false, port: CONTROL_DEFAULT_PORT, token: "", allowLan: false, listening: false, clients: [], error: null });
+  const [port, setPort] = useState(String(CONTROL_DEFAULT_PORT));
+  const [issue, setIssue] = useState("");
+  const [portIssue, setPortIssue] = useState("");
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+    const receive = (next: ControlStatus) => {
+      if (!mounted) return;
+      setStatus(next);
+    };
+    const unsubscribe = window.sounddeck.onControlStatus(receive);
+    void window.sounddeck.getControlSettings().then((next) => {
+      receive(next);
+      if (mounted) setPort(String(next.port));
+    }).catch(() => { if (mounted) setIssue("Could not load external control settings."); });
+    return () => { mounted = false; unsubscribe(); };
+  }, []);
+
+  async function apply(patch: ControlSettingsPatch) {
+    setIssue("");
+    try {
+      const next = await window.sounddeck.setControlSettings(patch);
+      setStatus(next);
+    } catch {
+      setIssue("Could not save external control settings.");
+    }
+  }
+
+  function applyPort() {
+    const value = Number(port);
+    if (!/^\d+$/.test(port) || !Number.isInteger(value) || value < 1 || value > 65535) {
+      setPortIssue("Enter a port from 1 to 65535.");
+      return;
+    }
+    setPortIssue("");
+    if (value !== status.port || status.error) void apply({ port: value });
+  }
+
+  async function copyToken() {
+    try {
+      await navigator.clipboard.writeText(status.token);
+      setCopied(true);
+    } catch {
+      setIssue("Could not copy the token.");
+    }
+  }
+
+  async function regenerateToken() {
+    setIssue("");
+    setCopied(false);
+    try {
+      setStatus(await window.sounddeck.regenerateControlToken());
+    } catch {
+      setIssue("Could not regenerate the token.");
+    }
+  }
+
+  const portError = portIssue || status.error?.message;
+  return (
+    <SettingsCard title="External control" description="Control SoundDeck from other apps and scripts.">
+      <SettingsRow icon={<Radio size={16} />} title="Enable external control" description="Allow clients with your token to play sounds and switch boards." issue={issue && <span role="alert">{issue}</span>}>
+        <StatusBadge state={status.listening ? "active" : status.error ? "unavailable" : "idle"}>{status.listening ? "Listening" : status.enabled ? "Offline" : "Off"}</StatusBadge>
+        <Switch label="Enable external control" checked={status.enabled} onChange={(enabled) => void apply({ enabled })} />
+      </SettingsRow>
+      <SettingsRow title="Port" description="Applied when you leave the field." issue={portError && <span id="control-port-error" role="alert">{portError}</span>}>
+        <input className="controlPort" type="number" min={1} max={65535} step={1} aria-label="External control port" aria-invalid={Boolean(portError)} aria-describedby={portError ? "control-port-error" : undefined} value={port} onChange={(event) => { setPort(event.target.value); setPortIssue(""); }} onBlur={applyPort} />
+      </SettingsRow>
+      <SettingsRow icon={<ShieldCheck size={16} />} title="Token" description="Regenerate to disconnect clients and replace their access token.">
+        <input className="controlToken" type="password" aria-label="External control token" autoComplete="off" readOnly value={status.token} />
+        <button className="settingsButton" onClick={() => void copyToken()}>{copied ? "Copied" : "Copy"}</button>
+        <button className="settingsButton" onClick={() => void regenerateToken()}>Regenerate</button>
+      </SettingsRow>
+      <SettingsRow title="Allow connections from other devices" description="The token travels unencrypted on your local network.">
+        <Switch label="Allow connections from other devices" checked={status.allowLan} onChange={(allowLan) => void apply({ allowLan })} />
+      </SettingsRow>
+      <SettingsRow title="Connected clients">
+        <div className="controlClients">
+          {status.clients.length ? status.clients.map((client, index) => <span key={`${client.name}:${index}`}>{client.name} <small>{client.version}</small></span>) : <span>No clients connected</span>}
+        </div>
+      </SettingsRow>
+    </SettingsCard>
+  );
+}
+
 function SettingsPanel({ settings, soundCount, startupSettings, startupUpdateStatus, capabilities, updateChannel, onChangeSettings, onApplyRetriggerToAll, onChangeStartup, onChangeUpdateChannel }: {
   settings: SoundLibrary["settings"];
   soundCount: number;
@@ -2425,6 +2584,8 @@ function SettingsPanel({ settings, soundCount, startupSettings, startupUpdateSta
           </button>
         </SettingsRow>
       </SettingsCard>
+
+      <ExternalControlSettings />
 
       <SettingsCard title="Startup" description="Control how SoundDeck behaves when you sign in to your computer.">
         <SettingsRow icon={<Power size={16} />} title="Run on start" description={startupCopy} disabled={disabled}>

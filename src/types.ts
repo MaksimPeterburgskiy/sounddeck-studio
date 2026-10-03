@@ -1,3 +1,5 @@
+import type { ControlLiveState, ControlPlaybackResult, ControlSettingsPatch, ControlStatus, RendererControlCommand } from "./lib/controlProtocol";
+
 export type OutputTarget = "monitor" | "virtual" | "both";
 export type RetriggerMode = "restart" | "overlap" | "stop";
 export type SoundDeckPlatform = "win32" | "darwin" | "linux" | "unknown";
@@ -218,6 +220,14 @@ declare global {
       setRunAtStartup: (enabled: boolean, options?: { hideOnStartup?: boolean }) => Promise<StartupSettings & { ok: boolean }>;
       getPathForFile: (file: File) => string;
       onHotkeyTrigger: (callback: (binding: HotkeyBinding) => void) => () => void;
+      getControlSettings: () => Promise<ControlStatus>;
+      setControlSettings: (patch: ControlSettingsPatch) => Promise<ControlStatus>;
+      regenerateControlToken: () => Promise<ControlStatus>;
+      pushControlState: (state: Pick<ControlLiveState, "playback">) => Promise<{ ok: boolean }>;
+      completeControlPlayback: (requestId: string, result: ControlPlaybackResult) => Promise<{ ok: boolean }>;
+      controlReady: () => Promise<{ ok: boolean }>;
+      onControlStatus: (callback: (status: ControlStatus) => void) => () => void;
+      onControlCommand: (callback: (command: RendererControlCommand) => void) => () => void;
       getCorsairStatus: () => Promise<CorsairState>;
       onCorsairStatus: (callback: (state: CorsairState) => void) => () => void;
       onCorsairKey: (callback: (key: string) => void) => () => void;

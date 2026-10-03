@@ -2,6 +2,12 @@ import type { MediaImportResult, OutputTarget, RetriggerMode, SoundBoard, SoundE
 import { normalizeMonitorDeviceId, normalizeSelectableDeviceId } from "./devices";
 import { normalizeAccelerator } from "./hotkeys";
 
+export function nextBoard(library: Pick<SoundLibrary, "boards" | "activeBoardId">, direction: 1 | -1 = 1) {
+  if (library.boards.length < 2) return undefined;
+  const index = library.boards.findIndex((board) => board.id === library.activeBoardId);
+  return library.boards[(index + direction + library.boards.length) % library.boards.length];
+}
+
 const palette = ["#1db7a6", "#ffcf5c", "#ff6b6b", "#8f7cff", "#4ba3ff", "#74d66b", "#ef7bd5", "#f6903d"];
 const icons = ["zap", "radio", "music", "mic", "laugh", "siren", "sparkles", "gamepad"];
 const defaultSettings: SoundLibrary["settings"] = {
