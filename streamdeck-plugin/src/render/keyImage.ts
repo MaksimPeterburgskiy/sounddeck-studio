@@ -37,6 +37,9 @@ const TITLE_MARGIN = 8;
 const ART_TOP = 20;
 const ART_GAP = 6;
 const ART_MAX = 64;
+const BADGE_ICON_MAX = 44;
+const BADGE_FONT = 20;
+const BADGE_GAP = 6;
 const MAX_CACHE_ENTRIES = 512;
 const MAX_CACHE_BYTES = 16 * 1024 * 1024;
 const cache = new Map<string, string>();
@@ -56,6 +59,13 @@ function safeColor(value?: string): string {
 function safeImage(value?: string | null): string | undefined {
   // Only embedded image data is allowed; never let a key fetch remote or local URLs.
   return value && /^data:image\/[a-zA-Z0-9.+-]+;base64,[a-zA-Z0-9+/=\r\n]+$/.test(value) ? value : undefined;
+}
+
+/** Approximate bold Arial advance widths, enough to center short badges like "100%" or "Muted". */
+function textWidth(text: string, size: number): number {
+  return Array.from(text).reduce((total, c) => total + size * (
+    /[%MW]/.test(c) ? 0.89 : /[il.,'!:;|]/.test(c) ? 0.28 : /[ftrIj ()-]/.test(c) ? 0.39 : /[A-Z]/.test(c) ? 0.72 : 0.56
+  ), 0);
 }
 
 function glyphColor(color: string): string {
@@ -113,26 +123,26 @@ export function keyImage(input: KeyImageInput): string {
     artTop = Math.max(ART_TOP, titleTop + titleHeight + ART_GAP);
     artBottom = 144 - ART_TOP - ART_GAP;
   }
-  // A status badge (for example a volume level) sits under the artwork.
-  const badgeSpace = input.badge ? 24 : 0;
-  const size = Math.max(0, Math.min(ART_MAX, artBottom - badgeSpace - artTop));
-  const centerY = Math.round((artTop + artBottom - badgeSpace) / 2);
-  const icon = (name: string, body: string, color: string, attributes: string) => {
+  // A status badge (for example a volume level) sits beside the icon, and the pair is centered.
+  const size = Math.max(0, Math.min(input.badge ? BADGE_ICON_MAX : ART_MAX, artBottom - artTop));
+  const centerY = Math.round((artTop + artBottom) / 2);
+  const groupLeft = 72 - (input.badge ? size + BADGE_GAP + textWidth(input.badge, BADGE_FONT) : size) / 2;
+  const icon = (name: string, body: string, color: string, attributes: string, centerX = 72) => {
     if (!size) return "";
     const scale = size / 24;
-    return `<g data-${name} transform="translate(${72 - 12 * scale} ${centerY - 12 * scale}) scale(${scale})" color="${color}" ${attributes}>${body}</g>`;
+    return `<g data-${name} transform="translate(${Math.round((centerX - 12 * scale) * 10) / 10} ${centerY - 12 * scale}) scale(${scale})" color="${color}" ${attributes}>${body}</g>`;
   };
   const content = input.warning
     ? ""
     : input.icon
-      ? icon(`icon="${input.icon}"`, keyIcons[input.icon], iconColor, 'fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"')
+      ? icon(`icon="${input.icon}"`, keyIcons[input.icon], iconColor, 'fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"', input.badge ? groupLeft + size / 2 : 72)
       : image
         ? `<image data-image="custom" href="${escapeXml(image)}" xlink:href="${escapeXml(image)}" x="8" y="8" width="128" height="128" preserveAspectRatio="xMidYMid slice"/><path d="M8 8H136V136H8Z M20 8H124Q136 8 136 20V124Q136 136 124 136H20Q8 136 8 124V20Q8 8 20 8Z" fill="#11181b" fill-rule="evenodd"/>`
         : glyph && size
           // Arial capitals are about 0.72em tall; offset the baseline so the capital is centered.
           ? `<text data-glyph="initial" x="72" y="${Math.round(centerY + size * 0.9 * 0.36)}" text-anchor="middle" fill="${glyphColor(color)}" font-family="Arial, sans-serif" font-size="${Math.round(size * 0.9)}" font-weight="700">${escapeXml(glyph)}</text>`
           : "";
-  const badge = input.badge ? `<text data-badge="status" x="72" y="${artBottom - 4}" text-anchor="middle" fill="${input.iconOn ? "#ffffff" : "#8fa5a4"}" font-family="Arial, sans-serif" font-size="18">${escapeXml(input.badge)}</text>` : "";
+  const badge = input.badge ? `<text data-badge="status" x="${Math.round(groupLeft + size + BADGE_GAP)}" y="${Math.round(centerY + BADGE_FONT * 0.36)}" fill="${input.iconOn ? "#ffffff" : "#8fa5a4"}" font-family="Arial, sans-serif" font-size="${BADGE_FONT}" font-weight="700">${escapeXml(input.badge)}</text>` : "";
   const shadeTop = Math.max(8, titleTop - 12);
   const shade = lines ? `<rect x="8" y="${shadeTop}" width="128" height="${Math.min(136, titleTop + titleHeight) - shadeTop}" rx="12" fill="url(#titleShade)"/>` : "";
   const bar = input.playing

@@ -94,6 +94,13 @@ describe("key rendering", () => {
     const titleTop = alignment === "top" ? 8 : 42;
     expect(y + 24 * scale <= titleTop || y >= titleTop + 60).toBe(true);
   });
+  it("centers a status badge beside the icon without overlapping it", () => {
+    const output = svg({ title: "Mic →\nVirtual", icon: "speaker-up", badge: "100%", iconOn: true });
+    const [x, , scale] = output.match(/data-icon="speaker-up" transform="translate\(([\d.]+) ([\d.]+)\) scale\(([\d.]+)\)"/)!.slice(1).map(Number);
+    const badgeX = Number(output.match(/data-badge="status" x="(\d+)"/)![1]);
+    expect(badgeX).toBeGreaterThanOrEqual(x + 24 * scale);
+    expect(x).toBeGreaterThan(8);
+  });
   it("keeps identical rendered states stable despite timestamp changes", () => {
     expect(keyImage({ title: "Horn", now: 100 })).toBe(keyImage({ title: "Bell", now: 100_000 }));
     expect(keyImage({ title: "Horn", playing: voice, now: 15_000 })).toBe(keyImage({ title: "Horn", playing: voice, now: 15_001 }));
