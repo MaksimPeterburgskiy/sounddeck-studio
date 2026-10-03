@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { makeWaveform } from "./waveform";
+import { fitPeaks, makeWaveform } from "./waveform";
 
 function audioBuffer(data: Float32Array): AudioBuffer {
   return { getChannelData: () => data } as unknown as AudioBuffer;
@@ -31,5 +31,17 @@ describe("makeWaveform", () => {
 
     expect(peaks).toHaveLength(5);
     expect(peaks.slice(2)).toEqual([0, 0, 0]);
+  });
+});
+
+describe("fitPeaks", () => {
+  it("keeps short waveforms unchanged", () => {
+    const peaks = [0.1, 0.5, 0.3];
+
+    expect(fitPeaks(peaks, 4)).toBe(peaks);
+  });
+
+  it("downsamples long waveforms to the loudest peak per group", () => {
+    expect(fitPeaks([0.1, 0.9, 0.2, 0.3, 0.8, 0.4], 3)).toEqual([0.9, 0.3, 0.8]);
   });
 });

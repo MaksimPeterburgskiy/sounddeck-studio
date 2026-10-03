@@ -56,7 +56,7 @@ import { findVirtualAudioCandidates, getDefaultDeviceLabel, isSelectableMediaDev
 import type { VirtualAudioCandidate } from "./lib/devices";
 import { acceleratorLooksReserved, formatBytes, formatDuration, getDefaultSoundEffects, makeBoard, nextBoard, normalizeLibrary, normalizeSoundEffects, now, RETRIGGER_MODES, retriggerModeLabel, soundEffectsAreActive, soundEffectsAreDefault, soundFromImport } from "./lib/model";
 import { hotkeyFallsBackToTap, claimCaptureSlot, eventToToken, formatAccelerator, MODIFIER_TOKENS, normalizeAccelerator, orderTokens } from "./lib/hotkeys";
-import { makeWaveform } from "./lib/waveform";
+import { fitPeaks, makeWaveform } from "./lib/waveform";
 import { installDevBridge } from "./lib/devBridge";
 import { TitleBar } from "./titleBar";
 import { cancelTopLevelDrag } from "./lib/drop";
@@ -1770,7 +1770,7 @@ async function fileToIconDataUrl(file: File): Promise<string> {
 }
 
 function Wave({ peaks, color }: { peaks?: number[]; color: string }) {
-  return <div className="wave">{(peaks?.length ? peaks : Array.from({ length: 36 }, (_, index) => (index % 5) / 5 + 0.15)).map((peak, index) => <i key={index} style={{ height: `${Math.max(10, peak * 100)}%`, background: color }} />)}</div>;
+  return <div className="wave">{(peaks?.length ? fitPeaks(peaks) : Array.from({ length: 36 }, (_, index) => (index % 5) / 5 + 0.15)).map((peak, index) => <i key={index} style={{ height: `${Math.max(10, peak * 100)}%`, background: color }} />)}</div>;
 }
 
 function Playhead({ engine, soundId, duration, active }: { engine: AudioEngine | null; soundId: string; duration?: number; active: boolean }) {
