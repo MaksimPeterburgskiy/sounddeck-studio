@@ -42,24 +42,78 @@ describe("preload control readiness", () => {
     await vi.waitFor(() => expect(document.ipcRenderer.invoke).toHaveBeenCalledWith("control:result", "request", { ok: true }, "source-document"));
     expect(document.ipcRenderer.invoke.mock.calls).toEqual([
       ["library:load", "source-document"], ["library:save", library, "source-document"],
-      ["control:state", state, "source-document"], ["control:result", "request", { ok: true }, "source-document"]
+      ["control:state", state, "source-document"], ["control:received", "request", "source-document"], ["control:result", "request", { ok: true }, "source-document"]
     ]);
   });
-  it("forwards request ids while cancellation messages do not complete the request", async () => {
+  it("forwards cancellation ids without completing the original operation", async () => {
     const document = preload();
     document.ipcRenderer.emit("control-ready-token", {}, "source-document");
-    const callback = vi.fn(async () => ({ ok: true }));
+    let finish;
+    const callback = vi.fn((command) => command.command === "control.cancel" ? undefined : new Promise((resolve) => { finish = resolve; }));
+    const unsubscribe = document.sounddeck.onControlCommand(callback);
+    document.ipcRenderer.emit("control-command", {}, { command: "sound.play", args: { soundId: "sound" }, requestId: "request" });
+    await vi.waitFor(() => expect(callback).toHaveBeenCalledTimes(1));
+    // React may replace its subscription while the original operation is pending.
+    unsubscribe();
     document.sounddeck.onControlCommand(callback);
-    document.ipcRenderer.emit("control-command", {}, { command: "sound.cancel", requestId: "request" });
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(callback).toHaveBeenCalledWith({ command: "sound.cancel", requestId: "request" });
+    document.ipcRenderer.invoke.mockClear();
+    document.ipcRenderer.emit("control-command", {}, { command: "control.cancel", requestId: "request" });
+    expect(callback).toHaveBeenLastCalledWith({ command: "control.cancel", requestId: "request" });
     expect(document.ipcRenderer.invoke).not.toHaveBeenCalled();
+    finish({ ok: false, code: "unavailable" });
+    await vi.waitFor(() => expect(document.ipcRenderer.invoke).toHaveBeenCalledExactlyOnceWith("control:result", "request", { ok: false, code: "unavailable" }, "source-document"));
   });
 
 });
 
 describe("preload control acknowledgements", () => {
+  it("does not apply a command whose receipt was rejected after timeout or reset", async () => {
+    const { ipcRenderer, sounddeck } = preload();
+    ipcRenderer.emit("control-ready-token", {}, "current-document");
+    ipcRenderer.invoke.mockResolvedValueOnce({ ok: false });
+    const callback = vi.fn();
+    sounddeck.onControlCommand(callback);
+    await ipcRenderer.listeners("control-command")[0]({}, { command: "setting.toggle", args: { key: "micPassthrough" }, requestId: "expired" });
+    expect(ipcRenderer.invoke).toHaveBeenCalledExactlyOnceWith("control:received", "expired", "current-document");
+    expect(callback).not.toHaveBeenCalled();
+  });
+
+  it("cancels a mutation while its receipt is pending before invoking the renderer", async () => {
+    const { ipcRenderer, sounddeck } = preload();
+    ipcRenderer.emit("control-ready-token", {}, "current-document");
+    let accept;
+    ipcRenderer.invoke.mockImplementationOnce(() => new Promise((resolve) => { accept = resolve; }));
+    const callback = vi.fn();
+    sounddeck.onControlCommand(callback);
+    ipcRenderer.emit("control-command", {}, { command: "setting.toggle", args: { key: "micPassthrough" }, requestId: "pending" });
+    await vi.waitFor(() => expect(accept).toBeTypeOf("function"));
+    ipcRenderer.emit("control-command", {}, { command: "control.cancel", requestId: "pending" });
+    accept({ ok: true });
+    await vi.waitFor(() => expect(ipcRenderer.invoke).toHaveBeenCalledWith("control:result", "pending", { ok: false, code: "unavailable" }, "current-document"));
+    expect(callback).not.toHaveBeenCalled();
+  });
+
+  it("starts callbacks in arrival order without waiting for their operations to finish", async () => {
+    const { ipcRenderer, sounddeck } = preload();
+    ipcRenderer.emit("control-ready-token", {}, "current-document");
+    let accept;
+    ipcRenderer.invoke.mockImplementationOnce(() => new Promise((resolve) => { accept = resolve; }));
+    let finish;
+    const callback = vi.fn((command) => command.requestId === "first" ? new Promise((resolve) => { finish = resolve; }) : { ok: true });
+    sounddeck.onControlCommand(callback);
+    ipcRenderer.emit("control-command", {}, { command: "sound.play", args: { soundId: "first" }, requestId: "first" });
+    ipcRenderer.emit("control-command", {}, { command: "sound.play", args: { soundId: "second" }, requestId: "second" });
+    await vi.waitFor(() => expect(accept).toBeTypeOf("function"));
+    expect(callback).not.toHaveBeenCalled();
+    expect(ipcRenderer.invoke).toHaveBeenCalledTimes(1);
+    accept({ ok: true });
+    await vi.waitFor(() => expect(callback).toHaveBeenCalledTimes(2));
+    expect(callback.mock.calls.map(([command]) => command.requestId)).toEqual(["first", "second"]);
+    expect(ipcRenderer.invoke).toHaveBeenCalledWith("control:result", "second", { ok: true }, "current-document");
+    finish({ ok: true });
+    await vi.waitFor(() => expect(ipcRenderer.invoke).toHaveBeenCalledWith("control:result", "first", { ok: true }, "current-document"));
+  });
+
   it.each([
     [{ command: "sound.play", args: { soundId: "sound-a" } }, { ok: true }],
     [{ command: "setting.toggle", args: { key: "micPassthrough" } }, { ok: true, data: { key: "micPassthrough", value: true } }],
@@ -74,9 +128,10 @@ describe("preload control acknowledgements", () => {
     const callback = vi.fn(() => new Promise((resolve) => { finish = resolve; }));
     const unsubscribe = sounddeck.onControlCommand(callback);
     ipcRenderer.emit("control-command", {}, { ...command, requestId: "request-a" });
-    expect(callback).toHaveBeenCalledExactlyOnceWith({ ...command, requestId: "request-a" });
-    await Promise.resolve();
-    expect(ipcRenderer.invoke).not.toHaveBeenCalled();
+    expect(callback).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(callback).toHaveBeenCalledExactlyOnceWith({ ...command, requestId: "request-a" }));
+    expect(ipcRenderer.invoke).toHaveBeenCalledExactlyOnceWith("control:received", "request-a", "current-document");
+    ipcRenderer.invoke.mockClear();
     finish(result);
     await vi.waitFor(() => expect(ipcRenderer.invoke).toHaveBeenCalledExactlyOnceWith("control:result", "request-a", result, "current-document"));
     unsubscribe();

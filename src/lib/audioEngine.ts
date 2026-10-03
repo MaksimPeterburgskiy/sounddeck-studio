@@ -164,6 +164,9 @@ export class AudioEngine {
     const shouldConfigureMicForSettings = this.shouldConfigureMic(settings);
     this.settings = settings;
     this.virtualSinkId = virtualSinkId;
+    // Mute and bus gains take effect even while asynchronous routes are opening.
+    this.applyBusVolumes();
+    this.applyMicVolumes();
     await this.applyMonitorSink(generation);
     if (generation !== this.configureGeneration || this.disposed) {
       await this.restoreLatestSinks();

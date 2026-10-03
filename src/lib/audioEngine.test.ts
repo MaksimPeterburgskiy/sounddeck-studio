@@ -50,6 +50,26 @@ describe("AudioEngine mic routing", () => {
     await engine.dispose();
   });
 
+  it("applies microphone and soundboard mute immediately while a sink switch is pending", async () => {
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia: vi.fn().mockResolvedValue(fakeStream().stream) } });
+    const initial = makeAudioSettings({ monitorMicToHeadphones: true, micVirtualVolume: 0.7, micMonitorVolume: 0.3 });
+    const engine = new AudioEngine(initial, vi.fn());
+    await engine.configure(initial, "cable-device");
+    const [monitor, virtual] = FakeAudioContext.instances;
+    const switching = deferred<void>();
+    monitor.setSinkId.mockReturnValueOnce(switching.promise);
+    const configuring = engine.configure({
+      ...initial, micVirtualMuted: true, micMonitorMuted: true,
+      soundboardVirtualMuted: true, soundboardMonitorMuted: true
+    }, "cable-device");
+    for (const context of [monitor, virtual]) {
+      expect(context.gains.every((gain) => gain.gain.value === 0)).toBe(true);
+    }
+    switching.resolve();
+    await configuring;
+    await engine.dispose();
+  });
+
   it("stops stale mic streams when overlapping reconfiguration resolves out of order", async () => {
     const firstOpen = deferred<MediaStream>();
     const secondOpen = deferred<MediaStream>();

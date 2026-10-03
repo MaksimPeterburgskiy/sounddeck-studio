@@ -1396,6 +1396,10 @@ handleTrustedIpc("control:state", (_event, state, token) => {
   externalControl.updateLiveState(state, owner);
   return { ok: true };
 });
+handleTrustedIpc("control:received", (_event, requestId, token) => {
+  if (!controlRendererToken || token !== controlRendererToken) return { ok: false };
+  return { ok: controlRenderer.receive(requestId) };
+});
 handleTrustedIpc("control:result", (_event, requestId, result, token) => {
   if (!controlRendererToken || token !== controlRendererToken) return { ok: false };
   return { ok: controlRenderer.complete(requestId, result) };
