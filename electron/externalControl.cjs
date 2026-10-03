@@ -83,6 +83,29 @@ function createExternalControlBridge({
   let queue = Promise.resolve();
   let library = { boards: [] };
   let imageFingerprint = "";
+  let libraryPublished = false;
+  let documentToken = null;
+  let generation = 0;
+  let appliedGeneration = 0;
+
+  // Capture ownership when work is requested, before any asynchronous reads.
+  function beginUpdate(token = documentToken) {
+    if (token !== documentToken) return null;
+    return { token, generation: ++generation };
+  }
+
+  function ownsDocument(owner) {
+    return Boolean(owner && owner.token === documentToken);
+  }
+
+  function currentUpdate(owner) {
+    return ownsDocument(owner) && owner.generation >= appliedGeneration;
+  }
+
+  function setDocument(token) {
+    documentToken = token;
+    updateLiveState({ playback: [] }, beginUpdate());
+  }
   let live = { activeBoardId: "", playback: [] };
   const images = new Map();
   const clients = new Map();
@@ -117,7 +140,8 @@ function createExternalControlBridge({
     for (const ws of clients.keys()) send(ws, { type: "event", event: name, data });
   }
 
-  function updateLiveState(state) {
+  function updateLiveState(state, owner = beginUpdate()) {
+    if (!currentUpdate(owner)) return false;
     if (!fields(state, ["activeBoardId", "playback"]) || (state.activeBoardId !== undefined && (typeof state.activeBoardId !== "string"
       || (state.activeBoardId !== "" && !id(state.activeBoardId)))) || !Array.isArray(state.playback)
       || state.playback.length > 4096 || !state.playback.every((voice) => fields(voice, ["soundId", "startedAt", "duration", "loop"])
@@ -128,12 +152,15 @@ function createExternalControlBridge({
     const activeBoardId = state.activeBoardId ?? live.activeBoardId;
     const boardChanged = live.activeBoardId !== activeBoardId;
     const playbackChanged = JSON.stringify(live.playback) !== JSON.stringify(state.playback);
+    appliedGeneration = owner.generation;
     live = { activeBoardId, playback: state.playback.map((voice) => ({ ...voice })) };
     if (boardChanged) event("board.changed", { activeBoardId: live.activeBoardId });
     if (playbackChanged) event("playback.changed", live.playback);
+    return true;
   }
 
-  function updateLibrary(value) {
+  function updateLibrary(value, owner = beginUpdate()) {
+    if (!currentUpdate(owner)) return false;
     const requestedBoardId = value?.activeBoardId ?? "";
     if (typeof requestedBoardId !== "string" || (requestedBoardId !== "" && !id(requestedBoardId))) throw new Error("Invalid active board");
     const boards = (Array.isArray(value?.boards) ? value.boards : []).map((board) => ({
@@ -155,13 +182,16 @@ function createExternalControlBridge({
     const fingerprint = crypto.createHash("sha256").update(JSON.stringify([...images])).digest("hex");
     const imageChanged = imageFingerprint !== fingerprint;
     imageFingerprint = fingerprint;
+    appliedGeneration = owner.generation;
+    libraryPublished = true;
     library = { boards };
     live = { ...live, activeBoardId };
     if (changed || imageChanged) event("library.changed", getLibrary());
     if (boardChanged) event("board.changed", { activeBoardId });
+    return true;
   }
 
-  async function dispatch(command, args) {
+  async function dispatch(command, args, signal) {
     const invalid = validateCommand(command, args);
     if (invalid) return { ok: false, code: invalid };
     if (!settings.enabled || stopped) return { ok: false, code: "disabled" };
@@ -178,7 +208,7 @@ function createExternalControlBridge({
     }
     if (command === "board.activate" && !library.boards.some((board) => board.id === args.boardId)) return { ok: false, code: "not-found" };
     try {
-      return await onCommand({ command, args });
+      return await onCommand({ command, args }, signal);
     } catch {
       return { ok: false, code: "internal-error" };
     }
@@ -266,6 +296,7 @@ function createExternalControlBridge({
   }
 
   function respond(res, status, body) {
+    if (res.destroyed || res.writableEnded) return;
     res.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store", ...(status >= 400 ? { Connection: "close" } : {}) });
     res.end(JSON.stringify(body));
   }
@@ -332,7 +363,19 @@ function createExternalControlBridge({
       // Recheck after body receipt: settings/token may change while a request streams.
       if (!settings.enabled || stopped) return respond(res, 503, errorMessage("disabled"));
       if (!authenticated(authorization.slice(7))) return respond(res, 401, errorMessage("unauthorized"));
-      const result = await dispatch(command, { ...body, ...routeArgs });
+      // Body/header deadlines still apply; decoding/routing owns the response
+      // lifetime once an authenticated command has been fully received.
+      res.setTimeout(0);
+      const cancellation = new AbortController();
+      const disconnected = () => { if (!res.writableFinished) cancellation.abort(); };
+      res.once("close", disconnected);
+      if (res.destroyed) cancellation.abort();
+      let result;
+      try {
+        result = await dispatch(command, { ...body, ...routeArgs }, cancellation.signal);
+      } finally {
+        res.removeListener("close", disconnected);
+      }
       const status = result.ok ? 200 : result.code === "not-found" ? 404 : result.code === "busy" || result.code === "unavailable" || result.code === "disabled" ? 503 : result.code === "internal-error" ? 500 : 400;
       respond(res, status, result);
     } catch (caught) {
@@ -350,11 +393,13 @@ function createExternalControlBridge({
 
   function connect(ws, req) {
     const address = req.socket.remoteAddress;
+    const pendingCommands = new Set();
     const timer = setTimeout(() => rejectSocket(ws, "unauthorized"), helloTimeoutMs);
     timer.unref?.();
     ws.on("error", () => {});
     ws.on("close", () => {
       clearTimeout(timer);
+      for (const cancellation of pendingCommands) cancellation.abort();
       if (clients.delete(ws)) notify();
     });
     ws.on("message", async (data, binary) => {
@@ -392,8 +437,14 @@ function createExternalControlBridge({
       if (!fields(message, ["type", "id", "command", "args"]) || message.type !== "command" || !id(message.id) || typeof message.command !== "string") {
         return rejectSocket(ws, "invalid-message");
       }
-      const result = await dispatch(message.command, message.args);
-      send(ws, { type: "result", id: message.id, ...result });
+      const cancellation = new AbortController();
+      pendingCommands.add(cancellation);
+      try {
+        const result = await dispatch(message.command, message.args, cancellation.signal);
+        send(ws, { type: "result", id: message.id, ...result });
+      } finally {
+        pendingCommands.delete(cancellation);
+      }
     });
   }
 
@@ -465,11 +516,18 @@ function createExternalControlBridge({
 
   function start(loadLibrary) {
     stopped = false;
+    const owner = { token: documentToken, generation };
+    const hadLibrary = libraryPublished;
     return serial(async () => {
       await initialize();
-      if (loadLibrary) {
-        const value = await loadLibrary();
-        updateLibrary(value);
+      if (loadLibrary && !hadLibrary) {
+        try {
+          const value = await loadLibrary();
+          updateLibrary(value, owner);
+        } catch (caught) {
+          // A failed obsolete read cannot take a newer renderer cache offline.
+          if (currentUpdate(owner)) throw caught;
+        }
       }
       error = null;
       await listen();
@@ -521,7 +579,7 @@ function createExternalControlBridge({
     });
   }
 
-  return { start, stop, getState, getSettings, setSettings, regenerateToken, updateLibrary, updateLiveState, getSnapshot };
+  return { start, stop, getState, getSettings, setSettings, regenerateToken, beginUpdate, setDocument, updateLibrary, updateLiveState, getSnapshot };
 }
 
 module.exports = { createExternalControlBridge, launcherPath, PROTOCOL_VERSION, DEFAULT_PORT };

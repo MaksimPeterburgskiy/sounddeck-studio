@@ -123,27 +123,66 @@ describe("AudioEngine output routing", () => {
     }
     const queue = createSoundPlayQueue();
     const play = vi.spyOn(engine, "play");
-    const trigger = (external: boolean) => queue(sound.id, async () => {
+    const trigger = (external: boolean) => queue(sound.id, async (signal) => {
+      if (signal.aborted) return false;
       if (external) await waitForAudioConfiguration(() => configuration);
+      if (signal.aborted) return false;
       if (engine.isPlaying(sound.id)) {
         engine.stop(sound.id);
         return true;
       }
-      return engine.play(sound);
+      return engine.play(sound, signal);
     });
     const first = trigger(true);
     if (preparation === "decode") await waitForMockCalls(decodeContext().decodeAudioData, 1);
     else await waitForMockCalls(virtualContext().setSinkId, 1);
     const second = trigger(true);
+    const third = trigger(true);
     expect(engine.isPlaying(sound.id)).toBe(false);
     ready.resolve();
-    expect(await Promise.all([first, second])).toEqual([true, true]);
-    expect(play).toHaveBeenCalledOnce();
-    expect(virtualContext().bufferSources).toHaveLength(1);
-    expect(engine.isPlaying(sound.id)).toBe(false);
+    expect(await Promise.all([first, second, third])).toEqual([true, true, true]);
+    expect(play).toHaveBeenCalledTimes(2);
+    expect(virtualContext().bufferSources).toHaveLength(2);
+    expect(engine.isPlaying(sound.id)).toBe(true);
     // Hotkeys and external commands share the same queue and toggle semantics.
     expect(await Promise.all([trigger(false), trigger(true)])).toEqual([true, true]);
-    expect(play).toHaveBeenCalledTimes(2);
+    expect(play).toHaveBeenCalledTimes(3);
+    expect(engine.isPlaying(sound.id)).toBe(true);
+    await engine.dispose();
+  });
+
+  it("cancels a disconnected play during decoding while allowing a later play to start", async () => {
+    const engine = new AudioEngine(playbackSettings, vi.fn());
+    const queue = createSoundPlayQueue();
+    const decoded = deferred<void>();
+    const decode = decodeContext().decodeAudioData.getMockImplementation()!;
+    decodeContext().decodeAudioData.mockImplementationOnce(async () => {
+      await decoded.promise;
+      return decode();
+    });
+    const cancellation = new AbortController();
+    const sound = makeSound({ retriggerMode: "stop" });
+    const first = queue(sound.id, (signal) => engine.play(sound, signal), cancellation.signal);
+    const later = queue(sound.id, (signal) => engine.play(sound, signal));
+    await waitForMockCalls(decodeContext().decodeAudioData, 1);
+    cancellation.abort();
+    decoded.resolve();
+    expect(await Promise.all([first, later])).toEqual([false, true]);
+    expect(monitorContext().bufferSources).toHaveLength(1);
+    expect(engine.isPlaying(sound.id)).toBe(true);
+    await engine.dispose();
+  });
+
+  it("lets an already started voice complete after its client disconnects", async () => {
+    const engine = new AudioEngine(playbackSettings, vi.fn());
+    const cancellation = new AbortController();
+    const sound = makeSound();
+    expect(await engine.play(sound, cancellation.signal)).toBe(true);
+    const source = monitorContext().bufferSources[0];
+    cancellation.abort();
+    expect(engine.isPlaying(sound.id)).toBe(true);
+    expect(source.stop).not.toHaveBeenCalled();
+    source.onended?.();
     expect(engine.isPlaying(sound.id)).toBe(false);
     await engine.dispose();
   });

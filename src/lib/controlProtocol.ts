@@ -101,6 +101,7 @@ export interface ControlStatus extends ControlSettings {
 }
 
 export type RendererControlCommand =
+  | { command: "sound.cancel"; requestId: string }
   | { command: "sound.play"; requestId: string; args: ControlCommandArgs["sound.play"] }
   | { command: "sound.stop"; args: ControlCommandArgs["sound.stop"] }
   | { command: "board.cycle"; args: ControlCommandArgs["board.cycle"] };

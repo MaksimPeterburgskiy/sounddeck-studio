@@ -1,26 +1,36 @@
-// Keep toggle decisions behind any pending play for the same sound, including
-// media decoding and route preparation. Other sounds can start independently.
+// Serialize preparation and toggle decisions per sound. Cancellation belongs to
+// each operation: a stop snapshots the operations that already exist.
 export function createSoundPlayQueue() {
-  const pending = new Map<string, { tail: Promise<unknown>; cancellation: AbortController }>();
-  // Operations must check the signal after asynchronous preparation and before
-  // starting audio. Keep the tail on cancellation so later plays stay serialized.
-  function play<T>(soundId: string, operation: (signal: AbortSignal) => Promise<T>): Promise<T> {
-    const previous = pending.get(soundId);
-    const cancellation = previous && !previous.cancellation.signal.aborted ? previous.cancellation : new AbortController();
-    const result = (previous ? previous.tail.catch(() => undefined) : Promise.resolve()).then(() => operation(cancellation.signal));
-    pending.set(soundId, { tail: result, cancellation });
+  const tails = new Map<string, Promise<unknown>>();
+  const pending = new Map<string, Set<AbortController>>();
+
+  function play<T>(soundId: string, operation: (signal: AbortSignal) => Promise<T>, signal?: AbortSignal): Promise<T> {
+    const cancellation = new AbortController();
+    const abort = () => cancellation.abort();
+    signal?.addEventListener("abort", abort, { once: true });
+    if (signal?.aborted) abort();
+    const operations = pending.get(soundId) ?? new Set<AbortController>();
+    operations.add(cancellation);
+    pending.set(soundId, operations);
+    const previous = tails.get(soundId);
+    const result = (previous ? previous.catch(() => undefined) : Promise.resolve()).then(() => operation(cancellation.signal));
+    tails.set(soundId, result);
     const clear = () => {
-      if (pending.get(soundId)?.tail === result) pending.delete(soundId);
+      signal?.removeEventListener("abort", abort);
+      operations.delete(cancellation);
+      if (!operations.size) pending.delete(soundId);
+      if (tails.get(soundId) === result) tails.delete(soundId);
     };
     void result.then(clear, clear);
     return result;
   }
   return Object.assign(play, {
     cancel(soundId: string) {
-      pending.get(soundId)?.cancellation.abort();
+      for (const cancellation of [...(pending.get(soundId) ?? [])]) cancellation.abort();
     },
     cancelAll() {
-      for (const { cancellation } of pending.values()) cancellation.abort();
+      const cancellations = [...pending.values()].flatMap((operations) => [...operations]);
+      for (const cancellation of cancellations) cancellation.abort();
     }
   });
 }
