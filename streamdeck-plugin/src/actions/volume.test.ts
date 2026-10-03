@@ -54,6 +54,95 @@ function deferCommands(connection: ReturnType<typeof setup>["connection"]) {
 }
 
 describe("volume keys", () => {
+  it("sends every rapid tap separately behind deferred acknowledgements", async () => {
+    vi.useFakeTimers();
+    const { connection, key, volume } = setup();
+    const acknowledgements = deferCommands(connection);
+    const down = event(key, { bus: "micMonitor", mode: "down", step: 7 });
+    const first = volume.onKeyDown(down);
+    volume.onKeyUp(down);
+    for (let i = 0; i < 3; i++) {
+      await volume.onKeyDown(down);
+      volume.onKeyUp(down);
+    }
+    expect(connection.command).toHaveBeenCalledTimes(1);
+    for (let i = 0; i < 4; i++) {
+      expect(connection.command).toHaveBeenCalledTimes(i + 1);
+      expect(connection.command).toHaveBeenLastCalledWith("volume.adjust", { bus: "micMonitor", delta: -0.07 });
+      acknowledgements[i].resolve(success); await flush();
+    }
+    await first;
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(connection.command).toHaveBeenCalledTimes(4);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(["up", "disappear", "disconnect", "settings"])("preserves an unsent tap across %s while cancelling hold ticks", async (stop) => {
+    vi.useFakeTimers();
+    const { connection, key, volume } = setup();
+    const acknowledgements = deferCommands(connection);
+    const first = volume.onKeyDown(event(key));
+    await volume.onKeyDown(event(key, { bus: "micMonitor", mode: "down", step: 3 }));
+    await vi.advanceTimersByTimeAsync(650);
+    if (stop === "up") volume.onKeyUp(event(key));
+    if (stop === "disappear") volume.onWillDisappear(event(key));
+    if (stop === "settings") volume.onDidReceiveSettings(event(key, { mode: "up" }));
+    if (stop === "disconnect") {
+      connection.session = null; connection.status = "offline"; connection.emit();
+    }
+    acknowledgements[0].resolve(success); await flush();
+    if (stop === "disconnect") {
+      expect(connection.command).toHaveBeenCalledTimes(1);
+      connection.session = {}; connection.status = "connected"; connection.emit();
+    }
+    expect(connection.command).toHaveBeenCalledTimes(2);
+    expect(connection.command).toHaveBeenLastCalledWith("volume.adjust", { bus: "micMonitor", delta: -0.03 });
+    acknowledgements[1].resolve(success); await first; await flush();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(connection.command).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("keeps a tap behind a pending hold repeat but discards ticks on release", async () => {
+    vi.useFakeTimers();
+    const { connection, key, volume } = setup();
+    const down = event(key);
+    await volume.onKeyDown(down);
+    const acknowledgements = deferCommands(connection);
+    await vi.advanceTimersByTimeAsync(650);
+    expect(connection.command).toHaveBeenCalledTimes(2);
+    volume.onKeyUp(down);
+    await volume.onKeyDown(down);
+    volume.onKeyUp(down);
+    acknowledgements[0].resolve(success); await flush();
+    expect(connection.command).toHaveBeenCalledTimes(3);
+    expect(connection.command).toHaveBeenLastCalledWith("volume.adjust", { bus: "micVirtual", delta: 0.05 });
+    acknowledgements[1].resolve(success); await flush();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(connection.command).toHaveBeenCalledTimes(3);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(["up", "down"] as const)("sends a queued %s tap at the limit while discarding repeat ticks", async (mode) => {
+    vi.useFakeTimers();
+    const { connection, key, volume } = setup();
+    const acknowledgements = deferCommands(connection);
+    const down = event(key, { mode });
+    const first = volume.onKeyDown(down);
+    volume.onKeyUp(down);
+    await volume.onKeyDown(down);
+    await vi.advanceTimersByTimeAsync(650);
+    connection.snapshot.volumes.micVirtual = { value: mode === "up" ? 1 : 0, muted: true };
+    acknowledgements[0].resolve(success); await flush();
+    expect(connection.command).toHaveBeenCalledTimes(2);
+    expect(connection.command).toHaveBeenLastCalledWith("volume.adjust", { bus: "micVirtual", delta: mode === "up" ? 0.05 : -0.05 });
+    acknowledgements[1].resolve(success); await first;
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(connection.command).toHaveBeenCalledTimes(2);
+    volume.onKeyUp(down);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it.each(["up", "down"] as const)("coalesces ticks behind both initial and repeat acknowledgements for %s", async (mode) => {
     vi.useFakeTimers();
     const { connection, key, volume } = setup();
@@ -236,7 +325,7 @@ describe("volume keys", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it.each(["up", "disappear", "disconnect", "settings"])("cancels a pending initial press on %s without reviving it on acknowledgement", async (stop) => {
+  it.each(["up", "disappear", "disconnect", "settings"])("cancels repeats for a sent initial press on %s without reviving them on acknowledgement", async (stop) => {
     vi.useFakeTimers();
     const { connection, key, volume } = setup();
     let resolve!: (result: ControlResult) => void;
@@ -575,6 +664,64 @@ describe("volume dials", () => {
   });
 });
 
+
+describe("volume command compatibility", () => {
+  it.each(["volume", "volumeMute", "rotate", "press", "touch"] as const)("shows Update app for an unknown %s command on an older server", async (kind) => {
+    vi.useFakeTimers();
+    const { connection, key, dial, volume, volumeMute, volumeDial } = setup();
+    Reflect.deleteProperty(connection.snapshot, "volumes");
+    connection.command.mockResolvedValue({ type: "result", id: "ack", ok: false, code: "unknown-command" });
+    const isDial = ["rotate", "press", "touch"].includes(kind);
+    const action = kind === "volume" ? volume : kind === "volumeMute" ? volumeMute : volumeDial;
+    const control = isDial ? dial : key;
+    action.onWillAppear(event(control)); await flush();
+    if (kind === "rotate") await volumeDial.onDialRotate(event(dial, {}, { ticks: 1 }));
+    else if (kind === "press") await volumeDial.onDialDown(event(dial));
+    else if (kind === "touch") await volumeDial.onTouchTap(event(dial));
+    else await action.onKeyDown(event(key));
+    await flush();
+    const expectUpdate = () => {
+      if (isDial) expect(dial.setFeedback).toHaveBeenLastCalledWith(expect.objectContaining({
+        value: { value: "Update app", font: { size: 12 } }, indicator: expect.objectContaining({ value: 0 }),
+      }));
+      else expect(key.setTitle).toHaveBeenLastCalledWith("Update\napp");
+    };
+    expectUpdate();
+    expect(control.showAlert).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(connection.command).toHaveBeenCalledTimes(1);
+    connection.emit(); await flush();
+    expectUpdate();
+    // A new server session must clear the old capability result.
+    connection.session = {}; connection.emit(); await flush();
+    if (isDial) expect(dial.setFeedback.mock.lastCall![0]).toMatchObject({ value: { value: "Missing" } });
+    else expect(key.setTitle).toHaveBeenLastCalledWith("Missing");
+    action.onWillDisappear(event(control));
+  });
+
+  it("keeps unknown-command status scoped to the affected key", async () => {
+    const { connection, key, volumeMute } = setup();
+    connection.command.mockResolvedValueOnce({ type: "result", id: "ack", ok: false, code: "unknown-command" });
+    const other = { ...key, id: "other", setTitle: vi.fn(async () => {}) };
+    volumeMute.onWillAppear(event(key)); volumeMute.onWillAppear(event(other)); await flush();
+    await volumeMute.onKeyDown(event(key)); await flush();
+    expect(key.setTitle).toHaveBeenLastCalledWith("Update\napp");
+    expect(other.setTitle).toHaveBeenLastCalledWith("Mic →\nVirtual");
+    volumeMute.onWillDisappear(event(key)); volumeMute.onWillDisappear(event(other));
+  });
+
+  it("ignores an unknown-command acknowledgement from an earlier session", async () => {
+    const { connection, key, volume } = setup();
+    volume.onWillAppear(event(key)); await flush();
+    const acknowledgements = deferCommands(connection);
+    const first = volume.onKeyDown(event(key));
+    connection.session = {}; connection.emit();
+    acknowledgements[0].resolve({ type: "result", id: "ack", ok: false, code: "unknown-command" });
+    await first; await flush();
+    expect(key.setTitle).toHaveBeenLastCalledWith("Mic →\nVirtual");
+    volume.onWillDisappear(event(key));
+  });
+});
 
 describe("volume inspector recovery", () => {
   it.each(["volume", "volumeMute", "volumeDial"] as const)("supersedes a pending %s inspector batch when the connection goes offline", async (kind) => {
