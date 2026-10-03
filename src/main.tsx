@@ -2507,7 +2507,6 @@ function ExternalControlSettings() {
         <input className="controlPort" type="number" min={1} max={65535} step={1} aria-label="External control port" aria-invalid={Boolean(portError)} aria-describedby={portError ? "control-port-error" : undefined} value={port} onChange={(event) => { setPort(event.target.value); setPortIssue(""); }} onBlur={applyPort} />
       </SettingsRow>
       <SettingsRow icon={<ShieldCheck size={16} />} title="Token" description="Regenerate to disconnect clients and replace their access token.">
-        <input className="controlToken" type="password" aria-label="External control token" autoComplete="off" readOnly value={status.token} />
         <button className="settingsButton" onClick={() => void copyToken()}>{copied ? "Copied" : "Copy"}</button>
         <button className="settingsButton" onClick={() => void regenerateToken()}>Regenerate</button>
       </SettingsRow>
