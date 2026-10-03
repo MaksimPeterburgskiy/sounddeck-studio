@@ -11,27 +11,27 @@ describe("held presses", () => {
     tracker.release("unknown");
     tracker.release("a");
     tracker.release("a");
-    expect(stop.mock.calls).toEqual([["voice-a", false]]);
+    expect(stop.mock.calls).toEqual([["voice-a"]]);
     tracker.release("b");
-    expect(stop.mock.calls).toEqual([["voice-a", false], ["voice-b", false]]);
+    expect(stop.mock.calls).toEqual([["voice-a"], ["voice-b"]]);
   });
 
-  it("cancels a pending start and immediately stops a voice that still starts", async () => {
+  it("cancels a pending start and stops a voice that still starts", async () => {
     const tracker = new PressTracker();
     const decoded = deferred<string | false>();
     const stop = vi.fn();
-    let cancelled: () => boolean = () => false;
-    const pending = tracker.press("a", (isCancelled) => {
-      cancelled = isCancelled;
+    let cancellation: AbortSignal;
+    const pending = tracker.press("a", (signal) => {
+      cancellation = signal;
       return decoded.promise;
     }, stop);
-    expect(cancelled()).toBe(false);
+    expect(cancellation!.aborted).toBe(false);
     tracker.release("a");
-    expect(cancelled()).toBe(true);
+    expect(cancellation!.aborted).toBe(true);
     expect(stop).not.toHaveBeenCalled();
     decoded.resolve("late-voice");
-    await pending;
-    expect(stop).toHaveBeenCalledWith("late-voice", true);
+    expect(await pending).toBeNull();
+    expect(stop).toHaveBeenCalledWith("late-voice");
     tracker.release("a");
     expect(stop).toHaveBeenCalledTimes(1);
   });
@@ -40,14 +40,26 @@ describe("held presses", () => {
     const tracker = new PressTracker();
     const start = vi.fn(async () => "voice");
     const stop = vi.fn();
-    await tracker.press("a", async () => false, stop);
-    await tracker.press("a", start, stop);
-    await tracker.press("a", start, stop);
+    expect(await tracker.press("a", async () => false, stop)).toBe(false);
+    expect(await tracker.press("a", start, stop)).toBe("voice");
+    expect(await tracker.press("a", start, stop)).toBeNull();
     expect(start).toHaveBeenCalledTimes(1);
     tracker.release("a");
     await expect(tracker.press("a", async () => { throw new Error("decode failed"); }, stop)).rejects.toThrow("decode failed");
     await tracker.press("a", start, stop);
     expect(start).toHaveBeenCalledTimes(2);
+  });
+
+  it("distinguishes cancellation during decode from a missing route", async () => {
+    const tracker = new PressTracker();
+    const decoded = deferred<string | false>();
+    const stop = vi.fn();
+    const pending = tracker.press("a", () => decoded.promise, stop);
+    tracker.release("a");
+    decoded.resolve(false);
+    expect(await pending).toBeNull();
+    expect(stop).not.toHaveBeenCalled();
+    expect(await tracker.press("a", async () => false, stop)).toBe(false);
   });
 
   it("releases active and pending holds on cleanup", async () => {
@@ -59,6 +71,6 @@ describe("held presses", () => {
     tracker.releaseAll();
     pendingStart.resolve("pending-voice");
     await pending;
-    expect(stop.mock.calls).toEqual([["active-voice", false], ["pending-voice", true]]);
+    expect(stop.mock.calls).toEqual([["active-voice"], ["pending-voice"]]);
   });
 });

@@ -288,17 +288,13 @@ export class AudioEngine {
     this.emitStatus();
   }
 
-  stopVoice(soundId: string, voiceId: string, immediate = false) {
-    const voice = (this.active.get(soundId) || []).find((candidate) => candidate.id === voiceId);
+  stopVoice(soundId: string, voiceId: string) {
+    const voice = [...(this.active.get(soundId) || []), ...(this.tails.get(soundId) || [])].find((candidate) => candidate.id === voiceId);
     if (!voice) return;
-    if (immediate) {
-      for (const source of voice.sources) source.stop();
-      this.cleanupVoice(voice);
-      this.removeTail(soundId, voiceId);
-    } else {
-      voice.cleanupHandle = this.fadeVoice(voice, voice.fadeOutMs / 1000);
-      this.addTail(soundId, voice);
-    }
+    if (voice.cleanupHandle !== undefined) window.clearTimeout(voice.cleanupHandle);
+    this.removeTail(soundId, voiceId);
+    voice.cleanupHandle = this.fadeVoice(voice, voice.fadeOutMs / 1000);
+    this.addTail(soundId, voice);
     this.removeVoice(soundId, voiceId);
   }
 
@@ -1083,13 +1079,6 @@ export class AudioEngine {
       else gain.gain.setValueAtTime(0.0001, now);
     });
     return window.setTimeout(() => {
-      voice.sources.forEach((source) => {
-        try {
-          source.stop();
-        } catch {
-          // Already stopped.
-        }
-      });
       this.cleanupVoice(voice);
       this.removeTail(voice.soundId, voice.id);
     }, fadeSeconds * 1000 + 20);
@@ -1127,12 +1116,20 @@ export class AudioEngine {
   private cleanupVoice(voice: ActiveVoice) {
     if (voice.cleanedUp) return;
     voice.cleanedUp = true;
+    // Stop looping sources before cancelling the fade's deferred cleanup.
+    for (const source of voice.sources) {
+      source.onended = null;
+      try {
+        source.stop();
+      } catch {
+        // Already stopped.
+      }
+    }
     if (voice.cleanupHandle !== undefined) {
       window.clearTimeout(voice.cleanupHandle);
       voice.cleanupHandle = undefined;
     }
     for (const source of voice.sources) {
-      source.onended = null;
       source.disconnect();
     }
     for (const gain of voice.gains) gain.disconnect();

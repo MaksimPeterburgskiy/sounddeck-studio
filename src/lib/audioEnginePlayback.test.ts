@@ -4,6 +4,8 @@ import { normalizeSoundEffects } from "./model";
 import { beginAudioConfiguration, waitForAudioConfiguration, watchAudioDeviceChanges } from "./controlReadiness";
 import { createSoundPlayQueue } from "./soundPlayQueue";
 import { FakeAudioContext, deferred, makeAudioSettings, makeSound, voiceGains, waitForMockCalls } from "./testing/webAudioFakes";
+import { getDefaultSoundEffects } from "./model";
+import { PressTracker } from "./pressTracker";
 
 const playbackSettings = makeAudioSettings({
   micPassthrough: false,
@@ -209,11 +211,11 @@ describe("AudioEngine output routing", () => {
       engine.stopAll();
     }
     ready.resolve();
-    expect(await Promise.all([first, queued, other])).toEqual([false, false, stop === "sound"]);
+    expect(await Promise.all([first, queued, other])).toEqual([false, false, stop === "sound" ? expect.any(String) : false]);
     expect(virtualContext().bufferSources).toHaveLength(stop === "sound" ? 1 : 0);
     expect(engine.isPlaying(sound.id)).toBe(false);
     expect(engine.isPlaying(otherSound.id)).toBe(stop === "sound");
-    expect(await trigger()).toBe(true);
+    expect(await trigger()).toEqual(expect.any(String));
     expect(engine.isPlaying(sound.id)).toBe(true);
     await engine.dispose();
   });
@@ -254,12 +256,12 @@ describe("AudioEngine output routing", () => {
     const third = trigger(true);
     expect(engine.isPlaying(sound.id)).toBe(false);
     ready.resolve();
-    expect(await Promise.all([first, second, third])).toEqual([true, true, true]);
+    expect(await Promise.all([first, second, third])).toEqual([expect.any(String), true, expect.any(String)]);
     expect(play).toHaveBeenCalledTimes(2);
     expect(virtualContext().bufferSources).toHaveLength(2);
     expect(engine.isPlaying(sound.id)).toBe(true);
     // Hotkeys and external commands share the same queue and toggle semantics.
-    expect(await Promise.all([trigger(false), trigger(true)])).toEqual([true, true]);
+    expect(await Promise.all([trigger(false), trigger(true)])).toEqual([true, expect.any(String)]);
     expect(play).toHaveBeenCalledTimes(3);
     expect(engine.isPlaying(sound.id)).toBe(true);
     await engine.dispose();
@@ -281,7 +283,7 @@ describe("AudioEngine output routing", () => {
     await waitForMockCalls(decodeContext().decodeAudioData, 1);
     cancellation.abort();
     decoded.resolve();
-    expect(await Promise.all([first, later])).toEqual([false, true]);
+    expect(await Promise.all([first, later])).toEqual([false, expect.any(String)]);
     expect(monitorContext().bufferSources).toHaveLength(1);
     expect(engine.isPlaying(sound.id)).toBe(true);
     await engine.dispose();
@@ -316,7 +318,7 @@ describe("AudioEngine output routing", () => {
     const engine = new AudioEngine(playbackSettings, vi.fn());
     const cancellation = new AbortController();
     const sound = makeSound();
-    expect(await engine.play(sound, cancellation.signal)).toBe(true);
+    expect(await engine.play(sound, cancellation.signal)).toEqual(expect.any(String));
     const source = monitorContext().bufferSources[0];
     cancellation.abort();
     expect(engine.isPlaying(sound.id)).toBe(true);
@@ -337,7 +339,7 @@ describe("AudioEngine output routing", () => {
     expect(ready).not.toHaveBeenCalled();
     expect(virtualContext().bufferSources).toHaveLength(0);
     sink.resolve();
-    expect(await pending).toBe(true);
+    expect(await pending).toEqual(expect.any(String));
     expect(virtualContext().bufferSources).toHaveLength(1);
     expect(engine.isPlaying("sound-1")).toBe(true);
     await engine.dispose();
@@ -355,7 +357,7 @@ describe("AudioEngine output routing", () => {
     expect(play).not.toHaveBeenCalled();
     expect(virtualContext().bufferSources).toHaveLength(0);
     sink.resolve();
-    expect(await Promise.all(pending)).toEqual([true, true]);
+    expect(await Promise.all(pending)).toEqual([expect.any(String), expect.any(String)]);
     expect(virtualContext().bufferSources).toHaveLength(2);
     await engine.dispose();
   });
@@ -484,14 +486,14 @@ describe("AudioEngine output routing", () => {
 
     expect(engine.getDeviceStatus().monitor.state).toBe("fallback");
     expect(monitorContext().setSinkId).toHaveBeenLastCalledWith("");
-    expect(await engine.play(sound)).toBe(true);
+    expect(await engine.play(sound)).toEqual(expect.any(String));
     expect(monitorContext().bufferSources).toHaveLength(1);
 
     await engine.retryPreferredDevices();
 
     expect(engine.getDeviceStatus().monitor.state).toBe("selected");
     expect(monitorContext().setSinkId).toHaveBeenLastCalledWith("preferred-output");
-    expect(await engine.play(sound)).toBe(true);
+    expect(await engine.play(sound)).toEqual(expect.any(String));
     expect(monitorContext().bufferSources).toHaveLength(2);
 
     await engine.dispose();
@@ -888,6 +890,71 @@ describe("AudioEngine trim and loop math", () => {
 });
 
 describe("AudioEngine fades", () => {
+  it.each(["stop-all after release", "stop-all while held", "solo playback"])("stops a fading held loop interrupted by %s", async (interruption) => {
+    vi.useFakeTimers();
+    window.setTimeout = setTimeout;
+    window.clearTimeout = clearTimeout;
+    const engine = new AudioEngine(dualRouteSettings, vi.fn());
+    const tracker = new PressTracker();
+    try {
+      await engine.configure(dualRouteSettings, "cable-device");
+      const sound = makeSound({ loop: true, fadeOutMs: 500, outputTarget: "both" });
+      await tracker.press("held", (signal) => engine.play(sound, signal, { fresh: true }), (voiceId) => engine.stopVoice(sound.id, voiceId));
+      const sources = [monitorContext().bufferSources[0], virtualContext().bufferSources[0]];
+      if (interruption === "stop-all while held") tracker.releaseAll();
+      else tracker.release("held");
+      expect(sources.every((source) => source.stop.mock.calls.length === 0)).toBe(true);
+
+      if (interruption === "solo playback") await engine.play(makeSound({ id: "solo", soloPlay: true }));
+      else engine.stopAll();
+
+      for (const source of sources) {
+        expect(source.stop).toHaveBeenCalledOnce();
+        expect(source.disconnect).toHaveBeenCalledOnce();
+      }
+      await vi.advanceTimersByTimeAsync(600);
+      for (const source of sources) expect(source.stop).toHaveBeenCalledOnce();
+    } finally {
+      await engine.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([0, 500])("releases only the press's reverb tail with a %i ms fade", async (fadeOutMs) => {
+    vi.useFakeTimers();
+    window.setTimeout = setTimeout;
+    window.clearTimeout = clearTimeout;
+    const engine = new AudioEngine(playbackSettings, vi.fn());
+    try {
+      const sound = makeSound({ fadeOutMs, effects: { ...getDefaultSoundEffects(), reverb: { enabled: true, mix: 0.25, decaySec: 1.5 } } });
+      const releasedId = await engine.play(sound, undefined, { fresh: true });
+      await engine.play(sound, undefined, { fresh: true });
+      await engine.play(sound, undefined, { fresh: true });
+      const [released, overlappingTail, held] = monitorContext().bufferSources;
+      released.onended?.();
+      await vi.advanceTimersByTimeAsync(1400);
+      overlappingTail.onended?.();
+      const [releasedGain, tailGain, heldGain] = voiceGains(monitorContext());
+
+      engine.stopVoice(sound.id, releasedId as string);
+      if (fadeOutMs > 0) expect(releasedGain.gain.exponentialRampToValueAtTime).toHaveBeenCalledWith(0.0001, fadeOutMs / 1000);
+      else expect(releasedGain.gain.setValueAtTime).toHaveBeenLastCalledWith(0.0001, 0);
+      expect(tailGain.gain.cancelScheduledValues).not.toHaveBeenCalled();
+      expect(heldGain.gain.cancelScheduledValues).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(fadeOutMs + 19);
+      expect(released.disconnect).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(2);
+      expect(released.stop).toHaveBeenCalledOnce();
+      expect(released.disconnect).toHaveBeenCalledOnce();
+      expect(overlappingTail.disconnect).not.toHaveBeenCalled();
+      expect(held.stop).not.toHaveBeenCalled();
+      expect(engine.isPlaying(sound.id)).toBe(true);
+    } finally {
+      await engine.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("fades only the released voice while another held loop keeps playing", async () => {
     vi.useFakeTimers();
     window.setTimeout = setTimeout;
@@ -896,8 +963,8 @@ describe("AudioEngine fades", () => {
     const engine = new AudioEngine(playbackSettings, status);
     try {
       const sound = makeSound({ loop: true, retriggerMode: "restart", fadeOutMs: 500 });
-      const first = await engine.play(sound, { fresh: true });
-      const second = await engine.play(sound, { fresh: true });
+      const first = await engine.play(sound, undefined, { fresh: true });
+      const second = await engine.play(sound, undefined, { fresh: true });
       expect(first).toEqual(expect.any(String));
       expect(second).not.toBe(first);
       expect(status.mock.lastCall?.[2]).toHaveLength(2);
@@ -911,7 +978,8 @@ describe("AudioEngine fades", () => {
       await vi.advanceTimersByTimeAsync(521);
       expect(released.stop).toHaveBeenCalledOnce();
       expect(held.stop).not.toHaveBeenCalled();
-      engine.stopVoice(sound.id, second as string, true);
+      engine.stopVoice(sound.id, second as string);
+      await vi.advanceTimersByTimeAsync(521);
       expect(held.stop).toHaveBeenCalledOnce();
       expect(status).toHaveBeenLastCalledWith("idle", [], []);
     } finally {
@@ -925,9 +993,9 @@ describe("AudioEngine fades", () => {
     await engine.play(makeSound({ id: "other", soloPlay: false }));
     const media = deferred<ArrayBuffer>();
     (window.sounddeck.readMedia as ReturnType<typeof vi.fn>).mockReturnValue(media.promise);
-    let cancelled = false;
-    const pending = engine.play(makeSound({ mediaPath: "late.wav", soloPlay: true }), { fresh: true, cancelled: () => cancelled });
-    cancelled = true;
+    const cancellation = new AbortController();
+    const pending = engine.play(makeSound({ mediaPath: "late.wav", soloPlay: true }), cancellation.signal, { fresh: true });
+    cancellation.abort();
     media.resolve(new ArrayBuffer(8));
     expect(await pending).toBe(false);
     expect(monitorContext().bufferSources).toHaveLength(1);
