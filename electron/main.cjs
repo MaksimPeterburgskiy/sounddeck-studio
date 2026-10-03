@@ -401,7 +401,16 @@ function probeAudioSampleRate(ffmpeg, input) {
   });
 }
 
-async function ensureLibrary() {
+let libraryInitialization;
+
+function ensureLibrary() {
+  if (!libraryInitialization) {
+    libraryInitialization = initializeLibrary().finally(() => { libraryInitialization = undefined; });
+  }
+  return libraryInitialization;
+}
+
+async function initializeLibrary() {
   await fs.mkdir(mediaRoot(), { recursive: true });
   try {
     await fs.access(libraryFile());
@@ -795,11 +804,15 @@ async function createWindow() {
   });
   mainWindow = window;
   controlRendererReady = false;
+  const clearControlRendererState = () => {
+    controlRendererReady = false;
+    externalControl.updateLiveState({ activeBoardId: externalControl.getSnapshot().activeBoardId, playback: [] });
+  };
   window.webContents.on("did-start-navigation", (details) => {
-    if (details.isMainFrame && !details.isSameDocument) controlRendererReady = false;
+    if (details.isMainFrame && !details.isSameDocument) clearControlRendererState();
   });
-  window.webContents.on("render-process-gone", () => { controlRendererReady = false; });
-  window.webContents.on("destroyed", () => { controlRendererReady = false; });
+  window.webContents.on("render-process-gone", clearControlRendererState);
+  window.webContents.on("destroyed", clearControlRendererState);
   installNavigationGuards(window.webContents, rendererTarget.policy);
 
   if (isDev) {
@@ -826,7 +839,7 @@ async function createWindow() {
   });
   window.on("closed", () => {
     if (mainWindow === window) {
-      controlRendererReady = false;
+      clearControlRendererState();
       mainWindow = undefined;
     }
   });
@@ -1329,7 +1342,7 @@ handleTrustedIpc("hotkeys:capture", (_event, active) => {
 
 handleTrustedIpc("corsair:status", async () => corsair.getState());
 
-handleTrustedIpc("control:getSettings", () => externalControl.getState());
+handleTrustedIpc("control:getSettings", () => externalControl.getSettings());
 handleTrustedIpc("control:setSettings", (_event, patch) => externalControl.setSettings(patch));
 handleTrustedIpc("control:regenerateToken", () => externalControl.regenerateToken());
 handleTrustedIpc("control:ready", () => {

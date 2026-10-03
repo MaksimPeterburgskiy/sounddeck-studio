@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AudioEngine } from "./audioEngine";
-import { FakeAudioContext, deferred, makeAudioSettings, makeSound, voiceGains } from "./testing/webAudioFakes";
+import { waitForAudioConfiguration } from "./controlReadiness";
+import { FakeAudioContext, deferred, makeAudioSettings, makeSound, voiceGains, waitForMockCalls } from "./testing/webAudioFakes";
 
 const playbackSettings = makeAudioSettings({
   micPassthrough: false,
@@ -48,6 +49,23 @@ afterEach(() => {
 });
 
 describe("AudioEngine output routing", () => {
+  it("waits for a delayed virtual sink before accepting the first external play command", async () => {
+    const engine = new AudioEngine(dualRouteSettings, vi.fn());
+    const sink = deferred<void>();
+    virtualContext().setSinkId.mockReturnValueOnce(sink.promise);
+    const configuration = engine.configure(dualRouteSettings, "cable-device");
+    const ready = vi.fn(() => engine.play(makeSound({ outputTarget: "virtual" })));
+    const pending = waitForAudioConfiguration(() => configuration).then(ready);
+    await waitForMockCalls(virtualContext().setSinkId, 1);
+    expect(ready).not.toHaveBeenCalled();
+    expect(virtualContext().bufferSources).toHaveLength(0);
+    sink.resolve();
+    expect(await pending).toBe(true);
+    expect(virtualContext().bufferSources).toHaveLength(1);
+    expect(engine.isPlaying("sound-1")).toBe(true);
+    await engine.dispose();
+  });
+
   it("routes a monitor-target sound to the monitor context only", async () => {
     const engine = new AudioEngine(playbackSettings, vi.fn());
 
