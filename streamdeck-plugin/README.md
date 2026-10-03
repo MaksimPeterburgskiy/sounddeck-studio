@@ -1,8 +1,8 @@
 # SoundDeck Studio Stream Deck plugin
 
-Nine keypad actions: Play sound, Stop all, Switch to board, Cycle boards,
-Toggle setting, Board slot, Next page, Previous page, and Volume. Volume dial
-supports Stream Deck + and other encoder devices. Requires Stream Deck 7.1+
+Ten keypad actions: Play sound, Stop all, Switch to board, Cycle boards,
+Toggle setting, Board slot, Next page, Previous page, Volume, and Volume mute.
+Volume dial supports Stream Deck + and other encoder devices. Requires Stream Deck 7.1+
 (including Virtual Stream Deck for keys) and SoundDeck Studio with
 **Settings → External control** enabled. Play sound and Board slot use
 `sound.press` on key down and `sound.release` on key up. The sound's Tap/Hold
@@ -35,22 +35,30 @@ every device to page 1. Fixed slots never affect page counts.
 Board slot, Next page, and Previous page are unavailable in multi-actions because
 they depend on the visible device layout. Use Play sound for multi-actions.
 
-Volume selects one of four buses: Mic → virtual mic, Mic → headphones,
-Soundboard → virtual mic, or Soundboard → headphones. Keys show the short bus
-name (Mic/SB → VM/HP) and stored percentage. Choose Volume up, Volume down,
-or Mute toggle; up/down use a 1–25% step (default 5%) and repeat after 400 ms
-at 8 Hz while held. Release, page changes, and disconnects stop repeating.
-Mute preserves the level, lights the ring, and switches to a muted speaker.
-Multi-action mute steps honor the selected Mute or Unmute state; up/down
-multi-action steps adjust once.
+Volume and Volume mute select one of four buses: Mic → virtual mic,
+Mic → headphones, Soundboard → virtual mic, or Soundboard → headphones.
+Keys wrap the bus label (Mic/Board → Virtual/Phones) across two lines and show
+the stored percentage above it. Volume offers up/down only, using a 1–25% step
+(default 5%) and repeating after 400 ms at 8 Hz while held. Release, page changes,
+effective settings changes, and disconnects stop repeating; reading unchanged
+settings leaves held-key repeats running. Up/down multi-action steps adjust once.
 
-Volume dial rotates by 2% per tick by default (configurable from 1–25%). Rapid
-ticks accumulate while a command is pending. Pressing the dial or tapping its
-touch strip toggles mute. The built-in `$B1` layout shows the full bus name,
-percentage, and level bar; muted buses show “Muted” with an empty grey bar.
+Volume mute preserves the level and toggles mute. Its two multi-action states
+honor the selected Mute or Unmute state. Muted keys show a grey icon and “Muted”
+label; up/down keys keep their mode icons, and only the mute key lights its ring.
+
+Volume dial rotates by 2% per tick by default (configurable from 1–25%). Each
+dial serializes rotations, presses, and touch taps in input order; only consecutive
+same-direction ticks coalesce while an acknowledgement is pending. Reversals
+retain their order at volume limits. Pressing the dial or tapping its touch strip
+toggles mute. Effective bus/step changes discard pending input; unchanged settings
+reads preserve it. Disconnecting or leaving the page discards pending input.
+The built-in `$B1` layout shows the bus name (or the user's custom title), percentage,
+and level bar; muted buses show “Muted” with the preserved level in grey.
 Live app changes update both keys and dials. Offline feedback uses the same
-connection labels as keys. Dial behavior is unit-tested; hardware verification
-is still needed because Virtual Stream Deck provides keys only.
+connection labels as keys, with an empty grey bar. Only press/tap launches the app
+while offline; rotating does nothing. Dial behavior is unit-tested; hardware
+verification is still needed because Virtual Stream Deck provides keys only.
 
 From the repository root:
 

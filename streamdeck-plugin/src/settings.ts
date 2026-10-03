@@ -10,7 +10,7 @@ export type ActionSettings = {
   slot?: string | number;
   key?: ControlSettingKey;
   bus?: ControlVolumeBus;
-  mode?: "up" | "down" | "mute";
+  mode?: "up" | "down";
   step?: number;
 };
 

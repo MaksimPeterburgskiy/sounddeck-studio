@@ -15,18 +15,7 @@
       <option value="soundboardMonitor">Soundboard → headphones</option>
     </sdpi-select>
   </sdpi-item>
-  <sdpi-item label="Mode">
-    <sdpi-select id="mode" setting="mode" default="up">
-      <option value="up">Volume up</option>
-      <option value="down">Volume down</option>
-    </sdpi-select>
-  </sdpi-item>
-  <sdpi-item id="step-item" label="Step">
-    <sdpi-range setting="step" default="5" min="1" max="25" step="1" showlabels>
-      <span slot="min">1%</span>
-      <span slot="max">25%</span>
-    </sdpi-range>
-  </sdpi-item>
+  <p>Mute preserves the bus level. In a multi-action, choose Mute or Unmute.</p>
   <p id="status" role="status"></p>
   <script src="inspector.js"></script>
 </body>

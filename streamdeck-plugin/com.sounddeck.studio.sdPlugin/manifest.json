@@ -181,7 +181,25 @@
     {
       "UUID": "com.sounddeck.studio.volume",
       "Name": "Volume",
-      "Tooltip": "Adjust or mute an audio bus. Hold up/down to repeat.",
+      "Tooltip": "Adjust an audio bus up or down. Hold to repeat.",
+      "Icon": "imgs/volume",
+      "Controllers": [
+        "Keypad"
+      ],
+      "UserTitleEnabled": true,
+      "States": [
+        {
+          "Image": "imgs/volume-key",
+          "TitleAlignment": "bottom",
+          "FontSize": 13
+        }
+      ],
+      "PropertyInspectorPath": "ui/volume.html"
+    },
+    {
+      "UUID": "com.sounddeck.studio.volume-mute",
+      "Name": "Volume mute",
+      "Tooltip": "Toggle mute while preserving the bus level. Multi-actions can select Mute or Unmute.",
       "Icon": "imgs/volume",
       "Controllers": [
         "Keypad"
@@ -201,7 +219,7 @@
           "Name": "Mute"
         }
       ],
-      "PropertyInspectorPath": "ui/volume.html",
+      "PropertyInspectorPath": "ui/volume-mute.html",
       "DisableAutomaticStates": true
     },
     {
