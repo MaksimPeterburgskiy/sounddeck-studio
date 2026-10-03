@@ -64,9 +64,17 @@ describe("Stream Deck version detection", () => {
 
   it.each(["marketplace", undefined, "other"])("suppresses updates for client distribution %s regardless of manifest readability", async (distribution) => {
     for (const installedManifest of [manifest("0.1.21.99999"), Buffer.from([0, 255, 23, 89, 0])]) {
-      const { installer } = await fixture({ clients: [{ name: "SoundDeck Stream Deck plugin", version: "0.1.22-beta.4", distribution }], manifest: installedManifest });
+      const { installer } = await fixture({ clients: [{ name: "SoundDeck Stream Deck plugin", version: "0.1.22-beta.4", ...(distribution === undefined ? {} : { distribution }) }], manifest: installedManifest });
       expect(await installer.status()).toMatchObject({ installed: true, installedVersion: "0.1.22.4", source: "client", updateAvailable: false });
     }
+  });
+
+  it("does not retain GitHub provenance when a client reconnects without distribution", async () => {
+    const clients = [{ name: "SoundDeck Stream Deck plugin", version: "0.1.21", distribution: "github" }];
+    const { installer } = await fixture({ clients, manifest: manifest("0.1.21.99999") });
+    expect(await installer.status()).toMatchObject({ updateAvailable: true });
+    clients.splice(0, 1, { name: "SoundDeck Stream Deck plugin", version: "0.1.21" });
+    expect(await installer.status()).toMatchObject({ installed: true, source: "client", updateAvailable: false });
   });
 
   it("identifies a connected GitHub sideload without an installed folder", async () => {

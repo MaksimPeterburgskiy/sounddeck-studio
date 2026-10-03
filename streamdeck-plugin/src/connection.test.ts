@@ -5,7 +5,7 @@ import path from "node:path";
 import os from "node:os";
 import { createRequire } from "node:module";
 import { WebSocketServer } from "ws";
-import type { ControlCommand, ControlHello } from "../../src/lib/controlProtocol";
+import type { ControlCommand, ControlErrorCode, ControlHello } from "../../src/lib/controlProtocol";
 import { Connection, type ConnectionOptions } from "./connection";
 import { SoundKeyPresses } from "./soundKeyPresses";
 import { parseDiscovery, type DiscoveryFile } from "./discovery";
@@ -46,6 +46,38 @@ async function realServer(options: { cooldownMs?: number } = {}, distribution?: 
   const connection = new Connection("0.1.22", { discover: readDiscovery, retryMinMs: 20, retryMaxMs: 50, distribution });
   resources.push(() => connection.stop());
   return { bridge, connection, readDiscovery, upgrades, command };
+}
+
+/** Simulate the old strict hello schema while using a real app snapshot. */
+async function handshakeServer(distribution: ConnectionOptions["distribution"] = "github") {
+  const { bridge } = await realServer();
+  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  resources.push(() => new Promise<void>((resolve) => server.close(() => resolve())));
+  await new Promise<void>((resolve) => server.once("listening", resolve));
+  const file: DiscoveryFile = { path: "state", state: parseDiscovery({
+    enabled: true, protocol: 1, host: "127.0.0.1", port: (server.address() as { port: number }).port,
+    token: "token", allowLan: false, appVersion: "0.1.21", appPath: "/Applications/SoundDeck Studio.app",
+  })! };
+  const behavior = { legacy: true, rejectAll: false, protocol: 1, code: "invalid-message" as ControlErrorCode };
+  const hellos: ControlHello[] = [];
+  server.on("connection", (socket) => socket.on("message", (data) => {
+    const hello = JSON.parse(data.toString()) as ControlHello;
+    hellos.push(hello);
+    if (behavior.rejectAll || (behavior.legacy && Object.keys(hello.client).some((key) => !["name", "version"].includes(key)))) {
+      socket.send(JSON.stringify({ type: "error", code: behavior.code, protocol: behavior.protocol }));
+      socket.close();
+    } else {
+      socket.send(JSON.stringify({ type: "welcome", protocol: 1, app: { version: file.state!.appVersion }, state: bridge.getSnapshot() }));
+    }
+  }));
+  const connection = new Connection("0.1.22", { discover: async () => file, distribution, retryMinMs: 20, retryMaxMs: 50 });
+  resources.push(() => connection.stop());
+  const reconnect = async () => {
+    const session = connection.session;
+    for (const socket of server.clients) socket.terminate();
+    await waitFor(() => connection.session !== null && connection.session !== session);
+  };
+  return { connection, file, behavior, hellos, server, reconnect };
 }
 
 describe("shared connection", () => {
@@ -109,6 +141,76 @@ describe("shared connection", () => {
     connection.start();
     await waitFor(() => connection.status === "connected");
     expect(bridge.getState().clients).toEqual([{ name: "SoundDeck Stream Deck plugin", version: "0.1.22", distribution }]);
+  });
+
+  it.each(["github", "marketplace"] as const)("retries a legacy hello once without %s provenance and remembers it across reconnects", async (distribution) => {
+    const { connection, hellos, reconnect } = await handshakeServer(distribution);
+    const statuses: string[] = [];
+    connection.subscribe(() => statuses.push(connection.status));
+    connection.start();
+    await waitFor(() => connection.status === "connected");
+    expect(hellos).toHaveLength(2);
+    expect(hellos[0].client.distribution).toBe(distribution);
+    expect(hellos[1]).toEqual({ ...hellos[0], client: { name: "SoundDeck Stream Deck plugin", version: "0.1.22" } });
+    await reconnect();
+    connection.stop();
+    connection.start();
+    await waitFor(() => connection.status === "connected");
+    expect(hellos).toHaveLength(4);
+    expect(hellos.slice(1).every((hello) => !Object.hasOwn(hello.client, "distribution"))).toBe(true);
+    expect(statuses).not.toContain("auth-error");
+  });
+
+  it.each(["token", "appVersion"] as const)("sends provenance again when the server %s changes", async (field) => {
+    const { connection, file, behavior, hellos, reconnect } = await handshakeServer();
+    connection.start();
+    await waitFor(() => connection.status === "connected");
+    behavior.legacy = false;
+    file.state![field] = field === "token" ? "new-token" : "0.1.22";
+    await reconnect();
+    expect(hellos).toHaveLength(3);
+    expect(hellos[2].client.distribution).toBe("github");
+    await reconnect();
+    expect(hellos[3].client.distribution).toBe("github");
+  });
+
+  it("keeps provenance omitted if the fallback hello is also rejected without flapping or reporting an auth failure", async () => {
+    const { connection, behavior, hellos } = await handshakeServer();
+    behavior.rejectAll = true;
+    const statuses: string[] = [];
+    connection.subscribe(() => statuses.push(connection.status));
+    connection.start();
+    await waitFor(() => hellos.length >= 5);
+    connection.stop();
+    expect(hellos[0].client.distribution).toBe("github");
+    expect(hellos.slice(1).every((hello) => !Object.hasOwn(hello.client, "distribution"))).toBe(true);
+    expect(statuses).not.toContain("auth-error");
+  });
+
+  it.each([
+    ["unauthorized", 1, "auth-error"],
+    ["rate-limited", 1, "auth-error"],
+    ["protocol-mismatch", 2, "protocol-mismatch"],
+    ["invalid-message", 2, "offline"],
+  ] as const)("does not remove provenance for %s from protocol %s", async (code, protocol, status) => {
+    const { connection, behavior, hellos } = await handshakeServer();
+    Object.assign(behavior, { rejectAll: true, code, protocol });
+    connection.start();
+    await waitFor(() => hellos.length >= 3 && connection.status === status);
+    connection.stop();
+    expect(hellos.every((hello) => hello.client.distribution === "github")).toBe(true);
+  });
+
+  it("does not remove provenance for invalid-message after a successful handshake", async () => {
+    const { connection, behavior, hellos, server } = await handshakeServer();
+    behavior.legacy = false;
+    connection.start();
+    await waitFor(() => connection.status === "connected");
+    const session = connection.session;
+    for (const socket of server.clients) socket.send(JSON.stringify({ type: "error", code: "invalid-message", protocol: 1 }));
+    await waitFor(() => connection.session !== null && connection.session !== session);
+    expect(hellos).toHaveLength(2);
+    expect(hellos[1].client.distribution).toBe("github");
   });
 
   it("releases held keys on socket closure and sends no stale releases after reconnect", async () => {
