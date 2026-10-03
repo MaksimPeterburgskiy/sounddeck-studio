@@ -10,6 +10,8 @@ const MAX_PAYLOAD = 64 * 1024;
 const MAX_CLIENTS = 64;
 const MAX_PENDING_COMMANDS = 32;
 const MAX_BUFFERED = 8 * 1024 * 1024;
+const HTTP_PRESS_TIMEOUT_MS = 5 * 60 * 1000;
+const MAX_PRESSES = 4096;
 const SETTING_KEYS = ["micPassthrough", "soundboardToVirtualMic", "noiseSuppressionEnabled", "echoCancellationEnabled", "monitorToHeadphones"];
 const VOLUME_BUSES = ["micVirtual", "micMonitor", "soundboardVirtual", "soundboardMonitor"];
 
@@ -49,6 +51,12 @@ function validateCommand(command, args) {
       return fields(args, ["soundId", "boardId", "title"]) && id(args.soundId)
         && (args.boardId === undefined || id(args.boardId))
         && (args.title === undefined || text(args.title)) ? null : "invalid-args";
+    case "sound.press":
+      return fields(args, ["soundId", "boardId", "title", "pressId"]) && id(args.soundId) && id(args.pressId)
+        && (args.boardId === undefined || id(args.boardId))
+        && (args.title === undefined || text(args.title)) ? null : "invalid-args";
+    case "sound.release":
+      return fields(args, ["pressId"]) && id(args.pressId) ? null : "invalid-args";
     case "sound.stop":
     case "sound.image":
       return fields(args, ["soundId"]) && id(args.soundId) ? null : "invalid-args";
@@ -98,7 +106,8 @@ function createExternalControlBridge({
   now = Date.now,
   defaultPort = DEFAULT_PORT,
   helloTimeoutMs = 5000,
-  cooldownMs = 30000
+  cooldownMs = 30000,
+  httpPressTimeoutMs = HTTP_PRESS_TIMEOUT_MS
 }) {
   const stateFile = path.join(userData, "external-control.json");
   let settings = { enabled: false, port: defaultPort, token: "", allowLan: false };
@@ -130,6 +139,7 @@ function createExternalControlBridge({
   }
 
   function setDocument(token) {
+    if (token !== documentToken) void releaseAll(presses);
     documentToken = token;
     updateLiveState({ playback: [] }, beginUpdate());
   }
@@ -141,6 +151,9 @@ function createExternalControlBridge({
   const pendingHttpCommands = new Map();
   const httpControllers = new Set();
   const sessionControllers = new Map();
+  const sessionPresses = new Map();
+  const presses = new Set();
+  const httpPresses = new Map();
 
   function abortCommands(controllers) {
     for (const cancellation of [...(controllers || [])]) cancellation.abort();
@@ -148,6 +161,7 @@ function createExternalControlBridge({
 
   function revokeSession(ws) {
     abortCommands(sessionControllers.get(ws));
+    void releaseAll(sessionPresses.get(ws)?.values() || []);
     if (clients.delete(ws)) notify();
   }
 
@@ -238,27 +252,70 @@ function createExternalControlBridge({
     return true;
   }
 
-  async function dispatch(command, args, signal) {
-    const invalid = validateCommand(command, args);
-    if (invalid) return { ok: false, code: invalid };
-    if (!settings.enabled || stopped) return { ok: false, code: "disabled" };
-    const sounds = library.boards.flatMap((board) => board.sounds);
-    if (command === "library.get") return { ok: true, data: getLibrary() };
-    if (command.startsWith("sound.")) {
-      let sound = sounds.find((candidate) => candidate.id === args.soundId);
-      if (!sound && command === "sound.play" && args.boardId && args.title) {
-        sound = library.boards.find((board) => board.id === args.boardId)?.sounds.find((candidate) => candidate.title === args.title);
-      }
-      if (!sound) return { ok: false, code: "not-found" };
-      if (command === "sound.image") return { ok: true, data: { image: images.get(sound.id) || null } };
-      args = { soundId: sound.id };
-    }
-    if (command === "board.activate" && !library.boards.some((board) => board.id === args.boardId)) return { ok: false, code: "not-found" };
+  async function forward(command, args, signal) {
     try {
       return await onCommand({ command, args }, signal);
     } catch {
       return { ok: false, code: "internal-error" };
     }
+  }
+
+  async function releasePress(record) {
+    if (!presses.has(record)) return { ok: true };
+    record.owner.delete(record.publicId);
+    presses.delete(record);
+    clearTimeout(record.timer);
+    return forward("sound.release", { pressId: record.internalId });
+  }
+
+  async function releaseAll(records) {
+    await Promise.all([...records].map(releasePress));
+  }
+
+  async function dispatch(command, args, signal, owner = httpPresses) {
+    const invalid = validateCommand(command, args);
+    if (invalid) return { ok: false, code: invalid };
+    if (!settings.enabled || stopped || !server) return { ok: false, code: "disabled" };
+    if (command === "sound.release") {
+      const record = owner.get(args.pressId);
+      return record ? releasePress(record) : { ok: true };
+    }
+    const sounds = library.boards.flatMap((board) => board.sounds);
+    if (command === "library.get") return { ok: true, data: getLibrary() };
+    if (command.startsWith("sound.")) {
+      let sound = sounds.find((candidate) => candidate.id === args.soundId);
+      if (!sound && (command === "sound.play" || command === "sound.press") && args.boardId && args.title) {
+        sound = library.boards.find((board) => board.id === args.boardId)?.sounds.find((candidate) => candidate.title === args.title);
+      }
+      if (!sound) return { ok: false, code: "not-found" };
+      if (command === "sound.image") return { ok: true, data: { image: images.get(sound.id) || null } };
+      if (command === "sound.press") {
+        if (owner.has(args.pressId)) return { ok: false, code: "invalid-args" };
+        if (presses.size >= MAX_PRESSES) return { ok: false, code: "busy" };
+        const record = { soundId: sound.id, owner, publicId: args.pressId, internalId: `external-${crypto.randomUUID()}`, timer: null };
+        owner.set(record.publicId, record);
+        presses.add(record);
+        if (owner === httpPresses) {
+          record.timer = setTimeout(() => { void releasePress(record); }, httpPressTimeoutMs);
+          record.timer.unref?.();
+        }
+        const result = await forward(command, { soundId: sound.id, pressId: record.internalId }, signal);
+        if (!result.ok && owner.get(record.publicId) === record) await releasePress(record);
+        return result;
+      }
+      args = { soundId: sound.id };
+    }
+    if (command === "board.activate" && !library.boards.some((board) => board.id === args.boardId)) return { ok: false, code: "not-found" };
+    if (command === "sound.stop" || command === "playback.stopAll") {
+      const held = [...presses].filter((record) => command === "playback.stopAll" || record.soundId === args.soundId);
+      // Invoke release synchronously before dispatching the stop, without yielding
+      // to later commands while cancellation is being delivered.
+      const releases = held.map(releasePress);
+      const result = await forward(command, args, signal);
+      await Promise.all(releases);
+      return result;
+    }
+    return forward(command, args, signal);
   }
 
   function serial(operation) {
@@ -330,7 +387,7 @@ function createExternalControlBridge({
   }
 
   function requestError(req) {
-    if (!settings.enabled || stopped) return [503, "disabled"];
+    if (!settings.enabled || stopped || !server) return [503, "disabled"];
     if (Object.hasOwn(req.headers, "origin")) return [403, "forbidden"];
     const port = server?.address()?.port || settings.port;
     if (!settings.allowLan && ![`127.0.0.1:${port}`, `localhost:${port}`].includes(req.headers.host)) return [403, "forbidden"];
@@ -391,14 +448,19 @@ function createExternalControlBridge({
     let command;
     let routeArgs = {};
     let allowedBody = [];
-    const sound = url.match(/^\/v1\/sounds\/([^/]+)\/(play|stop)$/);
+    const sound = url.match(/^\/v1\/sounds\/([^/]+)\/(play|stop|press)$/);
+    const release = url.match(/^\/v1\/presses\/([^/]+)\/release$/);
     const board = url.match(/^\/v1\/boards\/([^/]+)\/activate$/);
     const setting = url.match(/^\/v1\/settings\/([^/]+)$/);
     const volume = url.match(/^\/v1\/volumes\/([^/]+)$/);
     if (sound) {
       command = `sound.${sound[2]}`;
       routeArgs = { soundId: sound[1] };
-      if (sound[2] === "play") allowedBody = ["boardId", "title"];
+      if (sound[2] === "play" || sound[2] === "press") allowedBody = ["boardId", "title"];
+      if (sound[2] === "press") routeArgs.pressId = crypto.randomUUID();
+    } else if (release) {
+      command = "sound.release";
+      routeArgs = { pressId: release[1] };
     } else if (board) {
       command = "board.activate";
       routeArgs = { boardId: board[1] };
@@ -445,18 +507,27 @@ function createExternalControlBridge({
       res.setTimeout(0);
       const cancellation = new AbortController();
       httpControllers.add(cancellation);
-      const disconnected = () => { if (!res.writableFinished) cancellation.abort(); };
+      const disconnected = () => {
+        if (res.writableFinished) return;
+        cancellation.abort();
+        if (command === "sound.press") {
+          const record = httpPresses.get(args.pressId);
+          if (record) void releasePress(record);
+        }
+      };
       res.once("close", disconnected);
+      // An accepted press still needs cleanup if the client disconnects while
+      // its generated ID is waiting for the response to flush.
+      res.once("finish", () => res.removeListener("close", disconnected));
       if (res.destroyed) cancellation.abort();
       let result;
       try {
         result = await dispatch(command, args, cancellation.signal);
       } finally {
         httpControllers.delete(cancellation);
-        res.removeListener("close", disconnected);
       }
       const status = result.ok ? 200 : result.code === "not-found" ? 404 : result.code === "busy" || result.code === "unavailable" || result.code === "disabled" ? 503 : result.code === "internal-error" ? 500 : 400;
-      respond(res, status, result);
+      respond(res, status, result.ok && command === "sound.press" ? { ok: true, data: { pressId: args.pressId } } : result);
     } catch (caught) {
       respond(res, caught.message === "payload-too-large" ? 413 : 400, errorMessage(caught.message));
     } finally {
@@ -479,6 +550,8 @@ function createExternalControlBridge({
     const address = req.socket.remoteAddress;
     const pendingCommands = new Set();
     sessionControllers.set(ws, pendingCommands);
+    const ownedPresses = new Map();
+    sessionPresses.set(ws, ownedPresses);
     const timer = setTimeout(() => rejectSocket(ws, "unauthorized"), helloTimeoutMs);
     timer.unref?.();
     ws.on("error", () => revokeSession(ws));
@@ -486,6 +559,7 @@ function createExternalControlBridge({
       clearTimeout(timer);
       revokeSession(ws);
       sessionControllers.delete(ws);
+      sessionPresses.delete(ws);
     });
     ws.on("message", async (data, binary) => {
       if (ws.readyState !== 1) return;
@@ -529,7 +603,7 @@ function createExternalControlBridge({
       const cancellation = new AbortController();
       pendingCommands.add(cancellation);
       try {
-        const result = await dispatch(message.command, message.args, cancellation.signal);
+        const result = await dispatch(message.command, message.args, cancellation.signal, ownedPresses);
         send(ws, { type: "result", id: message.id, ...result });
       } finally {
         pendingCommands.delete(cancellation);
@@ -548,6 +622,7 @@ function createExternalControlBridge({
       send(ws, errorMessage(code));
       ws.terminate();
     }
+    await releaseAll(presses);
     clients.clear();
     oldSockets?.close();
     if (oldServer) {
@@ -665,6 +740,7 @@ function createExternalControlBridge({
       settings = next;
       abortCommands(httpControllers);
       for (const ws of webSockets?.clients || []) rejectSocket(ws, "unauthorized");
+      await releaseAll(presses);
       clients.clear();
       notify();
       return getState();
@@ -674,4 +750,4 @@ function createExternalControlBridge({
   return { start, stop, getState, getSettings, setSettings, regenerateToken, beginUpdate, setDocument, updateLibrary, updateLiveState, getSnapshot };
 }
 
-module.exports = { createExternalControlBridge, launcherPath, PROTOCOL_VERSION, DEFAULT_PORT };
+module.exports = { createExternalControlBridge, launcherPath, PROTOCOL_VERSION, DEFAULT_PORT, HTTP_PRESS_TIMEOUT_MS };

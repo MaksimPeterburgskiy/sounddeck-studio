@@ -3,7 +3,7 @@ import streamDeck, {
   type DidReceiveSettingsEvent, type KeyDownEvent, type PropertyInspectorDidAppearEvent,
   type PropertyInspectorDidDisappearEvent, type SendToPluginEvent,
 } from "@elgato/streamdeck";
-import type { ControlCommandArgs, ControlCommandName } from "../../../src/lib/controlProtocol";
+import type { ControlCommandArgs, ControlCommandName, ControlResult } from "../../../src/lib/controlProtocol";
 import type { Connection } from "../connection";
 import { keyTitle } from "../render/keyTitle";
 import { keyImage } from "../render/keyImage";
@@ -73,9 +73,13 @@ export abstract class LiveAction extends SingletonAction<ActionSettings> {
 
   protected async command<Name extends ControlCommandName>(ev: KeyDownEvent<ActionSettings>, name: Name, args: ControlCommandArgs[Name]): Promise<void> {
     const result = await this.connection.command(name, args);
-    if (!result.ok) {
+    await this.reportResult(ev.action, name, result);
+  }
+
+  protected async reportResult(action: KeyAction<ActionSettings>, name: ControlCommandName, result: ControlResult | undefined): Promise<void> {
+    if (result && !result.ok) {
       streamDeck.logger.warn(`SoundDeck command ${name} failed: ${result.code}`);
-      await ev.action.showAlert();
+      await action.showAlert();
     }
   }
 

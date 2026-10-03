@@ -11,7 +11,7 @@ import rendererModule from "./controlRenderer.cjs";
 import { createAudioControlQueue } from "../src/lib/audioControlQueue.ts";
 import { CONTROL_PROTOCOL_VERSION, CONTROL_DEFAULT_PORT } from "../src/lib/controlProtocol.ts";
 
-const { createExternalControlBridge, launcherPath, PROTOCOL_VERSION, DEFAULT_PORT } = controlModule;
+const { createExternalControlBridge, launcherPath, PROTOCOL_VERSION, DEFAULT_PORT, HTTP_PRESS_TIMEOUT_MS } = controlModule;
 // Use real HTTP/WS parsers over in-memory sockets so the suite also runs in
 // sandboxes that disallow loopback listeners.
 const listeners = new Map();
@@ -568,21 +568,275 @@ describe("external control protocol and dispatch", () => {
     expect((await request("/v1/boards/missing/activate", { method: "POST" })).status).toBe(404);
   });
 
-  it("waits for playback results and reports unavailable routes over HTTP and WebSocket", async () => {
+  it("scopes press ids to each WebSocket session and releases only the corresponding voice", async () => {
+    await create();
+    const first = await session();
+    const second = await session();
+    first.send({ type: "command", id: "press", command: "sound.press", args: { soundId: "removed-id", boardId: "board-a", title: "Airhorn", pressId: "same-key" } });
+    expect(await first.next()).toMatchObject({ id: "press", ok: true });
+    const firstPress = onCommand.mock.lastCall[0];
+    expect(firstPress).toMatchObject({ command: "sound.press", args: { soundId: "sound-new", pressId: expect.stringMatching(/^external-/) } });
+    second.send({ type: "command", id: "press", command: "sound.press", args: { soundId: "sound-other", pressId: "same-key" } });
+    expect(await second.next()).toMatchObject({ id: "press", ok: true });
+    const secondPress = onCommand.mock.lastCall[0];
+    expect(secondPress.args.pressId).not.toBe(firstPress.args.pressId);
+    first.send({ type: "command", id: "duplicate", command: "sound.press", args: { soundId: "sound-new", pressId: "same-key" } });
+    expect(await first.next()).toMatchObject({ id: "duplicate", ok: false, code: "invalid-args" });
+    first.send({ type: "command", id: "release", command: "sound.release", args: { pressId: "same-key" } });
+    expect(await first.next()).toMatchObject({ id: "release", ok: true });
+    expect(onCommand).toHaveBeenLastCalledWith({ command: "sound.release", args: { pressId: firstPress.args.pressId } }, undefined);
+    const calls = onCommand.mock.calls.length;
+    first.send({ type: "command", id: "unknown", command: "sound.release", args: { pressId: "same-key" } });
+    expect(await first.next()).toMatchObject({ id: "unknown", ok: true });
+    expect(onCommand).toHaveBeenCalledTimes(calls);
+    second.ws.close();
+    await second.closed;
+    await vi.waitFor(() => expect(onCommand).toHaveBeenLastCalledWith({ command: "sound.release", args: { pressId: secondPress.args.pressId } }, undefined));
+  });
+
+  it("dispatches release before a pending press acknowledgement and cleans up disconnected clients", async () => {
+    await create();
+    const connection = await session();
+    let acknowledge;
+    onCommand.mockImplementationOnce(() => new Promise((resolve) => { acknowledge = resolve; }));
+    connection.send({ type: "command", id: "press", command: "sound.press", args: { soundId: "sound-new", pressId: "pending" } });
+    await vi.waitFor(() => expect(onCommand).toHaveBeenCalledTimes(1));
+    const internalId = onCommand.mock.calls[0][0].args.pressId;
+    connection.send({ type: "command", id: "release", command: "sound.release", args: { pressId: "pending" } });
+    expect(await connection.next()).toMatchObject({ id: "release", ok: true });
+    expect(onCommand).toHaveBeenLastCalledWith({ command: "sound.release", args: { pressId: internalId } }, undefined);
+    acknowledge({ ok: true });
+    expect(await connection.next()).toMatchObject({ id: "press", ok: true });
+
+    onCommand.mockImplementationOnce(() => new Promise((resolve) => { acknowledge = resolve; }));
+    connection.send({ type: "command", id: "disconnect", command: "sound.press", args: { soundId: "sound-new", pressId: "pending" } });
+    await vi.waitFor(() => expect(onCommand).toHaveBeenCalledTimes(3));
+    const disconnectedId = onCommand.mock.lastCall[0].args.pressId;
+    connection.ws.close();
+    await connection.closed;
+    await vi.waitFor(() => expect(onCommand).toHaveBeenLastCalledWith({ command: "sound.release", args: { pressId: disconnectedId } }, undefined));
+    acknowledge({ ok: true });
+  });
+
+  it("generates HTTP press ids, accepts releases across requests and expires abandoned presses", async () => {
+    expect(HTTP_PRESS_TIMEOUT_MS).toBe(5 * 60 * 1000);
+    await create({ httpPressTimeoutMs: 100 });
+    const pressed = await request("/v1/sounds/old-id/press", { method: "POST", body: { boardId: "board-a", title: "Airhorn" } });
+    expect(pressed).toEqual({ status: 200, body: { ok: true, data: { pressId: expect.stringMatching(/^[a-zA-Z0-9_-]+$/) } } });
+    const internalId = onCommand.mock.lastCall[0].args.pressId;
+    expect(onCommand).toHaveBeenLastCalledWith({ command: "sound.press", args: { soundId: "sound-new", pressId: internalId } }, expect.any(AbortSignal));
+    expect(await request(`/v1/presses/${pressed.body.data.pressId}/release`, { method: "POST" })).toEqual({ status: 200, body: { ok: true } });
+    expect(onCommand).toHaveBeenLastCalledWith({ command: "sound.release", args: { pressId: internalId } }, undefined);
+    const calls = onCommand.mock.calls.length;
+    expect((await request(`/v1/presses/${pressed.body.data.pressId}/release`, { method: "POST" })).body).toEqual({ ok: true });
+    expect(onCommand).toHaveBeenCalledTimes(calls);
+    await request("/v1/sounds/sound-new/press", { method: "POST" });
+    const abandonedId = onCommand.mock.lastCall[0].args.pressId;
+    await vi.waitFor(() => expect(onCommand).toHaveBeenLastCalledWith({ command: "sound.release", args: { pressId: abandonedId } }, undefined));
+  });
+
+  it("releases HTTP presses when the response is abandoned before acknowledgement", async () => {
+    await create();
+    let acknowledge;
+    onCommand.mockImplementationOnce(() => new Promise((resolve) => { acknowledge = resolve; }));
+    const state = bridge.getState();
+    const req = http.request({ createConnection: memoryConnect, hostname: "127.0.0.1", port: state.port, path: "/v1/sounds/sound-new/press", method: "POST", headers: { Authorization: `Bearer ${state.token}` } });
+    req.on("error", () => {});
+    req.end();
+    await vi.waitFor(() => expect(onCommand).toHaveBeenCalledTimes(1));
+    const internalId = onCommand.mock.lastCall[0].args.pressId;
+    const signal = onCommand.mock.lastCall[1];
+    expect(signal.aborted).toBe(false);
+    req.destroy();
+    await vi.waitFor(() => expect(onCommand).toHaveBeenLastCalledWith({ command: "sound.release", args: { pressId: internalId } }, undefined));
+    expect(signal.aborted).toBe(true);
+    acknowledge({ ok: true });
+  });
+
+  it.each([false, true])("releases an acknowledged HTTP press on disconnect only before its response finishes (flushed: %s)", async (flushed) => {
+    let response;
+    let flushResponse;
+    await create({ createServer: (...args) => {
+      const server = memoryServer(...args);
+      server.on("request", (_req, res) => {
+        response = res;
+        const socket = res.socket;
+        const write = socket._write;
+        socket._write = (chunk, encoding, callback) => {
+          flushResponse = () => {
+            socket._write = write;
+            write.call(socket, chunk, encoding, callback);
+          };
+        };
+      });
+      return server;
+    } });
+    const state = bridge.getState();
+    const req = http.request({ createConnection: memoryConnect, hostname: "127.0.0.1", port: state.port, path: "/v1/sounds/sound-new/press", method: "POST", headers: { Authorization: `Bearer ${state.token}` } });
+    req.on("error", () => {});
+    req.end();
+    await vi.waitFor(() => expect(flushResponse).toBeTypeOf("function"));
+    const internalId = onCommand.mock.lastCall[0].args.pressId;
+    const signal = onCommand.mock.lastCall[1];
+    expect(response.writableEnded).toBe(true);
+    expect(response.writableFinished).toBe(false);
+    expect(onCommand).toHaveBeenCalledTimes(1);
+    if (flushed) {
+      flushResponse();
+      await vi.waitFor(() => expect(response.writableFinished).toBe(true));
+    }
+    req.destroy();
+    await vi.waitFor(() => expect(response.destroyed).toBe(true));
+    if (flushed) {
+      expect(onCommand).toHaveBeenCalledTimes(1);
+      expect(signal.aborted).toBe(false);
+    } else {
+      await vi.waitFor(() => expect(onCommand).toHaveBeenLastCalledWith({ command: "sound.release", args: { pressId: internalId } }, undefined));
+      expect(signal.aborted).toBe(true);
+    }
+  });
+
+  it("releases all held presses when the API is disabled or its token rotates", async () => {
+    await create();
+    const connection = await session();
+    connection.send({ type: "command", id: "press", command: "sound.press", args: { soundId: "sound-new", pressId: "held" } });
+    expect(await connection.next()).toMatchObject({ ok: true });
+    await request("/v1/sounds/sound-other/press", { method: "POST" });
+    const ids = onCommand.mock.calls.map(([message]) => message.args.pressId);
+    await bridge.regenerateToken();
+    expect(onCommand.mock.calls.filter(([message]) => message.command === "sound.release").map(([message]) => message.args.pressId).sort()).toEqual([...ids].sort());
+    await request("/v1/sounds/sound-new/press", { method: "POST" });
+    const disabledId = onCommand.mock.lastCall[0].args.pressId;
+    await bridge.setSettings({ enabled: false });
+    expect(onCommand).toHaveBeenLastCalledWith({ command: "sound.release", args: { pressId: disabledId } }, undefined);
+    expect(onCommand.mock.calls.filter(([message]) => message.command === "sound.release")).toHaveLength(3);
+  });
+
+  it("forgets outgoing document presses and ignores late press failures after the same public id is reused", async () => {
+    await create();
+    bridge.setDocument("old-document");
+    const connection = await session();
+    let finish;
+    onCommand.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const press = { command: "sound.press", args: { soundId: "sound-new", pressId: "key" } };
+    connection.send({ type: "command", id: "old", ...press });
+    await vi.waitFor(() => expect(onCommand).toHaveBeenCalledTimes(1));
+    const oldId = onCommand.mock.lastCall[0].args.pressId;
+    bridge.setDocument("new-document");
+    expect(onCommand).toHaveBeenLastCalledWith({ command: "sound.release", args: { pressId: oldId } }, undefined);
+    connection.send({ type: "command", id: "new", ...press });
+    expect(await connection.next()).toMatchObject({ id: "new", ok: true });
+    const newId = onCommand.mock.lastCall[0].args.pressId;
+    expect(newId).not.toBe(oldId);
+    finish({ ok: false, code: "unavailable" });
+    expect(await connection.next()).toMatchObject({ id: "old", ok: false });
+    expect(onCommand).toHaveBeenCalledTimes(3);
+    connection.send({ type: "command", id: "up", command: "sound.release", args: { pressId: "key" } });
+    expect(await connection.next()).toMatchObject({ id: "up", ok: true });
+    expect(onCommand).toHaveBeenLastCalledWith({ command: "sound.release", args: { pressId: newId } }, undefined);
+  });
+
+  it.each(["sound.stop", "playback.stopAll"])("%s clears only the matching press ownership before later presses arrive", async (command) => {
+    await create();
+    const connection = await session();
+    for (const [id, soundId] of [["a", "sound-new"], ["b", "sound-other"]]) {
+      connection.send({ type: "command", id, command: "sound.press", args: { soundId, pressId: id } });
+      expect(await connection.next()).toMatchObject({ ok: true });
+    }
+    const [a, b] = onCommand.mock.calls.map(([message]) => message.args.pressId);
+    connection.send({ type: "command", id: "stop", command, args: command === "sound.stop" ? { soundId: "sound-new" } : {} });
+    expect(await connection.next()).toMatchObject({ id: "stop", ok: true });
+    const releases = onCommand.mock.calls.filter(([message]) => message.command === "sound.release").map(([message]) => message.args.pressId);
+    expect(releases).toEqual(command === "sound.stop" ? [a] : [a, b]);
+    connection.send({ type: "command", id: "later", command: "sound.press", args: { soundId: "sound-new", pressId: "a" } });
+    expect(await connection.next()).toMatchObject({ id: "later", ok: true });
+    const laterId = onCommand.mock.lastCall[0].args.pressId;
+    expect(laterId).not.toBe(a);
+    connection.send({ type: "command", id: "up", command: "sound.release", args: { pressId: "a" } });
+    expect(await connection.next()).toMatchObject({ id: "up", ok: true });
+    expect(onCommand).toHaveBeenLastCalledWith({ command: "sound.release", args: { pressId: laterId } }, undefined);
+  });
+
+  it.each(["play", "press"])("waits for %s results and reports unavailable routes over HTTP and WebSocket", async (operation) => {
     await create();
     const connection = await session();
     let finishPlayback;
     const playback = new Promise((resolve) => { finishPlayback = resolve; });
     onCommand.mockReturnValue(playback);
     const received = vi.fn();
-    const httpResult = request("/v1/sounds/sound-new/play", { method: "POST" }).then(received);
-    connection.send({ type: "command", id: "route", command: "sound.play", args: { soundId: "sound-new" } });
+    const httpResult = request(`/v1/sounds/sound-new/${operation}`, { method: "POST" }).then(received);
+    connection.send({ type: "command", id: "route", command: `sound.${operation}`, args: { soundId: "sound-new", ...(operation === "press" && { pressId: "held" }) } });
     await vi.waitFor(() => expect(onCommand).toHaveBeenCalledTimes(2));
     expect(received).not.toHaveBeenCalled();
     finishPlayback({ ok: false, code: "unavailable" });
     await httpResult;
     expect(received).toHaveBeenCalledExactlyOnceWith({ status: 503, body: { ok: false, code: "unavailable" } });
     expect(await connection.next()).toEqual({ type: "result", id: "route", ok: false, code: "unavailable" });
+  });
+
+  it("shares WebSocket pending capacity across presses, plays and mutations without counting started holds", async () => {
+    await create();
+    const connection = await session();
+    const completions = [];
+    onCommand.mockImplementation(({ command }) => command === "sound.release"
+      ? { ok: true }
+      : new Promise((resolve) => { completions.push(resolve); }));
+    const send = (id, command) => connection.send({ type: "command", id, command,
+      args: command === "setting.toggle" ? { key: "micPassthrough" }
+        : { soundId: "sound-new", ...(command === "sound.press" && { pressId: id }) } });
+    try {
+      for (let index = 0; index < 32; index += 1) {
+        send(`pending-${index}`, index === 31 ? "setting.toggle" : index % 2 ? "sound.press" : "sound.play");
+      }
+      await vi.waitFor(() => expect(completions).toHaveLength(32));
+      for (const command of ["sound.press", "sound.play", "setting.toggle"]) {
+        send(`overflow-${command.replace(".", "-")}`, command);
+        expect(await connection.next()).toMatchObject({ ok: false, code: "busy" });
+      }
+      expect(completions).toHaveLength(32);
+      completions[1]({ ok: true });
+      expect(await connection.next()).toMatchObject({ id: "pending-1", ok: true });
+      send("replacement-press", "sound.press");
+      await vi.waitFor(() => expect(completions).toHaveLength(33));
+      completions[32]({ ok: true });
+      expect(await connection.next()).toMatchObject({ id: "replacement-press", ok: true });
+      send("replacement-play", "sound.play");
+      await vi.waitFor(() => expect(completions).toHaveLength(34));
+      expect(onCommand.mock.calls.some(([message]) => message.command === "sound.release")).toBe(false);
+      completions[33]({ ok: true });
+      expect(await connection.next()).toMatchObject({ id: "replacement-play", ok: true });
+      connection.send({ type: "command", id: "release", command: "sound.release", args: { pressId: "pending-1" } });
+      expect(await connection.next()).toMatchObject({ id: "release", ok: true });
+      expect(onCommand).toHaveBeenLastCalledWith({ command: "sound.release", args: { pressId: expect.stringMatching(/^external-/) } }, undefined);
+    } finally {
+      for (const complete of completions) complete({ ok: true });
+    }
+  });
+
+  it("counts HTTP presses as pending commands and frees capacity after acknowledgement while held", async () => {
+    await create();
+    const completions = [];
+    onCommand.mockImplementation(({ command }) => command === "sound.release"
+      ? { ok: true }
+      : new Promise((resolve) => { completions.push(resolve); }));
+    const press = () => request("/v1/sounds/sound-new/press", { method: "POST" });
+    const pending = Array.from({ length: 32 }, press);
+    try {
+      await vi.waitFor(() => expect(completions).toHaveLength(32));
+      expect(await press()).toEqual({ status: 503, body: { ok: false, code: "busy" } });
+      expect(await request("/v1/sounds/sound-new/play", { method: "POST" })).toEqual({ status: 503, body: { ok: false, code: "busy" } });
+      completions[0]({ ok: true });
+      expect(await pending[0]).toEqual({ status: 200, body: { ok: true, data: { pressId: expect.any(String) } } });
+      const replacement = press();
+      pending.push(replacement);
+      await vi.waitFor(() => expect(completions).toHaveLength(33));
+      expect(onCommand.mock.calls.some(([message]) => message.command === "sound.release")).toBe(false);
+      completions[32]({ ok: true });
+      expect((await replacement).status).toBe(200);
+    } finally {
+      for (const complete of completions) complete({ ok: true });
+      await Promise.all(pending);
+    }
   });
 
   it.each([
@@ -691,6 +945,7 @@ describe("external control protocol and dispatch", () => {
 
   it.each([
     ["/v1/sounds/sound-new/play", {}],
+    ["/v1/sounds/sound-new/press", {}],
     ["/v1/settings/micPassthrough", { toggle: true }],
     ["/v1/volumes/micVirtual", { delta: -0.1 }]
   ])("keeps fully received HTTP %s alive during dispatch and does not cancel a completed response", async (url, body) => {
@@ -706,7 +961,8 @@ describe("external control protocol and dispatch", () => {
     expect(socket.timeoutMs).toBe(0);
     expect(signal.aborted).toBe(false);
     complete({ ok: true });
-    expect(await response).toEqual({ status: 200, body: { ok: true } });
+    expect(await response).toEqual({ status: 200, body: url.endsWith("/press") ? { ok: true, data: { pressId: expect.any(String) } } : { ok: true } });
+    onCommand.mockImplementation(() => ({ ok: true }));
     socket.destroy();
     expect(signal.aborted).toBe(false);
   });
@@ -844,8 +1100,51 @@ describe("external control protocol and dispatch", () => {
     await vi.waitFor(() => expect(onCommand.mock.lastCall[1].aborted).toBe(true));
   });
 
+  it.each(["token", "disable", "port", "LAN", "stop", "invalid-message", "backpressure", "socket-error"])("releases acknowledged session holds synchronously on %s revocation", async (reason) => {
+    let serverSocket;
+    await create({ createWebSocketServer: (options) => {
+      const server = new WebSocketServer(options);
+      server.on("connection", (ws) => { serverSocket = ws; });
+      return server;
+    } });
+    const connection = await session();
+    connection.send({ type: "command", id: "press", command: "sound.press", args: { soundId: "sound-new", pressId: "held" } });
+    expect(await connection.next()).toMatchObject({ id: "press", ok: true });
+    const pressId = onCommand.mock.calls[0][0].args.pressId;
+    const closed = vi.fn();
+    serverSocket.on("close", closed);
+    const assertReleased = () => {
+      expect(onCommand.mock.calls.filter(([message]) => message.command === "sound.release").map(([message]) => message.args.pressId)).toEqual([pressId]);
+      expect(closed).not.toHaveBeenCalled();
+    };
+    const method = ["token", "invalid-message"].includes(reason) ? "close" : "terminate";
+    const original = serverSocket[method].bind(serverSocket);
+    const closing = vi.spyOn(serverSocket, method).mockImplementation((...args) => {
+      assertReleased();
+      return original(...args);
+    });
+    if (reason === "token") await bridge.regenerateToken();
+    else if (reason === "disable") await bridge.setSettings({ enabled: false });
+    else if (reason === "port") await bridge.setSettings({ port: bridge.getState().port + 1 });
+    else if (reason === "LAN") await bridge.setSettings({ allowLan: true });
+    else if (reason === "stop") await bridge.stop();
+    else if (reason === "invalid-message") serverSocket.emit("message", Buffer.from("{"), false);
+    else if (reason === "backpressure") {
+      Object.defineProperty(serverSocket, "bufferedAmount", { configurable: true, value: 8 * 1024 * 1024 + 1 });
+      bridge.updateLiveState({ activeBoardId: "board-b", playback: [] });
+    } else {
+      serverSocket.emit("error", new Error("Socket failed"));
+      assertReleased();
+    }
+    if (reason !== "socket-error") expect(closing).toHaveBeenCalled();
+    expect(onCommand.mock.calls.filter(([message]) => message.command === "sound.release")).toHaveLength(1);
+    closing.mockRestore();
+    serverSocket.terminate();
+  });
+
   it.each(["token", "disable", "port", "LAN", "stop", "invalid-message", "backpressure", "socket-error"].flatMap((reason) => [
     [reason, "sound.play", { soundId: "sound-new" }],
+    [reason, "sound.press", { soundId: "sound-new" }],
     [reason, "setting.toggle", { key: "micPassthrough" }],
     [reason, "volume.adjust", { bus: "micVirtual", delta: 0.2 }]
   ]))("aborts every pending session command synchronously on %s revocation (%s)", async (reason, command, args) => {
@@ -858,13 +1157,14 @@ describe("external control protocol and dispatch", () => {
     const connection = await session();
     const completions = [];
     const played = vi.fn();
-    onCommand.mockImplementation(async (_command, signal) => {
+    onCommand.mockImplementation(async (message, signal) => {
+      if (message.command === "sound.release") return { ok: true };
       await new Promise((resolve) => completions.push(resolve));
       if (signal.aborted) return { ok: false, code: "unavailable" };
       played();
       return { ok: true };
     });
-    for (const id of ["first", "second"]) connection.send({ type: "command", id, command, args });
+    for (const id of ["first", "second"]) connection.send({ type: "command", id, command, args: { ...args, ...(command === "sound.press" && { pressId: id }) } });
     await vi.waitFor(() => expect(onCommand).toHaveBeenCalledTimes(2));
     const closed = vi.fn();
     serverSocket.on("close", closed);
@@ -872,6 +1172,11 @@ describe("external control protocol and dispatch", () => {
     const assertRevoked = () => {
       expect(signals.every((signal) => signal.aborted)).toBe(true);
       expect(closed).not.toHaveBeenCalled();
+      if (command === "sound.press") {
+        const pressIds = onCommand.mock.calls.slice(0, 2).map(([message]) => message.args.pressId);
+        const released = onCommand.mock.calls.filter(([message]) => message.command === "sound.release").map(([message]) => message.args.pressId);
+        expect(released.sort()).toEqual(pressIds.sort());
+      }
     };
     const method = ["token", "invalid-message"].includes(reason) ? "close" : "terminate";
     const original = serverSocket[method].bind(serverSocket);
@@ -904,6 +1209,7 @@ describe("external control protocol and dispatch", () => {
 
   it.each(["token", "disable", "port", "LAN", "stop"].flatMap((reason) => [
     [reason, "/v1/sounds/sound-new/play", {}],
+    [reason, "/v1/sounds/sound-new/press", {}],
     [reason, "/v1/settings/micPassthrough", { toggle: true }],
     [reason, "/v1/volumes/micVirtual", { delta: 0.2 }]
   ]))("aborts dispatched HTTP commands at %s revocation before response closure (%s)", async (reason, url, body) => {
@@ -912,7 +1218,11 @@ describe("external control protocol and dispatch", () => {
     let response;
     listener.once("request", (_req, res) => { response = res; });
     let finish;
-    onCommand.mockImplementation(async (_command, signal) => {
+    onCommand.mockImplementation(async (message, signal) => {
+      if (message.command === "sound.release") {
+        expect(closed).not.toHaveBeenCalled();
+        return { ok: true };
+      }
       await new Promise((resolve) => { finish = resolve; });
       return signal.aborted ? { ok: false, code: "unavailable" } : { ok: true };
     });
@@ -930,6 +1240,9 @@ describe("external control protocol and dispatch", () => {
     else await bridge.stop();
     expect(signal.aborted).toBe(true);
     expect(abort).toHaveBeenCalledOnce();
+    if (url.endsWith("/press")) {
+      expect(onCommand.mock.calls.filter(([message]) => message.command === "sound.release")).toHaveLength(1);
+    }
     finish();
     const result = await pending;
     if (reason === "token") expect(result).toEqual({ status: 503, body: { ok: false, code: "unavailable" } });
@@ -1044,7 +1357,13 @@ describe("external control protocol and dispatch", () => {
     await create();
     const connection = await session();
     for (const [command, args, code] of [
-      ["sound.press", { soundId: "sound-new" }, "unknown-command"],
+      ["sound.unknown", { soundId: "sound-new" }, "unknown-command"],
+      ["sound.press", { soundId: "sound-new" }, "invalid-args"],
+      ["sound.press", { soundId: "sound-new", pressId: "../key" }, "invalid-args"],
+      ["sound.press", { soundId: "sound-new", pressId: "a".repeat(129) }, "invalid-args"],
+      ["sound.press", { soundId: "sound-new", pressId: "key", extra: true }, "invalid-args"],
+      ["sound.release", { pressId: "" }, "invalid-args"],
+      ["sound.release", { pressId: "key", soundId: "sound-new" }, "invalid-args"],
       ["sound.play", { soundId: "../media.wav" }, "invalid-args"],
       ["sound.play", { soundId: "sound-new", path: "/tmp/file" }, "invalid-args"],
       ["sound.play", { soundId: "sound-new", title: {} }, "invalid-args"],
@@ -1060,6 +1379,9 @@ describe("external control protocol and dispatch", () => {
     for (const options of [{ body: { direction: "-1" } }, { raw: "{" }, { body: [] }, { body: { direction: 1, path: "/tmp/x" } }]) {
       expect((await request("/v1/boards/cycle", { method: "POST", ...options })).status).toBe(400);
     }
+    expect((await request("/v1/sounds/sound-new/press", { method: "POST", body: { pressId: "client-generated" } })).status).toBe(400);
+    expect((await request("/v1/presses/bad%2Fid/release", { method: "POST" })).status).toBe(400);
+    expect((await request("/v1/presses/key/release", { method: "POST", body: { extra: true } })).status).toBe(400);
     expect(onCommand).not.toHaveBeenCalled();
   });
 

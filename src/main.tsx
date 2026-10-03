@@ -48,13 +48,13 @@ import { createAudioControlQueue } from "./lib/audioControlQueue";
 import { AudioEngine } from "./lib/audioEngine";
 import { CONTROL_DEFAULT_PORT } from "./lib/controlProtocol";
 import { beginAudioConfiguration, trackAudioConfiguration, waitForAudioConfiguration, watchAudioDeviceChanges } from "./lib/controlReadiness";
-import { createSoundPlayQueue } from "./lib/soundPlayQueue";
+import { SoundTriggers } from "./lib/soundTriggers";
 import type { ControlPlaybackResult, ControlPlaybackVoice, ControlSettingsPatch, ControlStatus } from "./lib/controlProtocol";
 import type { AudioDeviceStatus, MicrophoneProcessingStatus } from "./lib/audioEngine";
 import { findVirtualAudioCandidates, getDefaultDeviceLabel, isSelectableMediaDevice, makeMicrophoneConstraints, normalizeMonitorDeviceId, normalizeSelectableDeviceId } from "./lib/devices";
 import type { VirtualAudioCandidate } from "./lib/devices";
 import { acceleratorLooksReserved, formatBytes, formatDuration, getDefaultSoundEffects, makeBoard, nextBoard, normalizeLibrary, normalizeSoundEffects, now, RETRIGGER_MODES, retriggerModeLabel, soundEffectsAreActive, soundEffectsAreDefault, soundFromImport } from "./lib/model";
-import { claimCaptureSlot, eventToToken, formatAccelerator, MODIFIER_TOKENS, normalizeAccelerator, orderTokens } from "./lib/hotkeys";
+import { hotkeyFallsBackToTap, claimCaptureSlot, eventToToken, formatAccelerator, MODIFIER_TOKENS, normalizeAccelerator, orderTokens } from "./lib/hotkeys";
 import { makeWaveform } from "./lib/waveform";
 import { installDevBridge } from "./lib/devBridge";
 import { TitleBar } from "./titleBar";
@@ -147,15 +147,15 @@ function App() {
     },
     waitForConfiguration: () => waitForAudioConfiguration(() => audioConfigurationRef.current)
   }), []);
-  const queueSoundPlay = useMemo(() => createSoundPlayQueue(), []);
+  const soundTriggers = useMemo(() => new SoundTriggers(() => engineRef.current, () => audioConfigurationRef.current), []);
   const stopSound = useCallback((soundId: string) => {
-    queueSoundPlay.cancel(soundId);
-    engineRef.current?.stop(soundId);
-  }, [queueSoundPlay]);
+    window.sounddeck.cancelPendingControlPlayback(soundId);
+    soundTriggers.stop(soundId);
+  }, [soundTriggers]);
   const stopAllSounds = useCallback(() => {
-    queueSoundPlay.cancelAll();
-    engineRef.current?.stopAll();
-  }, [queueSoundPlay]);
+    window.sounddeck.cancelPendingControlPlayback();
+    soundTriggers.stopAll();
+  }, [soundTriggers]);
   const deviceStatusRef = useRef<AudioDeviceStatus>(defaultAudioDeviceStatus);
   const previousMicrophoneDeviceStatusRef = useRef<AudioDeviceStatus["microphone"] | null>(null);
   const previousMonitorDeviceStatusRef = useRef<AudioDeviceStatus["monitor"] | null>(null);
@@ -317,7 +317,7 @@ function App() {
     const disposeAudio = () => {
       for (const cancellation of controlRequests.current.values()) cancellation.abort();
       controlRequests.current.clear();
-      queueSoundPlay.cancelAll();
+      soundTriggers.stopAll();
       for (const complete of pendingAudioSettingsRef.current.splice(0)) complete(Promise.resolve());
       const engine = engineRef.current;
       engineRef.current = null;
@@ -551,6 +551,7 @@ function App() {
     }
     const results = await window.sounddeck.registerHotkeys(bindings);
     setHotkeyResults(results);
+    void window.sounddeck.getCapabilities().then(setCapabilities).catch(() => undefined);
   }, []);
 
   const corsairConnected = corsairState === "connected";
@@ -561,22 +562,17 @@ function App() {
     void registerHotkeys(library);
   }, [library, draggingSoundId, registerHotkeys, corsairConnected]);
 
-  const triggerSound = useCallback((sound: SoundSlot, external = false, cancellation?: AbortSignal): Promise<ControlPlaybackResult> => queueSoundPlay(sound.id, async (signal) => {
+  const triggerSound = useCallback(async (sound: SoundSlot, pressId?: string, external = false, cancellation?: AbortSignal): Promise<ControlPlaybackResult> => {
     try {
-      if (signal.aborted) return { ok: false, code: "unavailable" };
-      if (external) await waitForAudioConfiguration(() => audioConfigurationRef.current);
-      if (signal.aborted) return { ok: false, code: "unavailable" };
-      if (sound.retriggerMode === "stop" && engineRef.current?.isPlaying(sound.id)) {
-        engineRef.current.stop(sound.id);
-        setMessage(`Stopped ${sound.title}`);
-        return { ok: true };
-      }
-      const started = await engineRef.current?.play(sound, signal, external ? () => waitForAudioConfiguration(() => audioConfigurationRef.current) : undefined);
+      const started = await soundTriggers.trigger(sound, pressId, external, cancellation);
+      if (cancellation?.aborted) return { ok: false, code: "unavailable" };
+      if (started === null) return { ok: true };
       if (!started) {
         setMessage(`No output route enabled for ${sound.title}`);
         return { ok: false, code: "unavailable" };
       }
-      setMessage(`Triggered ${sound.title}`);
+      setMessage(started === true ? `Stopped ${sound.title}` : `Triggered ${sound.title}`);
+      if (started === true) return { ok: true };
       if (!sound.duration || !sound.waveform) {
         void engineRef.current?.preload(sound).then((buffer) => {
           updateSound(sound.id, { duration: buffer.duration, waveform: makeWaveform(buffer), updatedAt: now() });
@@ -584,12 +580,14 @@ function App() {
       }
       return { ok: true };
     } catch (error) {
-      if (signal.aborted) return { ok: false, code: "unavailable" };
+      if (cancellation?.aborted) return { ok: false, code: "unavailable" };
       setMessage(`Could not play ${sound.title}`);
       console.error(error);
       return { ok: false, code: "internal-error" };
     }
-  }, cancellation), [activeBoard?.id, queueSoundPlay]);
+  }, [soundTriggers]);
+
+  useEffect(() => window.sounddeck.onHotkeyRelease(({ pressId }) => soundTriggers.release(pressId)), [soundTriggers]);
 
   useEffect(() => {
     return window.sounddeck.onHotkeyTrigger((binding) => {
@@ -612,7 +610,7 @@ function App() {
         return;
       }
       const sound = library?.boards.flatMap((board) => board.sounds).find((candidate) => candidate.id === binding.soundId);
-      if (sound) void triggerSound(sound);
+      if (sound) void triggerSound(sound, binding.pressId);
     });
   }, [library, triggerSound, stopAllSounds]);
 
@@ -627,21 +625,27 @@ function App() {
       controlRequests.current.set(request.requestId, cancellation);
       return audioControlQueue.enqueue(request, cancellation.signal).finally(() => controlRequests.current.delete(request.requestId));
     }
-    if (command === "sound.play") {
+    if (command === "sound.play" || command === "sound.press") {
       const sound = libraryRef.current?.boards.flatMap((board) => board.sounds).find((candidate) => candidate.id === args.soundId);
       const cancellation = new AbortController();
       controlRequests.current.set(request.requestId, cancellation);
-      const result = sound ? triggerSound(sound, true, cancellation.signal) : Promise.resolve<ControlPlaybackResult>({ ok: false, code: "not-found" });
+      const result = sound ? triggerSound(sound, command === "sound.press" ? args.pressId : undefined, true, cancellation.signal) : Promise.resolve<ControlPlaybackResult>({ ok: false, code: "not-found" });
       return result.finally(() => controlRequests.current.delete(request.requestId));
     }
+    if (command === "sound.release") {
+      soundTriggers.release(args.pressId);
+      return;
+    }
     if (command === "sound.stop") {
-      stopSound(args.soundId);
+      // Preload already cancelled requests before this stop's arrival. Do not
+      // cancel later requests waiting for acceptance behind this callback.
+      soundTriggers.stop(args.soundId);
       return;
     }
     if (command === "board.cycle") {
       cycleBoard(args.direction);
     }
-  }), [library, triggerSound, stopSound]);
+  }), [library, triggerSound, stopSound, soundTriggers]);
 
   // Command subscriptions are installed, but initial audio routing may still
   // be pending when the library first becomes available.
@@ -1026,7 +1030,7 @@ function App() {
       if (!result.canceled) setMessage("Could not read that board file");
       return;
     }
-    const imported = result.board;
+    const imported = normalizeLibrary({ ...library!, boards: [result.board], activeBoardId: result.board.id }).boards[0];
     if (library) {
       const boardId = library.activeBoardId;
       const current = library.boards.find((board) => board.id === boardId);
@@ -1280,6 +1284,8 @@ function App() {
                   hotkeyProblem={hotkeyResults.some((result) => result.soundId === sound.id && !result.ok)}
                   onPlay={() => void triggerSound(sound)}
                   onStop={() => stopSound(sound.id)}
+                  onPress={(pressId) => void triggerSound(sound, pressId)}
+                  onRelease={(pressId) => soundTriggers.release(pressId)}
                   onEditClip={() => setEditingClipId(sound.id)}
                   onSelect={() => setSelectedSoundId(sound.id)}
                   onDelete={() => deleteSound(sound.id)}
@@ -1290,7 +1296,7 @@ function App() {
               ))}
               {!activeBoard.sounds.length && <div className="empty">Drop sounds to build this board.</div>}
             </div>
-            {selectedSound && <SoundEditor sound={selectedSound} onChange={(patch) => updateSound(selectedSound.id, patch)} onClose={() => setSelectedSoundId("")} />}
+            {selectedSound && <SoundEditor sound={selectedSound} hotkeyTapFallback={hotkeyFallsBackToTap(selectedSound.hotkey, hotkeyResults, capabilities?.hotkeys)} onChange={(patch) => updateSound(selectedSound.id, patch)} onClose={() => setSelectedSoundId("")} />}
             {editingClipSound && (
               <ClipEditor
                 sound={editingClipSound}
@@ -1547,6 +1553,8 @@ function SoundPad(props: {
   hotkeyProblem: boolean;
   onPlay: () => void;
   onStop: () => void;
+  onPress: (pressId: string) => void;
+  onRelease: (pressId: string) => void;
   onEditClip: () => void;
   onSelect: () => void;
   onDelete: () => void;
@@ -1555,6 +1563,27 @@ function SoundPad(props: {
   onGrabStart: (event: React.PointerEvent) => void;
 }) {
   const { sound } = props;
+  const heldPointers = useRef(new Map<number, string>());
+  const heldKeys = useRef(new Map<string, string>());
+  const onReleaseRef = useRef(props.onRelease);
+  onReleaseRef.current = props.onRelease;
+
+  const releasePointer = (event: React.PointerEvent) => {
+    const pressId = heldPointers.current.get(event.pointerId);
+    if (!pressId) return;
+    heldPointers.current.delete(event.pointerId);
+    props.onRelease(pressId);
+  };
+  const releaseKeys = () => {
+    for (const pressId of heldKeys.current.values()) onReleaseRef.current(pressId);
+    heldKeys.current.clear();
+  };
+  useEffect(() => () => {
+    for (const pressId of heldPointers.current.values()) onReleaseRef.current(pressId);
+    heldPointers.current.clear();
+    releaseKeys();
+  }, [sound.triggerMode]);
+
   const clipDuration = Number.isFinite(sound.duration)
     ? Math.max(0, Math.min(sound.trimEndSec ?? sound.duration!, sound.duration!) - Math.max(0, sound.trimStartSec ?? 0))
     : sound.duration;
@@ -1582,9 +1611,47 @@ function SoundPad(props: {
         </div>
       </button>
       <div className="padControls">
-        <button title={props.playing ? "Stop" : "Play"} onClick={props.playing ? props.onStop : props.onPlay}>
-          {props.playing ? <Square size={15} /> : <Play size={15} />}
-        </button>
+        {sound.triggerMode === "hold" ? (
+          <button
+            title="Hold to play"
+            aria-label="Hold to play"
+            style={{ touchAction: "none" }}
+            onPointerDown={(event) => {
+              if (event.button !== 0 || heldPointers.current.has(event.pointerId)) return;
+              event.preventDefault();
+              event.stopPropagation();
+              event.currentTarget.setPointerCapture(event.pointerId);
+              const pressId = crypto.randomUUID();
+              heldPointers.current.set(event.pointerId, pressId);
+              props.onPress(pressId);
+            }}
+            onPointerUp={releasePointer}
+            onPointerCancel={releasePointer}
+            onLostPointerCapture={releasePointer}
+            onKeyDown={(event) => {
+              if (event.key !== " " && event.key !== "Enter") return;
+              event.preventDefault();
+              if (event.repeat || heldKeys.current.has(event.key)) return;
+              const pressId = crypto.randomUUID();
+              heldKeys.current.set(event.key, pressId);
+              props.onPress(pressId);
+            }}
+            onKeyUp={(event) => {
+              const pressId = heldKeys.current.get(event.key);
+              if (!pressId) return;
+              event.preventDefault();
+              heldKeys.current.delete(event.key);
+              props.onRelease(pressId);
+            }}
+            onBlur={releaseKeys}
+          >
+            <Play size={15} />
+          </button>
+        ) : (
+          <button title={props.playing ? "Stop" : "Play"} onClick={props.playing ? props.onStop : props.onPlay}>
+            {props.playing ? <Square size={15} /> : <Play size={15} />}
+          </button>
+        )}
         <button title="Edit clip" onClick={props.onEditClip}><Scissors size={15} /></button>
         <button title="Loop" className={sound.loop ? "toggled" : ""} onClick={() => props.onChange({ loop: !sound.loop })}>∞</button>
         <button title="Settings" onClick={props.onSelect}><Settings size={15} /></button>
@@ -1771,7 +1838,7 @@ function VolumeField({ label, value, onChange }: { label: string; value: number;
   );
 }
 
-function SoundEditor({ sound, onChange, onClose }: { sound: SoundSlot; onChange: (patch: Partial<SoundSlot>) => void; onClose: () => void }) {
+function SoundEditor({ sound, hotkeyTapFallback, onChange, onClose }: { sound: SoundSlot; hotkeyTapFallback: boolean; onChange: (patch: Partial<SoundSlot>) => void; onClose: () => void }) {
   const imageInputRef = useRef<HTMLInputElement>(null);
   const panelRef = useRef<HTMLElement>(null);
 
@@ -1819,10 +1886,13 @@ function SoundEditor({ sound, onChange, onClose }: { sound: SoundSlot; onChange:
       <label>Fade in ms<input type="number" min="0" value={sound.fadeInMs} onChange={(event) => onChange({ fadeInMs: Number(event.target.value) })} /></label>
       <label>Fade out ms<input type="number" min="0" value={sound.fadeOutMs} onChange={(event) => onChange({ fadeOutMs: Number(event.target.value) })} /></label>
       <label>Output<select value={sound.outputTarget} onChange={(event) => onChange({ outputTarget: event.target.value as SoundSlot["outputTarget"] })}><option value="both">Headphones + virtual mic</option><option value="monitor">Headphones</option><option value="virtual">Virtual mic</option></select></label>
-      <label>Retrigger<select value={sound.retriggerMode} onChange={(event) => onChange({ retriggerMode: event.target.value as SoundSlot["retriggerMode"] })}>{RETRIGGER_MODES.map((mode) => <option key={mode.value} value={mode.value}>{mode.label}</option>)}</select></label>
+      <label>Trigger<select value={sound.triggerMode} onChange={(event) => onChange({ triggerMode: event.target.value as SoundSlot["triggerMode"] })}><option value="tap">Tap</option><option value="hold">Hold</option></select></label>
+      <label>Retrigger<select disabled={sound.triggerMode === "hold"} value={sound.retriggerMode} onChange={(event) => onChange({ retriggerMode: event.target.value as SoundSlot["retriggerMode"] })}>{RETRIGGER_MODES.map((mode) => <option key={mode.value} value={mode.value}>{mode.label}</option>)}</select></label>
+      {sound.triggerMode === "hold" && <p className="inspectorHint">Hold always starts fresh on press and stops on release.</p>}
       <label className="check"><input type="checkbox" checked={sound.loop} onChange={(event) => onChange({ loop: event.target.checked })} /> Loop</label>
       <label className="check"><input type="checkbox" checked={sound.soloPlay} onChange={(event) => onChange({ soloPlay: event.target.checked })} /> Stop other sounds when played</label>
       <HotkeyCapture value={sound.hotkey} onChange={(hotkey) => onChange({ hotkey })} />
+      {sound.triggerMode === "hold" && hotkeyTapFallback && <p className="inspectorHint">This hotkey cannot report release, so it plays as Tap.</p>}
     </aside>
   );
 }

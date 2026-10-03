@@ -25,7 +25,7 @@ function createControlRenderer({ send, timeoutMs = 5000 }) {
         if (!request) return;
         // Plays and commands awaiting receipt can fail immediately. Accepted
         // mutations must let the FIFO distinguish queued work from applied work.
-        if (message.command === "sound.play" || !request.received) {
+        if (["sound.play", "sound.press"].includes(message.command) || !request.received) {
           cleanup();
           pending.delete(requestId);
           resolve({ ok: false, code: "unavailable" });
@@ -69,7 +69,7 @@ function createControlRenderer({ send, timeoutMs = 5000 }) {
     if (!request) return false;
     const { command, args } = request.message;
     let response;
-    if (command === "sound.play") {
+    if (["sound.play", "sound.press"].includes(command)) {
       if (!result || (result.ok !== true && (result.ok !== false || !["unavailable", "not-found", "internal-error"].includes(result.code)))) {
         throw new Error("Invalid control playback result");
       }

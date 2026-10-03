@@ -39,6 +39,7 @@ interface ActiveVoice {
   positionOffset: number;
   loop: boolean;
   cleanupHandle?: number;
+  releaseFadeEndsAt?: number;
   cleanedUp?: boolean;
 }
 
@@ -213,7 +214,8 @@ export class AudioEngine {
     return buffer;
   }
 
-  async play(sound: SoundSlot, signal?: AbortSignal, waitForRouting?: () => Promise<void>) {
+  async play(sound: SoundSlot, signal?: AbortSignal, options: { fresh?: boolean; waitForRouting?: () => Promise<void> } | (() => Promise<void>) = {}): Promise<string | false> {
+    const { fresh, waitForRouting } = typeof options === "function" ? { waitForRouting: options } : options;
     if (signal?.aborted || !this.hasLiveRoute(sound.outputTarget)) return false;
     const buffer = await this.preload(sound);
     if (waitForRouting) await waitForRouting();
@@ -224,7 +226,7 @@ export class AudioEngine {
     if (signal?.aborted || this.disposed || !this.hasLiveRoute(sound.outputTarget)) return false;
     // Only stop other voices once nothing else can bail out; a muted trigger must not silence what is playing.
     if (sound.soloPlay) this.stopAllExcept(sound.id);
-    if (sound.retriggerMode === "restart") this.stop(sound.id);
+    if (!fresh && sound.retriggerMode === "restart") this.stop(sound.id);
     const contexts = this.contextsForTarget(sound.outputTarget);
     const trimStart = Math.min(Math.max(0, sound.trimStartSec ?? 0), buffer.duration);
     const trimEnd = Math.min(Math.max(trimStart + 0.01, sound.trimEndSec ?? buffer.duration), buffer.duration);
@@ -276,35 +278,46 @@ export class AudioEngine {
 
     this.active.set(sound.id, [...(this.active.get(sound.id) || []), voice]);
     this.emitStatus();
-    return true;
+    return voice.id;
   }
 
   stop(soundId: string) {
     const voices = this.active.get(soundId) || [];
-    for (const voice of voices) this.stopVoice(voice, voice.fadeOutMs / 1000);
+    for (const voice of voices) this.fadeVoice(voice, voice.fadeOutMs / 1000);
     this.active.delete(soundId);
     this.stopTails(soundId);
     this.emitStatus();
   }
 
+  stopVoice(soundId: string, voiceId: string) {
+    const voice = [...(this.active.get(soundId) || []), ...(this.tails.get(soundId) || [])].find((candidate) => candidate.id === voiceId);
+    if (!voice || voice.releaseFadeEndsAt !== undefined) return;
+    if (voice.cleanupHandle !== undefined) window.clearTimeout(voice.cleanupHandle);
+    this.removeTail(soundId, voiceId);
+    voice.releaseFadeEndsAt = performance.now() + voice.fadeOutMs;
+    voice.cleanupHandle = this.fadeVoice(voice, voice.fadeOutMs / 1000);
+    this.addTail(soundId, voice);
+    this.removeVoice(soundId, voiceId);
+  }
+
   stopAllExcept(soundId: string) {
     for (const [activeId, voices] of this.active) {
       if (activeId === soundId) continue;
-      for (const voice of voices) this.stopVoice(voice, 0.03);
+      for (const voice of voices) this.fadeVoice(voice, 0.03);
       this.active.delete(activeId);
     }
     for (const tailId of [...this.tails.keys()]) {
-      if (tailId !== soundId) this.stopTails(tailId);
+      if (tailId !== soundId) this.stopTails(tailId, 0.03);
     }
     this.emitStatus();
   }
 
   stopAll() {
     for (const voices of this.active.values()) {
-      for (const voice of voices) this.stopVoice(voice, 0.03);
+      for (const voice of voices) this.fadeVoice(voice, 0.03);
     }
     this.active.clear();
-    this.stopAllTails();
+    this.stopAllTails(0.03);
     this.emitStatus();
   }
 
@@ -1056,7 +1069,7 @@ export class AudioEngine {
     this.deviceStatusCallback(this.deviceStatus);
   }
 
-  private stopVoice(voice: ActiveVoice, fadeSeconds: number) {
+  private fadeVoice(voice: ActiveVoice, fadeSeconds: number) {
     voice.gains.forEach((gain) => {
       const now = gain.context.currentTime;
       const currentGain = Math.max(0.0001, gain.gain.value);
@@ -1067,15 +1080,9 @@ export class AudioEngine {
       }
       else gain.gain.setValueAtTime(0.0001, now);
     });
-    window.setTimeout(() => {
-      voice.sources.forEach((source) => {
-        try {
-          source.stop();
-        } catch {
-          // Already stopped.
-        }
-      });
+    return window.setTimeout(() => {
       this.cleanupVoice(voice);
+      this.removeTail(voice.soundId, voice.id);
     }, fadeSeconds * 1000 + 20);
   }
 
@@ -1099,24 +1106,44 @@ export class AudioEngine {
     else this.tails.delete(soundId);
   }
 
-  private stopTails(soundId: string) {
-    for (const voice of this.tails.get(soundId) || []) this.cleanupVoice(voice);
-    this.tails.delete(soundId);
+  private stopTails(soundId: string, stopFadeSeconds?: number) {
+    for (const voice of this.tails.get(soundId) || []) {
+      if (!this.disposed && voice.releaseFadeEndsAt !== undefined) {
+        // A released Hold voice is still audible during its fade. Stops may
+        // shorten that fade, but must neither cut it nor extend its deadline.
+        const remaining = Math.max(0, (voice.releaseFadeEndsAt - performance.now()) / 1000);
+        const fadeSeconds = Math.min(remaining, stopFadeSeconds ?? voice.fadeOutMs / 1000);
+        if (voice.cleanupHandle !== undefined) window.clearTimeout(voice.cleanupHandle);
+        voice.releaseFadeEndsAt = performance.now() + fadeSeconds * 1000;
+        voice.cleanupHandle = this.fadeVoice(voice, fadeSeconds);
+      } else {
+        this.cleanupVoice(voice);
+        this.removeTail(soundId, voice.id);
+      }
+    }
   }
 
-  private stopAllTails() {
-    for (const tailId of [...this.tails.keys()]) this.stopTails(tailId);
+  private stopAllTails(stopFadeSeconds?: number) {
+    for (const tailId of [...this.tails.keys()]) this.stopTails(tailId, stopFadeSeconds);
   }
 
   private cleanupVoice(voice: ActiveVoice) {
     if (voice.cleanedUp) return;
     voice.cleanedUp = true;
+    // Stop looping sources before cancelling the fade's deferred cleanup.
+    for (const source of voice.sources) {
+      source.onended = null;
+      try {
+        source.stop();
+      } catch {
+        // Already stopped.
+      }
+    }
     if (voice.cleanupHandle !== undefined) {
       window.clearTimeout(voice.cleanupHandle);
       voice.cleanupHandle = undefined;
     }
     for (const source of voice.sources) {
-      source.onended = null;
       source.disconnect();
     }
     for (const gain of voice.gains) gain.disconnect();

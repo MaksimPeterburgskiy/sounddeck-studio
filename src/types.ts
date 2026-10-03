@@ -55,6 +55,7 @@ export interface SoundSlot {
   loop: boolean;
   soloPlay: boolean;
   retriggerMode: RetriggerMode;
+  triggerMode: "tap" | "hold";
   hotkey: string;
   outputTarget: OutputTarget;
   waveform?: number[];
@@ -145,6 +146,14 @@ export interface HotkeyResult extends HotkeyBinding {
   reason: string;
 }
 
+export interface HotkeyTrigger extends HotkeyBinding {
+  pressId?: string;
+}
+
+export interface HotkeyRelease extends HotkeyBinding {
+  pressId: string;
+}
+
 export type CorsairState = "unavailable" | "idle" | "connecting" | "connected" | "disconnected";
 
 export interface AppCapabilities {
@@ -223,7 +232,8 @@ declare global {
       getStartupSettings: () => Promise<StartupSettings>;
       setRunAtStartup: (enabled: boolean, options?: { hideOnStartup?: boolean }) => Promise<StartupSettings & { ok: boolean }>;
       getPathForFile: (file: File) => string;
-      onHotkeyTrigger: (callback: (binding: HotkeyBinding) => void) => () => void;
+      onHotkeyTrigger: (callback: (binding: HotkeyTrigger) => void) => () => void;
+      onHotkeyRelease: (callback: (binding: HotkeyRelease) => void) => () => void;
       getControlSettings: () => Promise<ControlStatus>;
       setControlSettings: (patch: ControlSettingsPatch) => Promise<ControlStatus>;
       regenerateControlToken: () => Promise<ControlStatus>;
@@ -231,6 +241,7 @@ declare global {
       controlReady: () => Promise<{ ok: boolean }>;
       onControlStatus: (callback: (status: ControlStatus) => void) => () => void;
       onControlCommand: (callback: (command: RendererControlCommand) => RendererControlResult | void | Promise<RendererControlResult | void>) => () => void;
+      cancelPendingControlPlayback: (soundId?: string) => void;
       getCorsairStatus: () => Promise<CorsairState>;
       onCorsairStatus: (callback: (state: CorsairState) => void) => () => void;
       onCorsairKey: (callback: (key: string) => void) => () => void;

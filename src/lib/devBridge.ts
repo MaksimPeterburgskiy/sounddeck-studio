@@ -139,6 +139,9 @@ export function installDevBridge() {
     getPathForFile(file: File) {
       return file.name;
     },
+    onHotkeyRelease() {
+      return () => undefined;
+    },
     onHotkeyTrigger() {
       return () => undefined;
     },
@@ -163,6 +166,7 @@ export function installDevBridge() {
     onControlCommand() {
       return () => undefined;
     },
+    cancelPendingControlPlayback() {},
     async getCorsairStatus() {
       return "unavailable";
     },

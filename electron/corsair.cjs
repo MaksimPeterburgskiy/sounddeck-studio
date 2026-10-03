@@ -9,8 +9,8 @@ function isCorsairSupportedPlatform(platform = process.platform) {
   return platform === "win32" || platform === "darwin";
 }
 
-function createCorsairBridge({ onKey, onStateChange }) {
-  if (!isCorsairSupportedPlatform()) {
+function createCorsairBridge({ onKey, onStateChange, sdk: suppliedSdk, platform = process.platform }) {
+  if (!isCorsairSupportedPlatform(platform)) {
     return {
       start: () => {},
       stop: () => {},
@@ -23,7 +23,7 @@ function createCorsairBridge({ onKey, onStateChange }) {
   let sdk = null;
   let loadError = "";
   try {
-    sdk = require("cue-sdk");
+    sdk = suppliedSdk === undefined ? require("cue-sdk") : suppliedSdk;
   } catch (error) {
     loadError = error.message;
   }
@@ -43,8 +43,8 @@ function createCorsairBridge({ onKey, onStateChange }) {
     const { error } = sdk.CorsairSubscribeForEvents((event) => {
       const data = event?.data;
       if (!data || data.id !== sdk.CorsairEventId.CEI_KeyEvent) return;
-      if (!data.isPressed) return;
-      if (data.keyId >= GKEY_MIN && data.keyId <= GKEY_MAX) onKey?.(`G${data.keyId}`);
+      if (typeof data.isPressed !== "boolean") return;
+      if (data.keyId >= GKEY_MIN && data.keyId <= GKEY_MAX) onKey?.(`G${data.keyId}`, data.isPressed);
     });
     subscribed = error === sdk.CorsairError.CE_Success;
   }
@@ -97,4 +97,51 @@ function isGKeyAccelerator(accelerator) {
   return GKEY_ACCELERATOR_PATTERN.test(String(accelerator || "").trim());
 }
 
-module.exports = { createCorsairBridge, isCorsairSupportedPlatform, isGKeyAccelerator };
+function createCorsairPressTracker({ onTrigger, onRelease, isSameTarget }) {
+  let bindings = new Map();
+  let suspended = false;
+  const presses = new Map();
+
+  function release(key) {
+    const press = presses.get(key);
+    if (!press) return;
+    presses.delete(key);
+    onRelease(press.binding, press.token);
+  }
+
+  function releaseAll(keepBindings) {
+    for (const [key, press] of presses) {
+      if (isSameTarget(press.binding, keepBindings?.get(key))) continue;
+      release(key);
+    }
+  }
+
+  return {
+    register(nextBindings) {
+      releaseAll(nextBindings);
+      bindings = nextBindings;
+    },
+    onKey(key, isPressed) {
+      if (!isPressed) {
+        release(key);
+        return;
+      }
+      if (suspended || presses.has(key)) return;
+      const binding = bindings.get(key);
+      if (!binding) return;
+      const token = {};
+      presses.set(key, { binding, token });
+      onTrigger(binding, token);
+    },
+    setSuspended(value) {
+      suspended = Boolean(value);
+      if (suspended) releaseAll();
+    },
+    onStateChange(state) {
+      if (state !== "connected") releaseAll();
+    },
+    releaseAll
+  };
+}
+
+module.exports = { createCorsairBridge, createCorsairPressTracker, isCorsairSupportedPlatform, isGKeyAccelerator };

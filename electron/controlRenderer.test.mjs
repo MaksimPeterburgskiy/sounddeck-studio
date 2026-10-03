@@ -38,12 +38,12 @@ describe("renderer control acknowledgements", () => {
     expect(await playback).toEqual({ ok: false, code: "not-found" });
   });
 
-  it("times out receipt but keeps accepted commands pending through slow saves and routing", async () => {
+  it.each(["sound.play", "sound.press"])("times out receipt but keeps accepted %s pending through slow saves and routing", async (name) => {
     vi.useFakeTimers();
     const send = vi.fn();
     const bridge = createControlRenderer({ send });
     const completed = vi.fn();
-    const playback = bridge.dispatch({ command: "sound.play", args: { soundId: "sound-a" } }).then(completed);
+    const playback = bridge.dispatch({ command: name, args: { soundId: "sound-a", ...(name === "sound.press" && { pressId: "held" }) } }).then(completed);
     const setting = bridge.dispatch({ command: "setting.toggle", args: { key: "micPassthrough" } });
     const volumeCompleted = vi.fn();
     const volume = bridge.dispatch(command).then(volumeCompleted);
@@ -62,11 +62,11 @@ describe("renderer control acknowledgements", () => {
     expect(completed).toHaveBeenCalledExactlyOnceWith({ ok: true });
   });
 
-  it("relays operation cancellation without disturbing concurrent requests", async () => {
+  it.each(["sound.play", "sound.press"])("relays %s cancellation without disturbing concurrent requests", async (name) => {
     const send = vi.fn();
     const bridge = createControlRenderer({ send });
     const controller = new AbortController();
-    const first = bridge.dispatch({ command: "sound.play", args: { soundId: "sound" } }, controller.signal);
+    const first = bridge.dispatch({ command: name, args: { soundId: "sound", ...(name === "sound.press" && { pressId: "held" }) } }, controller.signal);
     const requestId = send.mock.lastCall[0].requestId;
     const second = bridge.dispatch(command);
     const otherId = send.mock.lastCall[0].requestId;
@@ -96,11 +96,11 @@ describe("renderer control acknowledgements", () => {
     expect(await operation).toEqual({ ok: false, code: "unavailable" });
   });
 
-  it("settles revoked playback and teardown even if cancellation delivery fails", async () => {
+  it.each(["sound.play", "sound.press"])("settles revoked %s and teardown even if cancellation delivery fails", async (name) => {
     const send = vi.fn();
     const bridge = createControlRenderer({ send });
     const controller = new AbortController();
-    const playback = bridge.dispatch({ command: "sound.play", args: { soundId: "sound-a" } }, controller.signal);
+    const playback = bridge.dispatch({ command: name, args: { soundId: "sound-a", ...(name === "sound.press" && { pressId: "held" }) } }, controller.signal);
     const mutation = bridge.dispatch(command);
     send.mockImplementation(() => { throw new Error("Renderer gone"); });
     controller.abort();
