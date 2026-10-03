@@ -25,7 +25,7 @@ function createControlRenderer({ send, timeoutMs = 5000 }) {
         if (!request) return;
         // A deadline must await renderer acknowledgement even for playback.
         // Disconnects retain their existing revocation behavior.
-        if (!request.received || (message.command === "sound.play" && reason !== "operation-timeout")) {
+        if (!request.received || (["sound.play", "sound.press"].includes(message.command) && reason !== "operation-timeout")) {
           cleanup();
           pending.delete(requestId);
           resolve({ ok: false, code: "unavailable" });
@@ -77,7 +77,7 @@ function createControlRenderer({ send, timeoutMs = 5000 }) {
     if (!request) return false;
     const { command, args } = request.message;
     let response;
-    if (command === "sound.play") {
+    if (["sound.play", "sound.press"].includes(command)) {
       if (!result || (result.ok !== true && (result.ok !== false || !["unavailable", "not-found", "internal-error"].includes(result.code)))) {
         throw new Error("Invalid control playback result");
       }

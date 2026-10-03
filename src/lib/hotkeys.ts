@@ -4,6 +4,8 @@
 // "A+S+D") because matching happens in a low-level keyboard hook, not
 // globalShortcut. The same token names are understood by electron/hotkeys.cjs.
 
+import type { AppCapabilities, HotkeyResult } from "../types";
+
 export const MODIFIER_TOKENS = ["Ctrl", "Alt", "Shift", "Meta"];
 
 const GKEY_PATTERN = /^G([1-9]|1[0-9]|20)$/i;
@@ -126,6 +128,18 @@ export function normalizeAccelerator(value: string): string {
   if (GKEY_PATTERN.test(trimmed)) return trimmed.toUpperCase();
   const tokens = trimmed.split("+").map((token) => token.trim()).filter(Boolean).map(normalizeToken);
   return orderTokens(tokens).join("+");
+}
+
+export function hotkeyFallsBackToTap(value: string, results: HotkeyResult[], capabilities?: AppCapabilities["hotkeys"]): boolean {
+  const accelerator = normalizeAccelerator(value);
+  if (!accelerator || GKEY_PATTERN.test(accelerator)) return false;
+  if (capabilities?.globalShortcutFallbackAvailable && (!capabilities.advancedHookAvailable || capabilities.lastFailureReason)) return true;
+  const tokens = accelerator.split("+");
+  return results.some((result) => {
+    if (!result.ok) return false;
+    const other = normalizeAccelerator(result.accelerator).split("+");
+    return other.length > tokens.length && tokens.every((token) => other.includes(token));
+  });
 }
 
 const displayNames: Record<string, string> = {

@@ -11,7 +11,7 @@ const { createCorsairBridge, isCorsairSupportedPlatform, isGKeyAccelerator } = r
 const { createExternalControlBridge, launcherPath } = require("./externalControl.cjs");
 const { createControlRenderer } = require("./controlRenderer.cjs");
 const { createLibrarySaveQueue, createAtomicLibrarySave } = require("./librarySaveQueue.cjs");
-const { createHotkeyEngine } = require("./hotkeys.cjs");
+const { createHotkeyEngine, isSameHotkeyTarget } = require("./hotkeys.cjs");
 const { buildCropArgs } = require("./ffmpegArgs.cjs");
 const {
   packagedNativeToolPath,
@@ -99,20 +99,56 @@ function handleTrustedIpc(channel, handler) {
   });
 }
 
-const hotkeyEngine = createHotkeyEngine({
-  onTrigger: (binding) => sendToMainWindow("hotkey-trigger", binding)
-});
+const hotkeyPresses = new Map();
+const corsairPresses = new Map();
+
+function triggerHotkey(binding, pressToken) {
+  if (!pressToken) {
+    sendToMainWindow("hotkey-trigger", binding);
+    return;
+  }
+  const event = { ...binding, pressId: crypto.randomUUID() };
+  hotkeyPresses.set(pressToken, event);
+  sendToMainWindow("hotkey-trigger", event);
+}
+
+function releaseHotkey(_binding, pressToken) {
+  const event = hotkeyPresses.get(pressToken);
+  if (!event) return;
+  hotkeyPresses.delete(pressToken);
+  sendToMainWindow("hotkey-release", event);
+}
+
+function releaseCorsairPresses(keepBindings) {
+  for (const [key, pressToken] of corsairPresses) {
+    if (isSameHotkeyTarget(hotkeyPresses.get(pressToken), keepBindings?.get(key))) continue;
+    releaseHotkey(null, pressToken);
+    corsairPresses.delete(key);
+  }
+}
+
+const hotkeyEngine = createHotkeyEngine({ onTrigger: triggerHotkey, onRelease: releaseHotkey });
 
 const corsair = createCorsairBridge({
-  onKey: (key) => {
+  onKey: (key, isPressed) => {
+    if (!isPressed) {
+      releaseHotkey(null, corsairPresses.get(key));
+      corsairPresses.delete(key);
+      return;
+    }
     sendToMainWindow("corsair-gkey", key);
     // While capturing, the pressed G-key is being recorded as a new bind;
     // firing its existing binding here would play/stop/switch mid-capture.
     if (hotkeyCaptureActive) return;
     const binding = corsairBindings.get(key);
-    if (binding) sendToMainWindow("hotkey-trigger", binding);
+    if (binding && !corsairPresses.has(key)) {
+      const pressToken = {};
+      corsairPresses.set(key, pressToken);
+      triggerHotkey(binding, pressToken);
+    }
   },
   onStateChange: (state) => {
+    if (state !== "connected") releaseCorsairPresses();
     sendToMainWindow("corsair-status", state);
   }
 });
@@ -135,9 +171,9 @@ const externalControl = createExternalControlBridge({
   appPath: launcherPath(process.execPath, process.platform, app.isPackaged, process.env),
   onStateChange: (state) => sendToMainWindow("control-status", state),
   onCommand: ({ command, args }, signal, deadlineSignal) => {
-    if (hotkeyCaptureActive) return { ok: false, code: "busy" };
+    if (hotkeyCaptureActive && command !== "sound.release") return { ok: false, code: "busy" };
     if (!controlRendererReady || !mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return { ok: false, code: "unavailable" };
-    if (command === "sound.play" || command.startsWith("setting.") || command.startsWith("volume.")) return controlRenderer.dispatch({ command, args }, signal, deadlineSignal);
+    if (command === "sound.play" || command === "sound.press" || command.startsWith("setting.") || command.startsWith("volume.")) return controlRenderer.dispatch({ command, args }, signal, deadlineSignal);
     const binding = { accelerator: "" };
     if (command === "playback.stopAll") binding.type = "stop-all";
     else if (command === "board.activate") Object.assign(binding, { type: "board", boardId: args.boardId });
@@ -156,6 +192,7 @@ const shutdownLifecycle = createShutdownLifecycle({
     hotkeyCaptureActive = false;
     resetControlRenderer();
     hotkeyEngine.stop();
+    releaseCorsairPresses();
     corsair.stop();
     void externalControl.stop();
     if (updateCheckTimer) {
@@ -905,6 +942,7 @@ function registerHotkeys(bindings) {
     }
     keyboardBindings.push(binding);
   }
+  releaseCorsairPresses(corsairBindings);
   results.push(...hotkeyEngine.register(keyboardBindings));
   return results;
 }
@@ -1378,6 +1416,7 @@ handleTrustedIpc("hotkeys:register", async (_event, bindings) => registerHotkeys
 handleTrustedIpc("hotkeys:capture", (_event, active, token) => {
   if (!controlRendererToken || token !== controlRendererToken) return { ok: false };
   hotkeyCaptureActive = Boolean(active);
+  if (hotkeyCaptureActive) releaseCorsairPresses();
   hotkeyEngine.setSuspended(hotkeyCaptureActive);
   return { ok: true };
 });

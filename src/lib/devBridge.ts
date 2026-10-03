@@ -139,6 +139,9 @@ export function installDevBridge() {
     getPathForFile(file: File) {
       return file.name;
     },
+    onHotkeyRelease() {
+      return () => undefined;
+    },
     onHotkeyTrigger() {
       return () => undefined;
     },

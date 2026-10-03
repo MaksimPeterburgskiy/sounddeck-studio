@@ -255,6 +255,117 @@ describe("hotkey engine matching", () => {
   });
 });
 
+describe("hotkey engine releases", () => {
+  it("keeps a held press across unchanged registrations and releases its original token", () => {
+    const onRelease = vi.fn();
+    const { engine, onTrigger } = makeEngine({ onRelease });
+    const binding = { type: "sound", soundId: "held", boardId: "board", accelerator: "Ctrl+A" };
+    engine.register([binding]);
+    press("Ctrl");
+    press("A");
+    const pressToken = onTrigger.mock.calls[0][1];
+
+    engine.register([{ ...binding }, { type: "sound", soundId: "other", accelerator: "B" }]);
+    engine.register([{ ...binding, accelerator: "A+Ctrl" }]);
+    expect(onRelease).not.toHaveBeenCalled();
+    expect(onTrigger).toHaveBeenCalledTimes(1);
+    release("A");
+    expect(onRelease).toHaveBeenCalledExactlyOnceWith(binding, pressToken);
+  });
+
+  it.each([
+    [],
+    [{ type: "sound", soundId: "replacement", boardId: "board", accelerator: "A" }],
+    [{ type: "sound", soundId: "held", boardId: "other-board", accelerator: "A" }],
+    [{ type: "sound", soundId: "held", boardId: "board", accelerator: "B" }]
+  ])("releases an old press when its binding is removed or changed (%j)", (...nextBindings) => {
+    const onRelease = vi.fn();
+    const { engine, onTrigger } = makeEngine({ onRelease });
+    const binding = { type: "sound", soundId: "held", boardId: "board", accelerator: "A" };
+    engine.register([binding]);
+    press("A");
+    const pressToken = onTrigger.mock.calls[0][1];
+    engine.register(nextBindings);
+    release("A");
+    expect(onRelease).toHaveBeenCalledExactlyOnceWith(binding, pressToken);
+  });
+
+  it("keeps a deferred prefix trigger across unchanged registrations", () => {
+    const { engine, onTrigger } = makeEngine();
+    const bindings = [
+      { type: "sound", soundId: "prefix", accelerator: "A" },
+      { type: "sound", soundId: "long", accelerator: "A+B" }
+    ];
+    engine.register(bindings);
+    press("A");
+    engine.register(bindings.map((binding) => ({ ...binding })));
+    release("A");
+    expect(onTrigger).toHaveBeenCalledExactlyOnceWith(bindings[0]);
+  });
+
+  it("releases the matching press once when any physical combo key goes up", () => {
+    const onRelease = vi.fn();
+    const { engine, onTrigger } = makeEngine({ onRelease });
+    const binding = { id: "combo", accelerator: "Ctrl+A" };
+    engine.register([binding]);
+
+    press("CtrlRight");
+    press("A");
+    const pressToken = onTrigger.mock.calls[0][1];
+    expect(pressToken).toBeDefined();
+    release("Ctrl"); // the other physical modifier was not involved
+    expect(onRelease).not.toHaveBeenCalled();
+    press("B");
+    release("B");
+    expect(onRelease).not.toHaveBeenCalled();
+    release("CtrlRight");
+    release("A");
+    expect(onRelease).toHaveBeenCalledExactlyOnceWith(binding, pressToken);
+
+    press("CtrlRight");
+    press("A");
+    const secondToken = onTrigger.mock.calls[1][1];
+    expect(secondToken).not.toBe(pressToken);
+    release("A");
+    expect(onRelease).toHaveBeenLastCalledWith(binding, secondToken);
+  });
+
+  it("leaves deferred prefix and globalShortcut bindings as Tap triggers", () => {
+    const onRelease = vi.fn();
+    const { engine, onTrigger } = makeEngine({ onRelease });
+    engine.register([
+      { id: "short", accelerator: "Num1" },
+      { id: "long", accelerator: "Num1+Num2" }
+    ]);
+    press("Numpad1");
+    release("Numpad1");
+    expect(onTrigger).toHaveBeenCalledExactlyOnceWith({ id: "short", accelerator: "Num1" });
+    expect(onRelease).not.toHaveBeenCalled();
+
+    const fallback = makeEngine({ hook: null, onRelease });
+    fallback.engine.register([{ id: "fallback", accelerator: "A" }]);
+    shortcuts.registered.get("A")();
+    expect(fallback.onTrigger.mock.calls[0]).toHaveLength(1);
+    fallback.engine.stop();
+    expect(onRelease).not.toHaveBeenCalled();
+  });
+
+  it.each(["register", "suspend", "stop"])("releases active presses on %s cleanup", (action) => {
+    const onRelease = vi.fn();
+    const { engine, onTrigger } = makeEngine({ onRelease });
+    const binding = { id: "sound", accelerator: "A" };
+    engine.register([binding]);
+    press("A");
+    const pressToken = onTrigger.mock.calls[0][1];
+
+    if (action === "register") engine.register([{ id: "new", accelerator: "B" }]);
+    else if (action === "suspend") engine.setSuspended(true);
+    else engine.stop();
+    release("A");
+    expect(onRelease).toHaveBeenCalledExactlyOnceWith(binding, pressToken);
+  });
+});
+
 describe("hotkey engine globalShortcut fallback after hook start failure", () => {
   beforeEach(() => {
     hook.start.mockImplementation(() => {

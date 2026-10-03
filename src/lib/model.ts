@@ -37,12 +37,13 @@ const defaultSettings: SoundLibrary["settings"] = {
   cycleBoardsHotkey: "",
   defaultRetriggerMode: "stop"
 };
-const defaultSoundOptions: Pick<SoundSlot, "fadeInMs" | "fadeOutMs" | "loop" | "soloPlay" | "retriggerMode" | "hotkey" | "outputTarget"> = {
+const defaultSoundOptions: Pick<SoundSlot, "fadeInMs" | "fadeOutMs" | "loop" | "soloPlay" | "retriggerMode" | "triggerMode" | "hotkey" | "outputTarget"> = {
   fadeInMs: 0,
   fadeOutMs: 0,
   loop: false,
   soloPlay: true,
   retriggerMode: "restart",
+  triggerMode: "tap",
   hotkey: "",
   outputTarget: "both"
 };
@@ -201,6 +202,7 @@ export function soundFromImport(result: MediaImportResult, index: number, output
     loop: false,
     soloPlay: true,
     retriggerMode: normalizeRetriggerMode(retriggerMode),
+    triggerMode: "tap",
     hotkey: "",
     outputTarget,
     effects: getDefaultSoundEffects(),
@@ -261,6 +263,7 @@ export function normalizeLibrary(library: SoundLibrary): SoundLibrary {
         ...sound,
         hotkey: normalizeAccelerator(sound.hotkey || ""),
         retriggerMode: normalizeRetriggerMode(sound.retriggerMode, defaultSoundOptions.retriggerMode),
+        triggerMode: sound.triggerMode === "hold" ? "hold" : "tap",
         volume: sound.volume === 0.9 ? 1 : sound.volume,
         effects: normalizeSoundEffects(sound.effects)
       }))
