@@ -1,12 +1,28 @@
 # SoundDeck Studio Stream Deck plugin
 
-Five keypad actions: Play sound, Stop all, Switch to board, Cycle boards, and
-Toggle setting. Requires Stream Deck 7.1+ (including Virtual Stream Deck) and
-SoundDeck Studio with **Settings → External control** enabled. Play sound uses
+Eight keypad actions: Play sound, Stop all, Switch to board, Cycle boards,
+Toggle setting, Board slot, Next page, and Previous page. Requires Stream Deck
+7.1+ (including Virtual Stream Deck) and SoundDeck Studio with
+**Settings → External control** enabled. Play sound and Board slot use
 `sound.press` on key down and `sound.release` on key up. The sound's Tap/Hold
 trigger mode in the app decides whether releasing stops playback. Each key has
 its own press, so keys bound to the same Hold sound remain independent. Leaving
 the key's page releases it; disconnecting releases all presses on that session.
+
+Board slot defaults to **Auto (by position)** and **Follow active board**.
+Visible auto slots on each device are ordered by row, then column; other actions
+and fixed-slot keys do not consume positions. Choose a fixed slot (1–n) to ignore
+paging, or pin a board to keep that key on one board. Auto slots on pinned boards
+still page with the other auto slots on their device. Empty slots are blank and
+do nothing; a missing board shows a warning.
+
+Next page and Previous page show the current page (for example, **2 / 4**) and
+are dimmed at the ends, where pressing does nothing. Each device keeps its own
+page, using the number of currently visible auto slots as its page size, including
+inside folders and on multi-page profiles. A mixed pinned/follow layout uses the
+largest represented board for its page count, so all sounds remain reachable.
+Switching the active board resets every device to page 1; shrinking a board
+clamps the page to the last available page. Fixed slots never affect page counts.
 
 From the repository root:
 
@@ -40,6 +56,9 @@ board and check title fallback. Close the app completely, press a key, and check
 that it launches hidden; that first press is intentionally dropped.
 Set a sound's trigger mode to Hold and verify release/fade-out, two keys holding
 the same sound, changing pages while held, and disconnect/reconnect while held.
+Add auto slots around control/fixed keys, page a large board, switch boards, pin
+a board, and enter a folder or another Stream Deck page. Check that slot order
+uses only visible auto slots and that paging another device stays independent.
 
 The committed manifest disables Node debugging. For local development only,
 set `Nodejs.Debug` to `"enabled"` in your local manifest and use `pnpm watch`,
