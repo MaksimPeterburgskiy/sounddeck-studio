@@ -213,6 +213,23 @@ describe("live actions", () => {
     await down;
   });
 
+  it.each(["keyUp", "disappear"])("alerts on a failed or timed-out press and keeps it held until %s", async (release) => {
+    const connection = fakeConnection();
+    connection.snapshot.library.boards = [{ id: "board", sounds: [{ id: "sound", title: "Horn", hasImage: false }] }];
+    connection.command.mockResolvedValueOnce({ ok: false });
+    const action = new PlaySound(connection as unknown as Connection);
+    const key = fakeKey();
+    const event = { action: key, payload: { settings: { soundId: "sound" } } };
+    await action.onKeyDown(event as never);
+    const pressId = (connection.command.mock.lastCall as unknown as [string, { pressId: string }])[1].pressId;
+    expect(key.showAlert).toHaveBeenCalledOnce();
+    expect(connection.command).toHaveBeenCalledTimes(1);
+    if (release === "keyUp") await action.onKeyUp(event as never);
+    else { action.onWillDisappear(event as never); await flush(); }
+    expect(connection.command).toHaveBeenLastCalledWith("sound.release", { pressId });
+    expect(connection.command).toHaveBeenCalledTimes(2);
+  });
+
   it("persists renamed and moved sound metadata, then resolves a re-import using that fallback", async () => {
     const connection = fakeConnection();
     const action = new PlaySound(connection as unknown as Connection);

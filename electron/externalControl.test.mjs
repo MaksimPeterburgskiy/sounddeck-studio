@@ -653,6 +653,49 @@ describe("external control protocol and dispatch", () => {
     acknowledge({ ok: true });
   });
 
+  it.each([false, true])("releases an acknowledged HTTP press on disconnect only before its response finishes (flushed: %s)", async (flushed) => {
+    let response;
+    let flushResponse;
+    await create({ createServer: (...args) => {
+      const server = memoryServer(...args);
+      server.on("request", (_req, res) => {
+        response = res;
+        const socket = res.socket;
+        const write = socket._write;
+        socket._write = (chunk, encoding, callback) => {
+          flushResponse = () => {
+            socket._write = write;
+            write.call(socket, chunk, encoding, callback);
+          };
+        };
+      });
+      return server;
+    } });
+    const state = bridge.getState();
+    const req = http.request({ createConnection: memoryConnect, hostname: "127.0.0.1", port: state.port, path: "/v1/sounds/sound-new/press", method: "POST", headers: { Authorization: `Bearer ${state.token}` } });
+    req.on("error", () => {});
+    req.end();
+    await vi.waitFor(() => expect(flushResponse).toBeTypeOf("function"));
+    const internalId = onCommand.mock.lastCall[0].args.pressId;
+    const signal = onCommand.mock.lastCall[1];
+    expect(response.writableEnded).toBe(true);
+    expect(response.writableFinished).toBe(false);
+    expect(onCommand).toHaveBeenCalledTimes(1);
+    if (flushed) {
+      flushResponse();
+      await vi.waitFor(() => expect(response.writableFinished).toBe(true));
+    }
+    req.destroy();
+    await vi.waitFor(() => expect(response.destroyed).toBe(true));
+    if (flushed) {
+      expect(onCommand).toHaveBeenCalledTimes(1);
+      expect(signal.aborted).toBe(false);
+    } else {
+      await vi.waitFor(() => expect(onCommand).toHaveBeenLastCalledWith({ command: "sound.release", args: { pressId: internalId } }, undefined));
+      expect(signal.aborted).toBe(true);
+    }
+  });
+
   it("releases all held presses when the API is disabled or its token rotates", async () => {
     await create();
     const connection = await session();

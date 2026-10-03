@@ -143,6 +143,8 @@ describe("sound trigger ordering", () => {
     const play = triggers.trigger(sound, undefined, true);
     if (stop === "sound") triggers.stop(sound.id);
     else triggers.stopAll();
+    const stopCall = (stop === "sound" ? audio.stop : audio.stopAll).mock.invocationCallOrder[0];
+    expect(stopCall).toBeLessThan(audio.stopVoice.mock.invocationCallOrder[0]);
     const later = triggers.trigger(sound, "later", true);
     routing.resolve();
     expect(await Promise.all([held, play, later])).toEqual([null, false, "voice-3"]);

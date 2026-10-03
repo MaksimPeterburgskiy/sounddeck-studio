@@ -39,6 +39,7 @@ interface ActiveVoice {
   positionOffset: number;
   loop: boolean;
   cleanupHandle?: number;
+  releaseFadeEndsAt?: number;
   cleanedUp?: boolean;
 }
 
@@ -290,9 +291,10 @@ export class AudioEngine {
 
   stopVoice(soundId: string, voiceId: string) {
     const voice = [...(this.active.get(soundId) || []), ...(this.tails.get(soundId) || [])].find((candidate) => candidate.id === voiceId);
-    if (!voice) return;
+    if (!voice || voice.releaseFadeEndsAt !== undefined) return;
     if (voice.cleanupHandle !== undefined) window.clearTimeout(voice.cleanupHandle);
     this.removeTail(soundId, voiceId);
+    voice.releaseFadeEndsAt = performance.now() + voice.fadeOutMs;
     voice.cleanupHandle = this.fadeVoice(voice, voice.fadeOutMs / 1000);
     this.addTail(soundId, voice);
     this.removeVoice(soundId, voiceId);
@@ -305,7 +307,7 @@ export class AudioEngine {
       this.active.delete(activeId);
     }
     for (const tailId of [...this.tails.keys()]) {
-      if (tailId !== soundId) this.stopTails(tailId);
+      if (tailId !== soundId) this.stopTails(tailId, 0.03);
     }
     this.emitStatus();
   }
@@ -315,7 +317,7 @@ export class AudioEngine {
       for (const voice of voices) this.fadeVoice(voice, 0.03);
     }
     this.active.clear();
-    this.stopAllTails();
+    this.stopAllTails(0.03);
     this.emitStatus();
   }
 
@@ -1104,13 +1106,25 @@ export class AudioEngine {
     else this.tails.delete(soundId);
   }
 
-  private stopTails(soundId: string) {
-    for (const voice of this.tails.get(soundId) || []) this.cleanupVoice(voice);
-    this.tails.delete(soundId);
+  private stopTails(soundId: string, stopFadeSeconds?: number) {
+    for (const voice of this.tails.get(soundId) || []) {
+      if (!this.disposed && voice.releaseFadeEndsAt !== undefined) {
+        // A released Hold voice is still audible during its fade. Stops may
+        // shorten that fade, but must neither cut it nor extend its deadline.
+        const remaining = Math.max(0, (voice.releaseFadeEndsAt - performance.now()) / 1000);
+        const fadeSeconds = Math.min(remaining, stopFadeSeconds ?? voice.fadeOutMs / 1000);
+        if (voice.cleanupHandle !== undefined) window.clearTimeout(voice.cleanupHandle);
+        voice.releaseFadeEndsAt = performance.now() + fadeSeconds * 1000;
+        voice.cleanupHandle = this.fadeVoice(voice, fadeSeconds);
+      } else {
+        this.cleanupVoice(voice);
+        this.removeTail(soundId, voice.id);
+      }
+    }
   }
 
-  private stopAllTails() {
-    for (const tailId of [...this.tails.keys()]) this.stopTails(tailId);
+  private stopAllTails(stopFadeSeconds?: number) {
+    for (const tailId of [...this.tails.keys()]) this.stopTails(tailId, stopFadeSeconds);
   }
 
   private cleanupVoice(voice: ActiveVoice) {

@@ -6,6 +6,7 @@ import { createSoundPlayQueue } from "./soundPlayQueue";
 import { FakeAudioContext, deferred, makeAudioSettings, makeSound, voiceGains, waitForMockCalls } from "./testing/webAudioFakes";
 import { getDefaultSoundEffects } from "./model";
 import { PressTracker } from "./pressTracker";
+import { SoundTriggers } from "./soundTriggers";
 
 const playbackSettings = makeAudioSettings({
   micPassthrough: false,
@@ -865,10 +866,13 @@ describe("AudioEngine trim and loop math", () => {
 });
 
 describe("AudioEngine fades", () => {
-  it.each(["stop-all after release", "stop-all while held", "solo playback"])("stops a fading held loop interrupted by %s", async (interruption) => {
+  it.each([
+    ["stop", 200, 300], ["stopAll", 200, 30], ["stopAll", 490, 10], ["solo", 200, 30]
+  ] as const)("%s preserves a released Hold fade after %i ms, with %i ms remaining", async (stop, elapsedMs, remainingMs) => {
     vi.useFakeTimers();
     window.setTimeout = setTimeout;
     window.clearTimeout = clearTimeout;
+    const clock = vi.spyOn(performance, "now").mockReturnValue(1000);
     const engine = new AudioEngine(dualRouteSettings, vi.fn());
     const tracker = new PressTracker();
     try {
@@ -876,19 +880,53 @@ describe("AudioEngine fades", () => {
       const sound = makeSound({ loop: true, fadeOutMs: 500, outputTarget: "both" });
       await tracker.press("held", (signal) => engine.play(sound, signal, { fresh: true }), (voiceId) => engine.stopVoice(sound.id, voiceId));
       const sources = [monitorContext().bufferSources[0], virtualContext().bufferSources[0]];
-      if (interruption === "stop-all while held") tracker.releaseAll();
-      else tracker.release("held");
-      expect(sources.every((source) => source.stop.mock.calls.length === 0)).toBe(true);
+      tracker.release("held");
+      await vi.advanceTimersByTimeAsync(elapsedMs);
+      clock.mockReturnValue(1000 + elapsedMs);
+      monitorContext().currentTime = virtualContext().currentTime = elapsedMs / 1000;
 
-      if (interruption === "solo playback") await engine.play(makeSound({ id: "solo", soloPlay: true }));
-      else engine.stopAll();
+      if (stop === "stop") engine.stop(sound.id);
+      else if (stop === "stopAll") engine.stopAll();
+      else await engine.play(makeSound({ id: "solo", soloPlay: true }));
 
+      for (const context of [monitorContext(), virtualContext()]) {
+        expect(voiceGains(context)[0].gain.exponentialRampToValueAtTime).toHaveBeenLastCalledWith(0.0001, (elapsedMs + remainingMs) / 1000);
+      }
+      for (const source of sources) expect(source.stop).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(remainingMs + 19);
+      for (const source of sources) expect(source.stop).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(2);
       for (const source of sources) {
         expect(source.stop).toHaveBeenCalledOnce();
         expect(source.disconnect).toHaveBeenCalledOnce();
       }
       await vi.advanceTimersByTimeAsync(600);
       for (const source of sources) expect(source.stop).toHaveBeenCalledOnce();
+    } finally {
+      await engine.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["stop", "stopAll"] as const)("%s fades a still-held loop before forgetting its press", async (stop) => {
+    vi.useFakeTimers();
+    window.setTimeout = setTimeout;
+    window.clearTimeout = clearTimeout;
+    const engine = new AudioEngine(playbackSettings, vi.fn());
+    const triggers = new SoundTriggers(() => engine, () => null);
+    try {
+      const sound = makeSound({ triggerMode: "hold", loop: true, fadeOutMs: 500 });
+      await triggers.trigger(sound, "held");
+      const source = monitorContext().bufferSources[0];
+      if (stop === "stop") triggers.stop(sound.id);
+      else triggers.stopAll();
+      triggers.release("held");
+      const fadeMs = stop === "stop" ? 500 : 30;
+      expect(voiceGains(monitorContext())[0].gain.exponentialRampToValueAtTime).toHaveBeenLastCalledWith(0.0001, fadeMs / 1000);
+      expect(source.stop).not.toHaveBeenCalled();
+      expect(engine.isPlaying(sound.id)).toBe(false);
+      await vi.advanceTimersByTimeAsync(fadeMs + 21);
+      expect(source.stop).toHaveBeenCalledOnce();
     } finally {
       await engine.dispose();
       vi.useRealTimers();

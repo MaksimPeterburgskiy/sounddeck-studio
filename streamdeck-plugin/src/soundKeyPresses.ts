@@ -19,17 +19,13 @@ export class SoundKeyPresses {
     const session = this.connection.session;
     const press = session ? { pressId, session } : undefined;
     if (press) this.held.set(keyId, press);
-    try {
-      const [, response] = await Promise.all([
-        previous,
-        this.connection.command("sound.press", { ...sound, pressId }),
-      ]);
-      if (!response.ok && this.held.get(keyId) === press) await this.release(keyId);
-      return response;
-    } catch (error) {
-      if (this.held.get(keyId) === press) await this.release(keyId);
-      throw error;
-    }
+    const [, response] = await Promise.all([
+      previous,
+      this.connection.command("sound.press", { ...sound, pressId }),
+    ]);
+    // An acknowledgement timeout can precede playback. Ownership follows the
+    // physical key even on failure, until key up or disappearance releases it.
+    return response;
   }
 
   async release(keyId: string): Promise<ControlResult | undefined> {

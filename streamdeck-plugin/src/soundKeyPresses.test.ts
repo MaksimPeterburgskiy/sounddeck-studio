@@ -75,7 +75,7 @@ describe("sound key presses", () => {
     expect(connection.command).toHaveBeenLastCalledWith("sound.release", { pressId: newId });
   });
 
-  it("replaces repeated downs and releases failed or timed-out presses", async () => {
+  it("replaces repeated downs and keeps failed or timed-out presses held until key up", async () => {
     const { connection, keys } = setup();
     await keys.press("key", binding);
     const firstId = pressId(connection.command.mock.lastCall![1]);
@@ -87,6 +87,9 @@ describe("sound key presses", () => {
     connection.command.mockResolvedValueOnce(failure);
     expect(await keys.press("key", binding)).toEqual(failure);
     const failedId = pressId(connection.command.mock.calls[4][1]);
+    expect(connection.command).toHaveBeenLastCalledWith("sound.press", { ...binding, pressId: failedId });
+    expect(connection.command).toHaveBeenCalledTimes(5);
+    await keys.release("key");
     expect(connection.command).toHaveBeenLastCalledWith("sound.release", { pressId: failedId });
     await keys.release("key");
     expect(connection.command).toHaveBeenCalledTimes(6);

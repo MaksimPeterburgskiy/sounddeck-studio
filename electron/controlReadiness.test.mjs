@@ -2,6 +2,8 @@ import { EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { describe, expect, it, vi } from "vitest";
+import { SoundTriggers } from "../src/lib/soundTriggers.ts";
+import { deferred, makeSound } from "../src/lib/testing/webAudioFakes.ts";
 
 function preload() {
   let sounddeck;
@@ -67,6 +69,76 @@ describe("preload control readiness", () => {
 });
 
 describe("preload control acknowledgements", () => {
+  it.each(["sound", "all"])("%s stop cancels playback awaiting receipt while preserving later requests", async (stop) => {
+    const { ipcRenderer, sounddeck } = preload();
+    ipcRenderer.emit("control-ready-token", {}, "current-document");
+    const sounds = [makeSound({ id: "a", triggerMode: "hold", loop: true }), makeSound({ id: "b", triggerMode: "hold", loop: true })];
+    const audio = {
+      play: vi.fn(async (_sound) => `voice-${audio.play.mock.calls.length}`),
+      stop: vi.fn(), stopAll: vi.fn(), stopVoice: vi.fn(), isPlaying: () => false
+    };
+    const triggers = new SoundTriggers(() => audio, () => null);
+    const callback = vi.fn(async ({ command, args }) => {
+      if (command === "sound.play" || command === "sound.press") {
+        await triggers.trigger(sounds.find((sound) => sound.id === args.soundId), command === "sound.press" ? args.pressId : undefined, true);
+      }
+      return { ok: true };
+    });
+    sounddeck.onControlCommand(callback);
+    const receive = ipcRenderer.listeners("control-command")[0];
+    const press = (soundId, requestId) => ({ command: "sound.press", args: { soundId, pressId: requestId }, requestId });
+    await receive({}, press("a", "active-a"));
+    await receive({}, press("b", "active-b"));
+    const receipt = deferred();
+    ipcRenderer.invoke.mockImplementationOnce(() => receipt.promise);
+    const pendingHold = receive({}, press("a", "pending-a"));
+    const pendingPlay = receive({}, { command: "sound.play", args: { soundId: "a" }, requestId: "pending-play" });
+    const pendingOther = receive({}, press("b", "pending-b"));
+    const setting = receive({}, { command: "setting.toggle", args: { key: "micPassthrough" }, requestId: "setting" });
+    await vi.waitFor(() => expect(ipcRenderer.invoke).toHaveBeenCalledWith("control:received", "pending-a", "current-document"));
+
+    sounddeck.cancelPendingControlPlayback(stop === "sound" ? "a" : undefined);
+    if (stop === "sound") triggers.stop("a");
+    else triggers.stopAll();
+    const later = receive({}, press("a", "later"));
+    receipt.resolve({ ok: true });
+    await Promise.all([pendingHold, pendingPlay, pendingOther, setting, later]);
+
+    expect(audio.play.mock.calls.map(([sound]) => sound.id)).toEqual(stop === "sound" ? ["a", "b", "b", "a"] : ["a", "b", "a"]);
+    expect(ipcRenderer.invoke).toHaveBeenCalledWith("control:result", "pending-a", { ok: false, code: "unavailable" }, "current-document");
+    expect(ipcRenderer.invoke).toHaveBeenCalledWith("control:result", "pending-play", { ok: false, code: "unavailable" }, "current-document");
+    expect(callback).toHaveBeenCalledWith({ command: "setting.toggle", args: { key: "micPassthrough" }, requestId: "setting" });
+    triggers.release("later");
+    expect(audio.stopVoice).toHaveBeenLastCalledWith("a", stop === "sound" ? "voice-4" : "voice-3");
+  });
+
+  it("cancels only requests preceding an API sound stop while its callback awaits earlier receipts", async () => {
+    const { ipcRenderer, sounddeck } = preload();
+    ipcRenderer.emit("control-ready-token", {}, "current-document");
+    const sound = makeSound({ triggerMode: "hold", loop: true });
+    const audio = { play: vi.fn(async () => "voice"), stop: vi.fn(), stopAll: vi.fn(), stopVoice: vi.fn(), isPlaying: () => false };
+    const triggers = new SoundTriggers(() => audio, () => null);
+    sounddeck.onControlCommand(async ({ command, args }) => {
+      if (command === "sound.press") await triggers.trigger(sound, args.pressId, true);
+      else if (command === "sound.stop") triggers.stop(args.soundId);
+      return { ok: true };
+    });
+    const receipt = deferred();
+    ipcRenderer.invoke.mockImplementationOnce(() => receipt.promise);
+    const receive = ipcRenderer.listeners("control-command")[0];
+    const earlier = receive({}, { command: "sound.press", args: { soundId: sound.id, pressId: "earlier" }, requestId: "earlier" });
+    const stopped = receive({}, { command: "sound.stop", args: { soundId: sound.id } });
+    const later = receive({}, { command: "sound.press", args: { soundId: sound.id, pressId: "later" }, requestId: "later" });
+    receipt.resolve({ ok: true });
+    await Promise.all([earlier, stopped, later]);
+    expect(audio.play).toHaveBeenCalledTimes(1);
+    expect(audio.stop).toHaveBeenCalledExactlyOnceWith(sound.id);
+    expect(audio.stop.mock.invocationCallOrder[0]).toBeLessThan(audio.play.mock.invocationCallOrder[0]);
+    expect(ipcRenderer.invoke).toHaveBeenCalledWith("control:result", "earlier", { ok: false, code: "unavailable" }, "current-document");
+    triggers.release("later");
+    expect(audio.stopVoice).toHaveBeenCalledExactlyOnceWith(sound.id, "voice");
+  });
+
   it("does not apply a command whose receipt was rejected after timeout or reset", async () => {
     const { ipcRenderer, sounddeck } = preload();
     ipcRenderer.emit("control-ready-token", {}, "current-document");
