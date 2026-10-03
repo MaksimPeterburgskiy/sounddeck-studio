@@ -7,6 +7,12 @@ const board = document.getElementById("board");
 const slot = document.getElementById("slot");
 const sound = document.getElementById("sound");
 const key = document.getElementById("key");
+const mode = document.getElementById("mode");
+const volumeControls = [
+  { element: document.getElementById("bus"), field: "bus", fallback: "micVirtual" },
+  { element: mode, field: "mode", fallback: "up" },
+  { element: document.getElementById("step"), field: "step", fallback: mode ? 5 : 2 },
+].filter(({ element }) => element);
 let settings = {};
 let initialized = false;
 let receiving = false;
@@ -25,6 +31,7 @@ const applySettings = (value) => {
   if (slot) slot.value = String(settings.slot ?? "");
   if (sound) sound.value = settings.soundId || "";
   if (key) key.value = settings.key || "micPassthrough";
+  for (const { element, field, fallback } of volumeControls) element.value = String(settings[field] ?? fallback);
   receiving = false;
 };
 const save = (value) => {
@@ -39,7 +46,7 @@ client.sendToPropertyInspector.subscribe(({ payload }) => {
   if (payload?.event === "status") document.getElementById("status").textContent = payload.label || "";
   if (payload?.event === "sounds") sounds = payload.items || [];
 });
-if (board || slot || key) {
+if (board || slot || key || volumeControls.length) {
   // Sending is not acknowledgement. Keep the revision barrier after sends settle
   // and after the latest echo, so an older plugin snapshot can never roll us back.
   client.didReceiveSettings.subscribe(({ payload }) => {
@@ -68,5 +75,12 @@ if (board || slot || key) {
     if (!initialized || receiving || key.value === (settings.key || "micPassthrough")) return;
     save({ ...settings, key: key.value });
   });
+  for (const { element, field, fallback } of volumeControls) {
+    element.addEventListener("valuechange", () => {
+      const value = typeof fallback === "number" ? Number(element.value) : element.value;
+      if (!initialized || receiving || value === (settings[field] ?? fallback)) return;
+      save({ ...settings, [field]: value });
+    });
+  }
 }
 client.send("sendToPlugin", { event: "status" });

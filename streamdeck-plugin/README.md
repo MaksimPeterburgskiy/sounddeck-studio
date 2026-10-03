@@ -1,8 +1,9 @@
 # SoundDeck Studio Stream Deck plugin
 
-Eight keypad actions: Play sound, Stop all, Switch to board, Cycle boards,
-Toggle setting, Board slot, Next page, and Previous page. Requires Stream Deck
-7.1+ (including Virtual Stream Deck) and SoundDeck Studio with
+Ten keypad actions: Play sound, Stop all, Switch to board, Cycle boards,
+Toggle setting, Board slot, Next page, Previous page, Volume, and Volume mute.
+Volume dial supports Stream Deck + and other encoder devices. Requires Stream Deck 7.1+
+(including Virtual Stream Deck for keys) and SoundDeck Studio with
 **Settings → External control** enabled. Play sound and Board slot use
 `sound.press` on key down and `sound.release` on key up. The sound's Tap/Hold
 trigger mode in the app decides whether releasing stops playback. Each key has
@@ -33,6 +34,31 @@ from the displayed page, including at the ends. Switching the active board reset
 every device to page 1. Fixed slots never affect page counts.
 Board slot, Next page, and Previous page are unavailable in multi-actions because
 they depend on the visible device layout. Use Play sound for multi-actions.
+
+Volume and Volume mute select one of four buses: Mic → virtual mic,
+Mic → headphones, Soundboard → virtual mic, or Soundboard → headphones.
+Keys wrap the bus label (Mic/Board → Virtual/Phones) across two lines and show
+the stored percentage above it. Volume offers up/down only, using a 1–25% step
+(default 5%) and repeating after 400 ms at 8 Hz while held. Release, page changes,
+effective settings changes, and disconnects stop repeating; reading unchanged
+settings leaves held-key repeats running. Up/down multi-action steps adjust once.
+
+Volume mute preserves the level and toggles mute. Its two multi-action states
+honor the selected Mute or Unmute state. Muted keys show a grey icon and “Muted”
+label; up/down keys keep their mode icons, and only the mute key lights its ring.
+
+Volume dial rotates by 2% per tick by default (configurable from 1–25%). Each
+dial serializes rotations, presses, and touch taps in input order; only consecutive
+same-direction ticks coalesce while an acknowledgement is pending. Reversals
+retain their order at volume limits. Pressing the dial or tapping its touch strip
+toggles mute. Effective bus/step changes discard pending input; unchanged settings
+reads preserve it. Disconnecting or leaving the page discards pending input.
+The built-in `$B1` layout shows the bus name (or the user's custom title), percentage,
+and level bar; muted buses show “Muted” with the preserved level in grey.
+Live app changes update both keys and dials. Offline feedback uses the same
+connection labels as keys, with an empty grey bar. Only press/tap launches the app
+while offline; rotating does nothing. Dial behavior is unit-tested; hardware
+verification is still needed because Virtual Stream Deck provides keys only.
 
 From the repository root:
 
@@ -69,6 +95,10 @@ the same sound, changing pages while held, and disconnect/reconnect while held.
 Add auto slots around control/fixed keys, page a large board, switch boards, pin
 a board, and enter a folder or another Stream Deck page. Check that slot order
 uses only visible auto slots and that paging another device stays independent.
+
+Check volume up/down taps and holds, mute from both the key and app, and mute
+states in multi-actions. On an encoder device, check rapid rotation in both
+directions, press/tap mute, live level feedback, and reconnect feedback.
 
 The committed manifest disables Node debugging. For local development only,
 set `Nodejs.Debug` to `"enabled"` in your local manifest and use `pnpm watch`,

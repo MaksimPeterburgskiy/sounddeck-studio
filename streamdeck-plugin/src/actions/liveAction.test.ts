@@ -34,7 +34,7 @@ function fakeConnection() {
   return connection;
 }
 function fakeKey() {
-  return { id: "key", isKey: () => true, setImage: vi.fn(async (_image: string) => {}),
+  return { id: "key", isKey: () => true, isDial: () => false, setImage: vi.fn(async (_image: string) => {}),
     setTitle: vi.fn(async (_title: string) => {}), setState: vi.fn(async (_state: number) => {}),
     setSettings: vi.fn(async (_settings: ActionSettings) => {}), showAlert: vi.fn() };
 }
@@ -235,6 +235,34 @@ describe("live actions", () => {
     }
     await action.onKeyDown({ action: fakeKey(), payload: { settings: {}, isInMultiAction: false, userDesiredState: 1 } } as never);
     expect(connection.command).toHaveBeenLastCalledWith("setting.toggle", { key: "micPassthrough" });
+  });
+
+  it.each([false, true])("shows Update app for unknown setting commands with multi-action %s", async (isInMultiAction) => {
+    const connection = fakeConnection();
+    Reflect.deleteProperty(connection.snapshot, "settings");
+    connection.command.mockResolvedValue({ ok: false, code: "unknown-command" } as never);
+    const action = new ToggleSetting(connection as unknown as Connection);
+    const key = fakeKey();
+    const event = { action: key, payload: { settings: {}, isInMultiAction, userDesiredState: 1 } };
+    action.onWillAppear(event as never); await flush();
+    await action.onKeyDown(event as never); await flush();
+    expect(connection.command).toHaveBeenCalledWith(isInMultiAction ? "setting.set" : "setting.toggle", expect.any(Object));
+    expect(key.setTitle).toHaveBeenLastCalledWith("Update\napp");
+    expect(key.showAlert).toHaveBeenCalledTimes(1);
+    connection.emit(); await flush();
+    expect(key.setTitle).toHaveBeenLastCalledWith("Update\napp");
+    connection.session = {}; connection.emit(); await flush();
+    expect(key.setTitle).toHaveBeenLastCalledWith("Mic\npass-thru");
+    action.onWillDisappear(event as never);
+  });
+
+  it.each(["play", "slot"] as const)("shows Update app for an unknown %s sound command", async (kind) => {
+    const { connection, action, key, event } = boundSoundKey(kind);
+    connection.command.mockResolvedValue({ ok: false, code: "unknown-command" } as never);
+    await action.onKeyDown(event as never); await flush();
+    expect(key.setTitle).toHaveBeenLastCalledWith("Update\napp");
+    expect(key.showAlert).toHaveBeenCalledTimes(1);
+    action.onWillDisappear(event as never);
   });
 
   it.each(["play", "slot"] as const)("sends %s key up immediately while its press acknowledgement is pending", async (kind) => {

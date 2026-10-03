@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>SoundDeck Studio</title>
+  <script src="sdpi-components.js"></script>
+  <link rel="stylesheet" href="inspector.css">
+</head>
+<body>
+  <sdpi-item label="Bus">
+    <sdpi-select id="bus">
+      <option value="micVirtual">Mic → virtual mic</option>
+      <option value="micMonitor">Mic → headphones</option>
+      <option value="soundboardVirtual">Soundboard → virtual mic</option>
+      <option value="soundboardMonitor">Soundboard → headphones</option>
+    </sdpi-select>
+  </sdpi-item>
+  <p>Mute preserves the bus level. In a multi-action, choose Mute or Unmute.</p>
+  <p id="status" role="status"></p>
+  <script src="inspector.js"></script>
+</body>
+</html>

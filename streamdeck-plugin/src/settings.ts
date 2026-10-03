@@ -1,4 +1,4 @@
-import type { ControlSettingKey } from "../../src/lib/controlProtocol";
+import type { ControlSettingKey, ControlVolumeBus } from "../../src/lib/controlProtocol";
 
 export type ActionSettings = {
   /** Monotonic property inspector snapshot revision; preserved by plugin updates. */
@@ -9,6 +9,9 @@ export type ActionSettings = {
   /** Empty/omitted means auto; fixed slots are one-based. */
   slot?: string | number;
   key?: ControlSettingKey;
+  bus?: ControlVolumeBus;
+  mode?: "up" | "down";
+  step?: number;
 };
 
 export const settingLabels: Record<ControlSettingKey, string> = {
