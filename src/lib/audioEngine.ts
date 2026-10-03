@@ -213,7 +213,8 @@ export class AudioEngine {
     return buffer;
   }
 
-  async play(sound: SoundSlot, signal?: AbortSignal, waitForRouting?: () => Promise<void>) {
+  async play(sound: SoundSlot, signal?: AbortSignal, options: { fresh?: boolean; waitForRouting?: () => Promise<void> } | (() => Promise<void>) = {}): Promise<string | false> {
+    const { fresh, waitForRouting } = typeof options === "function" ? { waitForRouting: options } : options;
     if (signal?.aborted || !this.hasLiveRoute(sound.outputTarget)) return false;
     const buffer = await this.preload(sound);
     if (waitForRouting) await waitForRouting();
@@ -224,7 +225,7 @@ export class AudioEngine {
     if (signal?.aborted || this.disposed || !this.hasLiveRoute(sound.outputTarget)) return false;
     // Only stop other voices once nothing else can bail out; a muted trigger must not silence what is playing.
     if (sound.soloPlay) this.stopAllExcept(sound.id);
-    if (sound.retriggerMode === "restart") this.stop(sound.id);
+    if (!fresh && sound.retriggerMode === "restart") this.stop(sound.id);
     const contexts = this.contextsForTarget(sound.outputTarget);
     const trimStart = Math.min(Math.max(0, sound.trimStartSec ?? 0), buffer.duration);
     const trimEnd = Math.min(Math.max(trimStart + 0.01, sound.trimEndSec ?? buffer.duration), buffer.duration);
@@ -276,21 +277,35 @@ export class AudioEngine {
 
     this.active.set(sound.id, [...(this.active.get(sound.id) || []), voice]);
     this.emitStatus();
-    return true;
+    return voice.id;
   }
 
   stop(soundId: string) {
     const voices = this.active.get(soundId) || [];
-    for (const voice of voices) this.stopVoice(voice, voice.fadeOutMs / 1000);
+    for (const voice of voices) this.fadeVoice(voice, voice.fadeOutMs / 1000);
     this.active.delete(soundId);
     this.stopTails(soundId);
     this.emitStatus();
   }
 
+  stopVoice(soundId: string, voiceId: string, immediate = false) {
+    const voice = (this.active.get(soundId) || []).find((candidate) => candidate.id === voiceId);
+    if (!voice) return;
+    if (immediate) {
+      for (const source of voice.sources) source.stop();
+      this.cleanupVoice(voice);
+      this.removeTail(soundId, voiceId);
+    } else {
+      voice.cleanupHandle = this.fadeVoice(voice, voice.fadeOutMs / 1000);
+      this.addTail(soundId, voice);
+    }
+    this.removeVoice(soundId, voiceId);
+  }
+
   stopAllExcept(soundId: string) {
     for (const [activeId, voices] of this.active) {
       if (activeId === soundId) continue;
-      for (const voice of voices) this.stopVoice(voice, 0.03);
+      for (const voice of voices) this.fadeVoice(voice, 0.03);
       this.active.delete(activeId);
     }
     for (const tailId of [...this.tails.keys()]) {
@@ -301,7 +316,7 @@ export class AudioEngine {
 
   stopAll() {
     for (const voices of this.active.values()) {
-      for (const voice of voices) this.stopVoice(voice, 0.03);
+      for (const voice of voices) this.fadeVoice(voice, 0.03);
     }
     this.active.clear();
     this.stopAllTails();
@@ -1056,7 +1071,7 @@ export class AudioEngine {
     this.deviceStatusCallback(this.deviceStatus);
   }
 
-  private stopVoice(voice: ActiveVoice, fadeSeconds: number) {
+  private fadeVoice(voice: ActiveVoice, fadeSeconds: number) {
     voice.gains.forEach((gain) => {
       const now = gain.context.currentTime;
       const currentGain = Math.max(0.0001, gain.gain.value);
@@ -1067,7 +1082,7 @@ export class AudioEngine {
       }
       else gain.gain.setValueAtTime(0.0001, now);
     });
-    window.setTimeout(() => {
+    return window.setTimeout(() => {
       voice.sources.forEach((source) => {
         try {
           source.stop();
@@ -1076,6 +1091,7 @@ export class AudioEngine {
         }
       });
       this.cleanupVoice(voice);
+      this.removeTail(voice.soundId, voice.id);
     }, fadeSeconds * 1000 + 20);
   }
 

@@ -37,9 +37,9 @@ The directory follows [Electron's userData application-name rules](https://www.e
 
 Native clients must omit `Origin`: every HTTP request or WebSocket upgrade carrying that header is rejected, even an empty header or `null`. In local mode, `Host` must be exactly `127.0.0.1:<port>` or `localhost:<port>`. Browser pages cannot use this API.
 
-Five failed authentication attempts with nonempty credentials from one remote address trigger a 30-second cooldown, shared across HTTP and WebSocket. Missing credentials and hello timeouts do not count toward the cooldown. Messages and HTTP bodies are limited to 64 KiB. WebSocket input must be text JSON. At most 64 WebSocket sessions, including unauthenticated sessions, are admitted. Unknown fields, commands and invalid argument types are rejected. IDs contain only letters, digits, `_` and `-`, up to 128 characters. Titles are nonempty strings up to 256 characters. No command accepts file paths.
+Five failed authentication attempts with nonempty credentials from one remote address trigger a 30-second cooldown, shared across HTTP and WebSocket. Missing credentials and hello timeouts do not count toward the cooldown. Messages and HTTP bodies are limited to 64 KiB. WebSocket input must be text JSON. At most 64 WebSocket sessions, including unauthenticated sessions, are admitted. Unknown fields, commands and invalid argument types are rejected. At most 4096 unreleased presses are admitted. IDs, including press IDs, contain only letters, digits, `_` and `-`, up to 128 characters. Titles are nonempty strings up to 256 characters. No command accepts file paths.
 
-Each authenticated WebSocket session admits at most **32 pending commands**. HTTP admits at most **32 pending POST commands per remote client address**, shared across connections and including requests still receiving their bodies. Additional commands return `busy` without being queued or dispatched: WebSocket replies use the command's correlation ID and leave the session open; HTTP replies use status **503** and `{ok:false,code:"busy"}`. Capacity is restored when pending work settles, including failed or cancelled commands. HTTP GET snapshots remain available at the limit.
+Each authenticated WebSocket session admits at most **32 pending commands**. HTTP admits at most **32 pending POST commands per remote client address**, shared across connections and including requests still receiving their bodies. Additional commands return `busy` without being queued or dispatched: WebSocket replies use the command's correlation ID and leave the session open; HTTP replies use status **503** and `{ok:false,code:"busy"}`. Capacity is restored when pending work settles, including failed or cancelled commands. `sound.press` shares this limit while its command is pending; a successfully started press does not consume pending-command capacity while held. HTTP GET snapshots remain available at the limit.
 
 ## WebSocket
 
@@ -76,15 +76,17 @@ Responses carry the same ID:
 {"type":"result","id":"c7","ok":false,"code":"not-found"}
 ```
 
-A successful `sound.play` result confirms the sound's tap/retrigger action after the latest audio route configuration, including device refresh and preferred-device retries, settles, not audio completion. If no output route is enabled for the sound, it returns `unavailable`. Disconnecting cancels that client’s plays that have not started; voices already started continue. Stops cancel earlier queued plays, while later plays remain queued. Other playback/board results acknowledge dispatch to the app. Commands respect the sound's existing tap/retrigger behavior.
+A successful `sound.play` or `sound.press` result confirms the sound's tap/retrigger action after the latest tracked audio route configuration, including device refresh and preferred-device retries, settles, not audio completion. If no output route is enabled for the sound, it returns `unavailable`. Disconnecting cancels that client’s plays that have not started; voices already started continue. Stops cancel earlier queued plays, while later plays remain queued. Other playback/board results acknowledge dispatch to the app. `sound.play` respects tap/retrigger behavior; `sound.press` additionally honors Hold trigger mode.
 
-Setting/volume mutations run in renderer receipt order, one at a time. Results include the values applied and saved by the renderer and wait for tracked audio configuration, including device refresh and preferred-device retries, to settle. Setting/volume commands and `sound.play` have a five-second receipt timeout: a late delivery returns `unavailable` without being applied. Once received, they have no completion timeout; renderer loss or reset fails pending requests. Disconnecting cancels that client’s queued mutations that have not been applied; an applied mutation finishes saving and configuring audio even if its client disconnects.
+Setting/volume mutations run in renderer receipt order, one at a time. Results include the values applied and saved by the renderer and wait for tracked audio configuration, including device refresh and preferred-device retries, to settle. Setting/volume commands, `sound.play`, and `sound.press` have a five-second receipt timeout: a late delivery returns `unavailable` without being applied. Once received, they have no completion timeout; renderer loss or reset fails pending requests. Disconnecting cancels that client’s queued mutations that have not been applied; an applied mutation finishes saving and configuring audio even if its client disconnects.
 
-Commands that change app state return `busy` while a hotkey is being captured and `unavailable` if the renderer is absent or still initializing, including during a reload; cached library/image queries still work.
+Commands that change app state return `busy` while a hotkey is being captured (except releases) and `unavailable` if the renderer is absent or still initializing, including during a reload; cached library/image queries still work.
 
 | Command | Args | Result data |
 | --- | --- | --- |
 | `sound.play` | `soundId`, optional `boardId`, `title` | — |
+| `sound.press` | `soundId`, `pressId`, optional `boardId`, `title` | — |
+| `sound.release` | `pressId` | — |
 | `sound.stop` | `soundId` | — |
 | `playback.stopAll` | `{}` | — |
 | `board.activate` | `boardId` | — |
@@ -97,7 +99,16 @@ Commands that change app state return `busy` while a hotkey is being captured an
 | `volume.adjust` | `bus`, `delta`: finite number | `data: {bus,value,muted}` |
 | `volume.mute` | `bus`, optional `muted`: boolean | `data: {bus,value,muted}` |
 
-`sound.play` resolves the sound ID first. If it is missing, an exact title match within the supplied board is used; the first matching sound in board order wins. This lets saved bindings survive a board re-import. If neither resolves, the result is `not-found`. `sound.stop` stops every voice for that ID; it does not use fallback lookup. Cycling wraps around in either direction.
+`sound.play` and `sound.press` resolve the sound ID first. If it is missing, an exact title match within the supplied board is used; the first matching sound in board order wins. This lets saved bindings survive a board re-import. If neither resolves, the result is `not-found`. `sound.stop` stops every voice for that ID; it does not use fallback lookup. Cycling wraps around in either direction.
+
+For a Hold sound, `sound.press` always starts a fresh voice, ignoring Retrigger while honoring Solo play. Its matching `sound.release` stops only that press's voice with the sound's fade-out; overlapping presses remain independent. A release received before decoding completes cancels the press and stops its voice as soon as it starts. Loops sustain while held. For a Tap sound, press behaves exactly like `sound.play`, and release has no playback effect. Unknown or already released press IDs succeed without doing anything.
+
+WebSocket press IDs belong to their session: clients may use the same ID independently, but reusing an unreleased ID within a session returns `invalid-args`. Send release on the same connection; all its unreleased presses are released when it disconnects. Disabling or reconfiguring the listener, regenerating the token, and app shutdown also release outstanding presses.
+
+```json
+{"type":"command","id":"down","command":"sound.press","args":{"soundId":"sound-a","pressId":"key-1"}}
+{"type":"command","id":"up","command":"sound.release","args":{"pressId":"key-1"}}
+```
 
 Setting keys are `micPassthrough`, `soundboardToVirtualMic`, `noiseSuppressionEnabled`, `echoCancellationEnabled`, and `monitorToHeadphones`. Volume buses map to the app's controls as follows:
 
@@ -145,6 +156,8 @@ Every endpoint requires `Authorization: Bearer <token>`. GET responses are the s
 | GET | `/v1/state` | — |
 | GET | `/v1/library` | — |
 | POST | `/v1/sounds/{id}/play` | Optional `{boardId,title}` fallback |
+| POST | `/v1/sounds/{id}/press` | Optional `{boardId,title}` fallback; returns `{pressId}` |
+| POST | `/v1/presses/{pressId}/release` | `{}` |
 | POST | `/v1/sounds/{id}/stop` | `{}` |
 | POST | `/v1/stop-all` | `{}` |
 | POST | `/v1/boards/{id}/activate` | `{}` |
@@ -154,12 +167,17 @@ Every endpoint requires `Authorization: Bearer <token>`. GET responses are the s
 
 Settings and volume bodies require exactly one field; empty bodies, extra fields, and combinations are rejected. `toggle` and `toggleMute` accept only `true`. All argument validation and result data are shared with WebSocket commands.
 
+Release an HTTP press using the returned ID. HTTP presses survive normal request/connection completion so release can use a separate request. An abandoned press response is released immediately. Any HTTP press left unreleased is automatically released after **5 minutes**, including its fade-out. Use WebSocket for holds longer than this or for automatic release when a controller disconnects. HTTP releases cannot release WebSocket presses, and WebSocket releases cannot release HTTP presses.
+
 ```sh
 TOKEN='paste-token-from-settings'
 BASE='http://127.0.0.1:41730'
 curl -H "Authorization: Bearer $TOKEN" "$BASE/v1/state"
 curl -H "Authorization: Bearer $TOKEN" "$BASE/v1/library"
 curl -X POST -H "Authorization: Bearer $TOKEN" "$BASE/v1/sounds/sound-a/play"
+curl -X POST -H "Authorization: Bearer $TOKEN" "$BASE/v1/sounds/sound-a/press"
+# Replace PRESS_ID with the press response's ID.
+curl -X POST -H "Authorization: Bearer $TOKEN" "$BASE/v1/presses/PRESS_ID/release"
 curl -X POST -H "Authorization: Bearer $TOKEN" "$BASE/v1/sounds/sound-a/stop"
 curl -X POST -H "Authorization: Bearer $TOKEN" "$BASE/v1/stop-all"
 curl -X POST -H "Authorization: Bearer $TOKEN" "$BASE/v1/boards/board-a/activate"

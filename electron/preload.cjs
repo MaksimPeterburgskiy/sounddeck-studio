@@ -47,6 +47,11 @@ contextBridge.exposeInMainWorld("sounddeck", {
     ipcRenderer.on("hotkey-trigger", listener);
     return () => ipcRenderer.removeListener("hotkey-trigger", listener);
   },
+  onHotkeyRelease: (callback) => {
+    const listener = (_event, binding) => callback(binding);
+    ipcRenderer.on("hotkey-release", listener);
+    return () => ipcRenderer.removeListener("hotkey-release", listener);
+  },
   getControlSettings: () => ipcRenderer.invoke("control:getSettings"),
   setControlSettings: (patch) => ipcRenderer.invoke("control:setSettings", patch),
   regenerateControlToken: () => ipcRenderer.invoke("control:regenerateToken"),

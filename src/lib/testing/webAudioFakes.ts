@@ -360,6 +360,7 @@ export function makeSound(patch: Partial<SoundSlot> = {}): SoundSlot {
     loop: false,
     soloPlay: false,
     retriggerMode: "overlap",
+    triggerMode: "tap",
     hotkey: "",
     outputTarget: "monitor",
     createdAt: "",

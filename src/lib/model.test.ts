@@ -19,6 +19,7 @@ function soundWithVolume(id: string, volume: number): SoundSlot {
     loop: false,
     soloPlay: true,
     retriggerMode: "restart",
+    triggerMode: "tap",
     hotkey: "",
     outputTarget: "both",
     createdAt: "",
@@ -44,6 +45,14 @@ describe("model helpers", () => {
     expect(nextBoard({ boards: boards.slice(0, 1), activeBoardId: "a" })).toBeUndefined();
   });
 
+  it("migrates legacy trigger modes to Tap and preserves Hold through board serialization", () => {
+    const legacy = soundWithVolume("legacy", 1);
+    delete (legacy as Partial<SoundSlot>).triggerMode;
+    const sounds = [legacy, { ...legacy, id: "hold", triggerMode: "hold" }, { ...legacy, id: "invalid", triggerMode: "other" }];
+    const board = JSON.parse(JSON.stringify({ id: "a", name: "A", sounds }));
+    const library = normalizeLibrary({ version: 1, activeBoardId: "a", settings: {} as SoundLibrary["settings"], boards: [board] });
+    expect(library.boards[0].sounds.map((sound) => sound.triggerMode)).toEqual(["tap", "hold", "tap"]);
+  });
   it("normalizes missing settings and keeps a valid active board", () => {
     const library = normalizeLibrary({
       version: 1,
@@ -227,7 +236,7 @@ describe("model helpers", () => {
         id: "a", name: "A", color: "#fff", icon: "zap", createdAt: "", updatedAt: "", switchHotkey: "CommandOrControl+num1",
         sounds: [{
           id: "s", title: "S", mediaPath: "", storedName: "", mime: "", ext: "", size: 0, color: "#fff", icon: "zap",
-          volume: 1, fadeInMs: 0, fadeOutMs: 0, loop: false, soloPlay: true, retriggerMode: "restart",
+          volume: 1, fadeInMs: 0, fadeOutMs: 0, loop: false, soloPlay: true, retriggerMode: "restart", triggerMode: "tap",
           hotkey: "Shift+numadd", outputTarget: "both", createdAt: "", updatedAt: ""
         }]
       }]
@@ -254,6 +263,7 @@ describe("model helpers", () => {
     expect(sound?.title).toBe("Airhorn");
     expect(sound?.outputTarget).toBe("both");
     expect(sound?.retriggerMode).toBe("stop");
+    expect(sound?.triggerMode).toBe("tap");
     expect(sound?.soloPlay).toBe(true);
     expect(soundEffectsAreDefault(sound?.effects)).toBe(true);
   });
@@ -333,7 +343,7 @@ describe("model helpers", () => {
         id: "a", name: "A", color: "#fff", icon: "zap", createdAt: "", updatedAt: "",
         sounds: [{
           id: "s", title: "S", mediaPath: "", storedName: "", mime: "", ext: "", size: 0, color: "#fff", icon: "zap",
-          volume: 1, fadeInMs: 0, fadeOutMs: 0, loop: false, soloPlay: true, retriggerMode: "restart",
+          volume: 1, fadeInMs: 0, fadeOutMs: 0, loop: false, soloPlay: true, retriggerMode: "restart", triggerMode: "tap",
           hotkey: "", outputTarget: "both", createdAt: "", updatedAt: ""
         }]
       }]

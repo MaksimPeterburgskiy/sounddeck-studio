@@ -62,11 +62,11 @@ describe("renderer control acknowledgements", () => {
     expect(completed).toHaveBeenCalledExactlyOnceWith({ ok: true });
   });
 
-  it("relays operation cancellation without disturbing concurrent requests", async () => {
+  it.each(["sound.play", "sound.press"])("relays %s cancellation without disturbing concurrent requests", async (name) => {
     const send = vi.fn();
     const bridge = createControlRenderer({ send });
     const controller = new AbortController();
-    const first = bridge.dispatch({ command: "sound.play", args: { soundId: "sound" } }, controller.signal);
+    const first = bridge.dispatch({ command: name, args: { soundId: "sound", ...(name === "sound.press" && { pressId: "held" }) } }, controller.signal);
     const requestId = send.mock.lastCall[0].requestId;
     const second = bridge.dispatch(command);
     const otherId = send.mock.lastCall[0].requestId;
@@ -96,11 +96,11 @@ describe("renderer control acknowledgements", () => {
     expect(await operation).toEqual({ ok: false, code: "unavailable" });
   });
 
-  it("settles revoked playback and teardown even if cancellation delivery fails", async () => {
+  it.each(["sound.play", "sound.press"])("settles revoked %s and teardown even if cancellation delivery fails", async (name) => {
     const send = vi.fn();
     const bridge = createControlRenderer({ send });
     const controller = new AbortController();
-    const playback = bridge.dispatch({ command: "sound.play", args: { soundId: "sound-a" } }, controller.signal);
+    const playback = bridge.dispatch({ command: name, args: { soundId: "sound-a", ...(name === "sound.press" && { pressId: "held" }) } }, controller.signal);
     const mutation = bridge.dispatch(command);
     send.mockImplementation(() => { throw new Error("Renderer gone"); });
     controller.abort();

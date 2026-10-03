@@ -40,6 +40,8 @@ export interface ControlSnapshot extends ControlLiveState {
 
 export interface ControlCommandArgs {
   "sound.play": { soundId: string; boardId?: string; title?: string };
+  "sound.press": { soundId: string; boardId?: string; title?: string; pressId: string };
+  "sound.release": { pressId: string };
   "sound.stop": { soundId: string };
   "playback.stopAll": Record<string, never>;
   "board.activate": { boardId: string };
@@ -121,11 +123,12 @@ export interface ControlStatus extends ControlSettings {
   error: { code: string; message: string } | null;
 }
 
-type RendererMutationCommandName = "sound.play" | "setting.set" | "setting.toggle" | "volume.set" | "volume.adjust" | "volume.mute";
+type RendererMutationCommandName = "sound.play" | "sound.press" | "setting.set" | "setting.toggle" | "volume.set" | "volume.adjust" | "volume.mute";
 export type RendererControlCommand =
   | { command: "control.cancel"; requestId: string }
   | {
     [Name in RendererMutationCommandName]: { command: Name; requestId: string; args: ControlCommandArgs[Name] }
   }[RendererMutationCommandName]
+  | { command: "sound.release"; args: ControlCommandArgs["sound.release"] }
   | { command: "sound.stop"; args: ControlCommandArgs["sound.stop"] }
   | { command: "board.cycle"; args: ControlCommandArgs["board.cycle"] };

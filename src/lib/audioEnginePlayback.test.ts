@@ -73,8 +73,41 @@ describe("AudioEngine output routing", () => {
     expect(monitorContext().bufferSources).toHaveLength(0);
     if (cancelled) cancellation.abort();
     routing.resolve();
-    expect(await play).toBe(!cancelled);
+    expect(await play).toEqual(cancelled ? false : expect.any(String));
     expect(monitorContext().bufferSources).toHaveLength(cancelled ? 0 : 1);
+    await engine.dispose();
+  });
+
+  it.each(["play", "tap press", "hold press"].flatMap((operation) =>
+    ["decode", "resume"].flatMap((stage) => [false, true].map((cancelled) => [operation, stage, cancelled] as const))
+  ))("external %s honors routing changes during %s (cancelled: %s)", async (operation, stage, cancelled) => {
+    const engine = new AudioEngine(playbackSettings, vi.fn());
+    const configuration = { current: engine.configure(playbackSettings, "") };
+    await configuration.current;
+    const sound = makeSound({ triggerMode: operation === "hold press" ? "hold" : "tap", fadeOutMs: 200 });
+    const triggers = new SoundTriggers(() => engine, () => configuration.current);
+    const preparation = deferred<AudioBuffer>();
+    const resume = deferred<void>();
+    if (stage === "decode") decodeContext().decodeAudioData.mockReturnValueOnce(preparation.promise);
+    else monitorContext().resume.mockReturnValueOnce(resume.promise);
+    const cancellation = new AbortController();
+    const play = triggers.trigger(sound, operation === "play" ? undefined : "held", true, cancellation.signal);
+    await waitForMockCalls(stage === "decode" ? decodeContext().decodeAudioData : monitorContext().resume, 1);
+    const completeRouting = beginAudioConfiguration(configuration);
+    preparation.resolve({ duration: 2 } as AudioBuffer);
+    resume.resolve();
+    for (let turn = 0; turn < 20; turn++) await Promise.resolve();
+    expect(monitorContext().bufferSources).toHaveLength(0);
+    if (cancelled) cancellation.abort();
+    completeRouting(Promise.resolve());
+    expect(await play).toEqual(cancelled ? (operation === "hold press" ? null : false) : expect.any(String));
+    expect(monitorContext().bufferSources).toHaveLength(cancelled ? 0 : 1);
+    if (!cancelled && operation === "hold press") {
+      triggers.release("held");
+      expect(engine.isPlaying(sound.id)).toBe(false);
+      expect(voiceGains(monitorContext())[0].gain.exponentialRampToValueAtTime).toHaveBeenCalledWith(0.0001, monitorContext().currentTime + 0.2);
+      expect(monitorContext().bufferSources[0].stop).not.toHaveBeenCalled();
+    }
     await engine.dispose();
   });
 
@@ -353,7 +386,7 @@ describe("AudioEngine output routing", () => {
       if (fallbackSucceeds) fallback.resolve();
       else fallback.reject(new DOMException("default unavailable", "NotFoundError"));
       await pending;
-      expect(result).toHaveBeenCalledExactlyOnceWith(fallbackSucceeds);
+      expect(result).toHaveBeenCalledExactlyOnceWith(fallbackSucceeds ? expect.any(String) : false);
       expect(engine.getDeviceStatus().monitor.state).toBe(fallbackSucceeds ? "fallback" : "unavailable");
       expect(monitorContext().bufferSources).toHaveLength(fallbackSucceeds ? 1 : 0);
       expect(engine.isPlaying("sound-1")).toBe(fallbackSucceeds);
@@ -519,7 +552,7 @@ describe("AudioEngine output routing", () => {
     expect(virtualContext().bufferSources).toHaveLength(1);
     expect(monitorContext().gains[0].gain.value).toBe(0);
     expect(engine.isPlaying("sound-1")).toBe(true);
-    expect(started).toBe(true);
+    expect(started).toEqual(expect.any(String));
 
     await engine.dispose();
   });
@@ -830,6 +863,53 @@ describe("AudioEngine trim and loop math", () => {
 });
 
 describe("AudioEngine fades", () => {
+  it("fades only the released voice while another held loop keeps playing", async () => {
+    vi.useFakeTimers();
+    window.setTimeout = setTimeout;
+    window.clearTimeout = clearTimeout;
+    const status = vi.fn();
+    const engine = new AudioEngine(playbackSettings, status);
+    try {
+      const sound = makeSound({ loop: true, retriggerMode: "restart", fadeOutMs: 500 });
+      const first = await engine.play(sound, { fresh: true });
+      const second = await engine.play(sound, { fresh: true });
+      expect(first).toEqual(expect.any(String));
+      expect(second).not.toBe(first);
+      expect(status.mock.lastCall?.[2]).toHaveLength(2);
+      engine.stopVoice(sound.id, first as string);
+      engine.stopVoice(sound.id, "unknown");
+      const [released, held] = monitorContext().bufferSources;
+      expect(voiceGains(monitorContext())[0].gain.exponentialRampToValueAtTime).toHaveBeenCalledWith(0.0001, 0.5);
+      expect(voiceGains(monitorContext())[1].gain.exponentialRampToValueAtTime).not.toHaveBeenCalled();
+      expect(engine.isPlaying(sound.id)).toBe(true);
+      expect(status.mock.lastCall?.[2]).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(521);
+      expect(released.stop).toHaveBeenCalledOnce();
+      expect(held.stop).not.toHaveBeenCalled();
+      engine.stopVoice(sound.id, second as string, true);
+      expect(held.stop).toHaveBeenCalledOnce();
+      expect(status).toHaveBeenLastCalledWith("idle", [], []);
+    } finally {
+      await engine.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels a held start during decode before it can silence other sounds", async () => {
+    const engine = new AudioEngine(playbackSettings, vi.fn());
+    await engine.play(makeSound({ id: "other", soloPlay: false }));
+    const media = deferred<ArrayBuffer>();
+    (window.sounddeck.readMedia as ReturnType<typeof vi.fn>).mockReturnValue(media.promise);
+    let cancelled = false;
+    const pending = engine.play(makeSound({ mediaPath: "late.wav", soloPlay: true }), { fresh: true, cancelled: () => cancelled });
+    cancelled = true;
+    media.resolve(new ArrayBuffer(8));
+    expect(await pending).toBe(false);
+    expect(monitorContext().bufferSources).toHaveLength(1);
+    expect(engine.isPlaying("other")).toBe(true);
+    await engine.dispose();
+  });
+
   it("ramps up from silence when a fade-in is set", async () => {
     const engine = new AudioEngine(playbackSettings, vi.fn());
 

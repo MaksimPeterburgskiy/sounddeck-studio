@@ -9,8 +9,8 @@ function isCorsairSupportedPlatform(platform = process.platform) {
   return platform === "win32" || platform === "darwin";
 }
 
-function createCorsairBridge({ onKey, onStateChange }) {
-  if (!isCorsairSupportedPlatform()) {
+function createCorsairBridge({ onKey, onStateChange, sdk: suppliedSdk, platform = process.platform }) {
+  if (!isCorsairSupportedPlatform(platform)) {
     return {
       start: () => {},
       stop: () => {},
@@ -23,7 +23,7 @@ function createCorsairBridge({ onKey, onStateChange }) {
   let sdk = null;
   let loadError = "";
   try {
-    sdk = require("cue-sdk");
+    sdk = suppliedSdk === undefined ? require("cue-sdk") : suppliedSdk;
   } catch (error) {
     loadError = error.message;
   }
@@ -43,8 +43,8 @@ function createCorsairBridge({ onKey, onStateChange }) {
     const { error } = sdk.CorsairSubscribeForEvents((event) => {
       const data = event?.data;
       if (!data || data.id !== sdk.CorsairEventId.CEI_KeyEvent) return;
-      if (!data.isPressed) return;
-      if (data.keyId >= GKEY_MIN && data.keyId <= GKEY_MAX) onKey?.(`G${data.keyId}`);
+      if (typeof data.isPressed !== "boolean") return;
+      if (data.keyId >= GKEY_MIN && data.keyId <= GKEY_MAX) onKey?.(`G${data.keyId}`, data.isPressed);
     });
     subscribed = error === sdk.CorsairError.CE_Success;
   }
