@@ -242,6 +242,45 @@ describe("AudioEngine output routing", () => {
     await engine.dispose();
   });
 
+  it.each(["monitor", "both"] as const)("rejects a %s play after both monitor sinks fail and allows playback after retry", async (outputTarget) => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const settings = { ...playbackSettings, monitorDeviceId: "preferred-output" };
+    const status = vi.fn();
+    const engine = new AudioEngine(settings, status);
+    const sound = makeSound({ outputTarget });
+    await engine.configure(settings, "");
+    monitorContext().setSinkId
+      .mockRejectedValueOnce(new DOMException("output unavailable", "NotFoundError"))
+      .mockRejectedValueOnce(new DOMException("default unavailable", "NotFoundError"));
+
+    await engine.retryPreferredDevices({ recheckMonitor: true });
+
+    expect(engine.getDeviceStatus().monitor.state).toBe("unavailable");
+    expect(await engine.play(sound)).toBe(false);
+    expect(window.sounddeck.readMedia).not.toHaveBeenCalled();
+    expect(monitorContext().bufferSources).toHaveLength(0);
+    expect(virtualContext().bufferSources).toHaveLength(0);
+    expect(engine.isPlaying(sound.id)).toBe(false);
+    expect(status).not.toHaveBeenCalled();
+
+    monitorContext().setSinkId.mockRejectedValueOnce(new DOMException("output still unavailable", "NotFoundError"));
+    await engine.retryPreferredDevices();
+
+    expect(engine.getDeviceStatus().monitor.state).toBe("fallback");
+    expect(monitorContext().setSinkId).toHaveBeenLastCalledWith("");
+    expect(await engine.play(sound)).toBe(true);
+    expect(monitorContext().bufferSources).toHaveLength(1);
+
+    await engine.retryPreferredDevices();
+
+    expect(engine.getDeviceStatus().monitor.state).toBe("selected");
+    expect(monitorContext().setSinkId).toHaveBeenLastCalledWith("preferred-output");
+    expect(await engine.play(sound)).toBe(true);
+    expect(monitorContext().bufferSources).toHaveLength(2);
+
+    await engine.dispose();
+  });
+
   it("routes a virtual-target sound to the virtual context once the sink is ready", async () => {
     const engine = new AudioEngine(dualRouteSettings, vi.fn());
     await engine.configure(dualRouteSettings, "cable-device");

@@ -111,6 +111,8 @@ export class AudioEngine {
   private micAppliedVirtualSinkReady = false;
   private disposed = false;
   private settings: AudioSettings;
+  // A new monitor context uses the system default until a sink switch is attempted.
+  private monitorSinkReady = true;
   private virtualSinkId = "";
   private virtualSinkReady = false;
   private statusCallback: (status: EngineStatus, activeSoundIds: string[], playback: ControlPlaybackVoice[]) => void;
@@ -630,7 +632,10 @@ export class AudioEngine {
   }
 
   private hasLiveRoute(target: OutputTarget) {
-    const monitorEnabled = (target === "monitor" || target === "both") && this.settings.monitorToHeadphones;
+    const monitorEnabled =
+      (target === "monitor" || target === "both") &&
+      this.settings.monitorToHeadphones &&
+      this.monitorSinkReady;
     const virtualEnabled =
       (target === "virtual" || target === "both") &&
       this.settings.soundboardToVirtualMic &&
@@ -723,6 +728,7 @@ export class AudioEngine {
     const requestedDeviceId = normalizeSelectableDeviceId(this.settings.monitorDeviceId);
     const result = await this.setSink(this.monitorContext, requestedDeviceId, true);
     if (generation !== this.configureGeneration || this.disposed) return;
+    this.monitorSinkReady = result !== "failed";
     const sinkId = (this.monitorContext as { sinkId?: unknown }).sinkId;
     this.setMonitorDeviceStatus({
       state: result === "selected" ? "selected" : result === "fallback" ? "fallback" : "unavailable",
