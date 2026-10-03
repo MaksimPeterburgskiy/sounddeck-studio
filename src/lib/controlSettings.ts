@@ -1,17 +1,8 @@
 import type { AudioSettings } from "../types";
 import type { ControlSettingResult, ControlVolumeResult, RendererControlCommand } from "./controlProtocol";
 
-export type AudioControlCommand = Extract<RendererControlCommand, { command: `setting.${string}` | `volume.${string}` }>;
-
-export function rollbackAudioControlSettings(current: AudioSettings, previous: AudioSettings, applied: AudioSettings): AudioSettings {
-  let settings = current;
-  for (const key of Object.keys(applied) as Array<keyof AudioSettings>) {
-    if (previous[key] !== applied[key] && settings[key] === applied[key]) {
-      settings = { ...settings, [key]: previous[key] };
-    }
-  }
-  return settings;
-}
+type WithoutRequestId<Command> = Command extends { requestId: string } ? Omit<Command, "requestId"> : Command;
+export type AudioControlCommand = WithoutRequestId<Extract<RendererControlCommand, { command: `setting.${string}` | `volume.${string}` }>>;
 
 export function applyAudioControlCommand(settings: AudioSettings, message: AudioControlCommand): {
   settings: AudioSettings;

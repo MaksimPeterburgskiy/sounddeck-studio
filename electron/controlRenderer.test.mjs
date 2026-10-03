@@ -12,6 +12,7 @@ describe("renderer control acknowledgements", () => {
     const volume = bridge.dispatch(command);
     const setting = bridge.dispatch({ command: "setting.toggle", args: { key: "micPassthrough" } });
     const playback = bridge.dispatch({ command: "sound.play", args: { soundId: "sound-a" } });
+    bridge.receive(send.mock.calls[0][0].requestId);
     bridge.cancelPending();
     expect(await volume).toEqual({ ok: false, code: "unavailable" });
     expect(await setting).toEqual({ ok: false, code: "unavailable" });
@@ -35,16 +36,25 @@ describe("renderer control acknowledgements", () => {
     expect(await playback).toEqual({ ok: false, code: "not-found" });
   });
 
-  it("keeps playback pending through slow routing while settings replies time out", async () => {
+  it("times out receipt but keeps accepted commands pending through slow saves and routing", async () => {
     vi.useFakeTimers();
     const send = vi.fn();
     const bridge = createControlRenderer({ send });
     const completed = vi.fn();
     const playback = bridge.dispatch({ command: "sound.play", args: { soundId: "sound-a" } }).then(completed);
     const setting = bridge.dispatch({ command: "setting.toggle", args: { key: "micPassthrough" } });
+    const volumeCompleted = vi.fn();
+    const volume = bridge.dispatch(command).then(volumeCompleted);
+    expect(bridge.receive(send.mock.calls[0][0].requestId)).toBe(true);
+    expect(bridge.receive(send.mock.calls[2][0].requestId)).toBe(true);
     await vi.advanceTimersByTimeAsync(10000);
     expect(await setting).toEqual({ ok: false, code: "unavailable" });
     expect(completed).not.toHaveBeenCalled();
+    expect(volumeCompleted).not.toHaveBeenCalled();
+    expect(bridge.receive(send.mock.calls[1][0].requestId)).toBe(false);
+    expect(bridge.complete(send.mock.calls[2][0].requestId, { ok: true, data: { bus: "micVirtual", value: 0.6, muted: false } })).toBe(true);
+    await volume;
+    expect(volumeCompleted).toHaveBeenCalledExactlyOnceWith({ ok: true, data: { bus: "micVirtual", value: 0.6, muted: false } });
     expect(bridge.complete(send.mock.calls[0][0].requestId, { ok: true })).toBe(true);
     await playback;
     expect(completed).toHaveBeenCalledExactlyOnceWith({ ok: true });
@@ -59,7 +69,7 @@ describe("renderer control acknowledgements", () => {
     const second = bridge.dispatch(command);
     const otherId = send.mock.lastCall[0].requestId;
     controller.abort();
-    expect(send).toHaveBeenLastCalledWith({ command: "sound.cancel", requestId });
+    expect(send).toHaveBeenLastCalledWith({ command: "control.cancel", requestId });
     bridge.complete(requestId, { ok: false, code: "unavailable" });
     bridge.complete(otherId, { ok: true, data: { bus: "micVirtual", value: 0.6, muted: false } });
     expect(await first).toEqual({ ok: false, code: "unavailable" });
@@ -67,6 +77,23 @@ describe("renderer control acknowledgements", () => {
     const sent = send.mock.calls.length;
     expect(await bridge.dispatch(command, controller.signal)).toEqual({ ok: false, code: "unavailable" });
     expect(send).toHaveBeenCalledTimes(sent);
+  });
+
+  it("keeps an accepted mutation pending after disconnect until its applied result completes", async () => {
+    const send = vi.fn();
+    const bridge = createControlRenderer({ send });
+    const controller = new AbortController();
+    const completed = vi.fn();
+    const operation = bridge.dispatch(command, controller.signal).then(completed);
+    const requestId = send.mock.lastCall[0].requestId;
+    bridge.receive(requestId);
+    controller.abort();
+    await Promise.resolve();
+    expect(completed).not.toHaveBeenCalled();
+    expect(send).toHaveBeenLastCalledWith({ command: "control.cancel", requestId });
+    bridge.complete(requestId, { ok: true, data: { bus: "micVirtual", value: 0.6, muted: false } });
+    await operation;
+    expect(completed).toHaveBeenCalledExactlyOnceWith({ ok: true, data: { bus: "micVirtual", value: 0.6, muted: false } });
   });
 
   it("fails if the renderer does not answer or sends an invalid result", async () => {

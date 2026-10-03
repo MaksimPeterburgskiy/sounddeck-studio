@@ -15,20 +15,22 @@ function createControlRenderer({ send, timeoutMs = 5000 }) {
     if (signal?.aborted) return Promise.resolve({ ok: false, code: "unavailable" });
     return new Promise((resolve) => {
       const requestId = randomUUID();
-      const cancel = () => send({ command: message.command === "sound.play" ? "sound.cancel" : "control.cancel", requestId });
+      const cancel = () => {
+        try { send({ command: "control.cancel", requestId }); } catch {}
+      };
       const cleanup = () => {
         clearTimeout(timer);
         signal?.removeEventListener("abort", cancel);
       };
-      // Playback waits for the latest audio configuration, which can take
-      // longer than the settings acknowledgement timeout to open a device.
-      const timer = message.command === "sound.play" ? undefined : setTimeout(() => {
+      // Only receipt is timed out. Accepted operations remain pending until
+      // the renderer finishes saving and configuring audio.
+      const timer = setTimeout(() => {
         cleanup();
         pending.delete(requestId);
         cancel();
         resolve({ ok: false, code: "unavailable" });
       }, timeoutMs);
-      pending.set(requestId, { resolve, cleanup, message });
+      pending.set(requestId, { resolve, cleanup, timer, message });
       signal?.addEventListener("abort", cancel, { once: true });
       try {
         send({ ...message, requestId });
@@ -38,6 +40,13 @@ function createControlRenderer({ send, timeoutMs = 5000 }) {
         resolve({ ok: false, code: "unavailable" });
       }
     });
+  }
+
+  function receive(requestId) {
+    const request = pending.get(requestId);
+    if (!request) return false;
+    clearTimeout(request.timer);
+    return true;
   }
 
   function complete(requestId, result) {
@@ -64,7 +73,7 @@ function createControlRenderer({ send, timeoutMs = 5000 }) {
     return true;
   }
 
-  return { dispatch, complete, cancelPending };
+  return { dispatch, receive, complete, cancelPending };
 }
 
 module.exports = { createControlRenderer };

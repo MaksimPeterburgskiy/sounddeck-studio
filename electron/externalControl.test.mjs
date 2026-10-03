@@ -7,6 +7,8 @@ import os from "node:os";
 import path from "node:path";
 import { WebSocket, WebSocketServer } from "ws";
 import controlModule from "./externalControl.cjs";
+import rendererModule from "./controlRenderer.cjs";
+import { createAudioControlQueue } from "../src/lib/audioControlQueue.ts";
 import { CONTROL_PROTOCOL_VERSION, CONTROL_DEFAULT_PORT } from "../src/lib/controlProtocol.ts";
 
 const { createExternalControlBridge, launcherPath, PROTOCOL_VERSION, DEFAULT_PORT } = controlModule;
@@ -727,6 +729,74 @@ describe("external control protocol and dispatch", () => {
     expect(onCommand.mock.calls[1][1].aborted).toBe(false);
     completions[1]({ ok: true });
     expect((await other).body).toEqual({ ok: true });
+  });
+
+  it.each(["HTTP", "WebSocket"])("cancels disconnected %s mutations before application while applied mutations finish", async (transport) => {
+    let settings = { ...audioSettings };
+    let finishSave;
+    const saving = new Promise((resolve) => { finishSave = resolve; });
+    const persisted = [];
+    const requests = new Map();
+    const completed = [];
+    const queue = createAudioControlQueue({
+      getSettings: () => settings,
+      writeSettings: (next) => { settings = next; },
+      persist: async () => {
+        persisted.push(settings.micVirtualVolume);
+        if (persisted.length === 1) await saving;
+      },
+      waitForConfiguration: async () => {}
+    });
+    const renderer = rendererModule.createControlRenderer({ send: (message) => {
+      if (message.command === "control.cancel") {
+        requests.get(message.requestId)?.abort();
+        return;
+      }
+      const cancellation = new AbortController();
+      requests.set(message.requestId, cancellation);
+      renderer.receive(message.requestId);
+      void queue.enqueue(message, cancellation.signal).then((result) => {
+        requests.delete(message.requestId);
+        completed.push(result);
+        renderer.complete(message.requestId, result);
+      });
+    } });
+    onCommand.mockImplementation((command, signal) => renderer.dispatch(command, signal));
+    await create();
+    const disconnected = [];
+    let connection;
+    const submit = async (value) => {
+      if (transport === "WebSocket") {
+        connection ??= await session();
+        connection.send({ type: "command", id: `volume-${value * 10}`, command: "volume.set", args: { bus: "micVirtual", value } });
+      } else {
+        const state = bridge.getState();
+        const req = http.request({ createConnection: memoryConnect, hostname: "127.0.0.1", port: state.port,
+          method: "POST", path: "/v1/volumes/micVirtual", headers: { Authorization: `Bearer ${state.token}` } });
+        req.on("error", () => {});
+        req.end(JSON.stringify({ value }));
+        disconnected.push(req);
+      }
+    };
+    await submit(0.6);
+    await vi.waitFor(() => expect(persisted).toEqual([0.6]));
+    await submit(0.9);
+    await vi.waitFor(() => expect(onCommand).toHaveBeenCalledTimes(2));
+    const other = request("/v1/volumes/micVirtual", { method: "POST", body: { delta: 0.2 } });
+    await vi.waitFor(() => expect(onCommand).toHaveBeenCalledTimes(3));
+    if (connection) connection.ws.terminate();
+    for (const req of disconnected) req.destroy();
+    await vi.waitFor(() => expect(onCommand.mock.calls.slice(0, 2).every(([, signal]) => signal.aborted)).toBe(true));
+    expect(settings.micVirtualVolume).toBe(0.6);
+    finishSave();
+    expect(await other).toEqual({ status: 200, body: { ok: true, data: { bus: "micVirtual", value: 0.8, muted: false } } });
+    expect(persisted).toEqual([0.6, 0.8]);
+    expect(completed).toEqual([
+      { ok: true, data: { bus: "micVirtual", value: 0.6, muted: false } },
+      { ok: false, code: "unavailable" },
+      { ok: true, data: { bus: "micVirtual", value: 0.8, muted: false } }
+    ]);
+    expect(requests.size).toBe(0);
   });
 
   it("cancels pending WebSocket commands when their client disconnects", async () => {

@@ -44,8 +44,7 @@ import {
   Waves,
   X
 } from "lucide-react";
-import { applyAudioControlCommand, rollbackAudioControlSettings } from "./lib/controlSettings";
-import { createControlReplies } from "./lib/controlReplies";
+import { createAudioControlQueue } from "./lib/audioControlQueue";
 import { AudioEngine } from "./lib/audioEngine";
 import { CONTROL_DEFAULT_PORT } from "./lib/controlProtocol";
 import { beginAudioConfiguration, trackAudioConfiguration, waitForAudioConfiguration, watchAudioDeviceChanges } from "./lib/controlReadiness";
@@ -94,7 +93,7 @@ function getActiveMonitorLabel(devices: MediaDeviceInfo[], activeDeviceId: strin
 function App() {
   const [library, setLibrary] = useState<SoundLibrary | null>(null);
   const libraryRef = useRef<SoundLibrary | null>(null);
-  const controlRepliesRef = useRef(createControlReplies());
+  const controlSavedLibrariesRef = useRef(new WeakSet<SoundLibrary>());
   const [view, setView] = useState<View>("board");
   const [selectedSoundId, setSelectedSoundId] = useState<string>("");
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
@@ -135,6 +134,19 @@ function App() {
   const audioConfigurationRef = useRef<Promise<void> | null>(null);
   const pendingAudioSettingsRef = useRef<ReturnType<typeof beginAudioConfiguration>[]>([]);
   const controlRequests = useRef(new Map<string, AbortController>());
+  const configuredSettingsRef = useRef<SoundLibrary["settings"] | null>(null);
+  const audioControlQueue = useMemo(() => createAudioControlQueue({
+    getSettings: () => libraryRef.current?.settings ?? null,
+    writeSettings: (settings) => updateLibrary((current) => ({ ...current, settings })),
+    persist: () => {
+      const snapshot = libraryRef.current!;
+      controlSavedLibrariesRef.current.add(snapshot);
+      return window.sounddeck.saveLibrary(snapshot).then((result) => {
+        if (!result.ok) throw new Error("Library save failed");
+      });
+    },
+    waitForConfiguration: () => waitForAudioConfiguration(() => audioConfigurationRef.current)
+  }), []);
   const queueSoundPlay = useMemo(() => createSoundPlayQueue(), []);
   const stopSound = useCallback((soundId: string) => {
     queueSoundPlay.cancel(soundId);
@@ -261,9 +273,9 @@ function App() {
   }, []);
 
   useEffect(() => {
-    // Coalesce drag updates, but persist API changes before acknowledging them.
-    if (!library || library !== libraryRef.current || (draggingSoundId && !controlRepliesRef.current.length)) return;
-    void controlRepliesRef.current.save(() => window.sounddeck.saveLibrary(library));
+    // External mutations own their save; UI edits and rollback snapshots use this path.
+    if (!library || library !== libraryRef.current || draggingSoundId || controlSavedLibrariesRef.current.has(library)) return;
+    void window.sounddeck.saveLibrary(library).catch(() => undefined);
   }, [library, draggingSoundId]);
 
   const virtualAudioCandidates = useMemo(() => findVirtualAudioCandidates(devices, platform), [devices, platform]);
@@ -303,6 +315,8 @@ function App() {
 
   useEffect(() => {
     const disposeAudio = () => {
+      for (const cancellation of controlRequests.current.values()) cancellation.abort();
+      controlRequests.current.clear();
       queueSoundPlay.cancelAll();
       for (const complete of pendingAudioSettingsRef.current.splice(0)) complete(Promise.resolve());
       const engine = engineRef.current;
@@ -316,11 +330,11 @@ function App() {
     };
   }, []);
 
-  useLayoutEffect(() => {
-    if (!library) return;
+  function configureAudio(settings: SoundLibrary["settings"]) {
+    configuredSettingsRef.current = settings;
     const engineSettings = {
-      ...library.settings,
-      monitorDeviceId: normalizeMonitorDeviceId(library.settings.monitorDeviceId, library.settings.virtualOutputDeviceId)
+      ...settings,
+      monitorDeviceId: normalizeMonitorDeviceId(settings.monitorDeviceId, settings.virtualOutputDeviceId)
     };
     if (!engineRef.current) engineRef.current = new AudioEngine(
       engineSettings,
@@ -335,9 +349,15 @@ function App() {
         setDeviceStatus(status);
       }
     );
-    const work = engineRef.current.configure(engineSettings, library.settings.virtualOutputDeviceId);
+    const work = engineRef.current.configure(engineSettings, settings.virtualOutputDeviceId);
     for (const complete of pendingAudioSettingsRef.current.splice(0)) complete(work);
     trackAudioConfiguration(audioConfigurationRef, work);
+    // Keep the rejection observable to control commands while a save is pending.
+    void audioConfigurationRef.current.catch(() => undefined);
+  }
+
+  useLayoutEffect(() => {
+    if (library && library === libraryRef.current && configuredSettingsRef.current !== library.settings) configureAudio(library.settings);
   }, [library?.settings]);
 
   useEffect(() => {
@@ -598,23 +618,15 @@ function App() {
   }, [library, triggerSound, stopAllSounds]);
 
   useEffect(() => window.sounddeck.onControlCommand((request) => {
-    if (request.command === "sound.cancel") {
+    if (request.command === "control.cancel") {
       controlRequests.current.get(request.requestId)?.abort();
       return;
     }
     const { command, args } = request;
     if (request.command === "setting.set" || request.command === "setting.toggle" || request.command === "volume.set" || request.command === "volume.adjust" || request.command === "volume.mute") {
-      const current = libraryRef.current;
-      if (!current) return { ok: false, code: "unavailable" };
-      const applied = applyAudioControlCommand(current.settings, request);
-      const reply = controlRepliesRef.current.add({ ok: true, data: applied.data }, () => {
-        updateLibrary((latest) => {
-          const settings = rollbackAudioControlSettings(latest.settings, current.settings, applied.settings);
-          return settings === latest.settings ? latest : { ...latest, settings };
-        });
-      });
-      updateLibrary((latest) => ({ ...latest, settings: applied.settings }));
-      return reply;
+      const cancellation = new AbortController();
+      controlRequests.current.set(request.requestId, cancellation);
+      return audioControlQueue.enqueue(request, cancellation.signal).finally(() => controlRequests.current.delete(request.requestId));
     }
     if (command === "sound.play") {
       const sound = libraryRef.current?.boards.flatMap((board) => board.sounds).find((candidate) => candidate.id === args.soundId);
@@ -657,6 +669,7 @@ function App() {
     if (!current) return;
     const next = updater(current);
     libraryRef.current = next;
+    if (next.settings !== current.settings) configureAudio(next.settings);
     setLibrary(next);
   }
 
@@ -1043,6 +1056,7 @@ function App() {
       if (!normalizedPatch.monitorDeviceId) normalizedPatch.monitorDeviceLabel = "";
     }
     if ("virtualOutputDeviceId" in normalizedPatch) normalizedPatch.virtualOutputDeviceId = normalizeSelectableDeviceId(normalizedPatch.virtualOutputDeviceId);
+    audioControlQueue.recordWrites(Object.keys(normalizedPatch) as Array<keyof SoundLibrary["settings"]>);
     updateLibrary((current) => {
       const settings = { ...current.settings, ...normalizedPatch };
       settings.monitorDeviceId = normalizeMonitorDeviceId(settings.monitorDeviceId, settings.virtualOutputDeviceId);

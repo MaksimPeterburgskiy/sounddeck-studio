@@ -121,10 +121,11 @@ export interface ControlStatus extends ControlSettings {
   error: { code: string; message: string } | null;
 }
 
-type RendererControlCommandName = "sound.stop" | "board.cycle" | "setting.set" | "setting.toggle" | "volume.set" | "volume.adjust" | "volume.mute";
+type RendererMutationCommandName = "sound.play" | "setting.set" | "setting.toggle" | "volume.set" | "volume.adjust" | "volume.mute";
 export type RendererControlCommand =
-  | { command: "sound.cancel"; requestId: string }
-  | { command: "sound.play"; requestId: string; args: ControlCommandArgs["sound.play"] }
+  | { command: "control.cancel"; requestId: string }
   | {
-    [Name in RendererControlCommandName]: { command: Name; requestId?: string; args: ControlCommandArgs[Name] }
-  }[RendererControlCommandName];
+    [Name in RendererMutationCommandName]: { command: Name; requestId: string; args: ControlCommandArgs[Name] }
+  }[RendererMutationCommandName]
+  | { command: "sound.stop"; args: ControlCommandArgs["sound.stop"] }
+  | { command: "board.cycle"; args: ControlCommandArgs["board.cycle"] };

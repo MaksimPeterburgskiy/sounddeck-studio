@@ -111,7 +111,7 @@ async function boot(storageError) {
   };
   return { window, bridge, onCommand, event, fileSystem, token, documentLoaded,
     invoke: (name, sender = event, ...args) => {
-      const arity = { "library:load": 0, "library:save": 1, "control:state": 1, "control:result": 2, "hotkeys:capture": 1 }[name];
+      const arity = { "library:load": 0, "library:save": 1, "control:state": 1, "control:result": 2, "control:received": 1, "hotkeys:capture": 1 }[name];
       if (arity !== undefined && args.length === arity) args.push(token());
       return handlers.get(name)(sender, ...args);
     },
@@ -397,7 +397,7 @@ describe("main-process external control lifecycle", () => {
     const second = app.onCommand(play, secondCancellation.signal);
     const secondId = app.window.webContents.send.mock.lastCall[1].requestId;
     firstCancellation.abort();
-    expect(app.window.webContents.send).toHaveBeenLastCalledWith("control-command", { command: "sound.cancel", requestId: firstId });
+    expect(app.window.webContents.send).toHaveBeenLastCalledWith("control-command", { command: "control.cancel", requestId: firstId });
     expect(await first).toEqual({ ok: false, code: "unavailable" });
     expect(app.invoke("control:result", app.event, firstId, { ok: true })).toEqual({ ok: false });
     app.invoke("control:result", app.event, secondId, { ok: true });
@@ -434,6 +434,10 @@ describe("main-process external control lifecycle", () => {
     const current = app.onCommand(command);
     const currentRequest = app.window.webContents.send.mock.lastCall[1];
     expect(currentRequest.requestId).not.toBe(outgoingRequest.requestId);
+    expect(app.invoke("control:received", app.event, currentRequest.requestId, token)).toEqual({ ok: false });
+    expect(app.invoke("control:result", app.event, currentRequest.requestId, result, token)).toEqual({ ok: false });
+    expect(app.invoke("control:received", app.event, outgoingRequest.requestId)).toEqual({ ok: false });
+    expect(app.invoke("control:received", app.event, currentRequest.requestId)).toEqual({ ok: true });
     expect(app.invoke("control:result", app.event, outgoingRequest.requestId, result)).toEqual({ ok: false });
     expect(app.invoke("control:result", app.event, currentRequest.requestId, result)).toEqual({ ok: true });
     expect(await current).toEqual(result);
@@ -472,7 +476,7 @@ describe("main-process external control lifecycle", () => {
     const requestId = app.window.webContents.send.mock.lastCall[1].requestId;
     const target = name === "closed" ? app.window : app.window.webContents;
     target.emit(name, { isMainFrame: true, isSameDocument: false });
-    expect(app.window.webContents.send).toHaveBeenCalledWith("control-command", { command: "sound.cancel", requestId });
+    expect(app.window.webContents.send).toHaveBeenCalledWith("control-command", { command: "control.cancel", requestId });
     expect(await pending).toEqual({ ok: false, code: "unavailable" });
     if (name !== "closed") expect(app.invoke("control:result", app.event, requestId, { ok: true })).toEqual({ ok: false });
     await app.bridge.stop();
@@ -488,6 +492,9 @@ describe("main-process external control lifecycle", () => {
     const volumeRequest = app.window.webContents.send.mock.lastCall[1];
     const settingResult = { ok: true, data: { key: "micPassthrough", value: true } };
     const volumeResult = { ok: true, data: { bus: "micVirtual", value: 0.6, muted: true } };
+    expect(() => app.invoke("control:received", { ...app.event, senderFrame: { url: app.event.senderFrame.url } }, volumeRequest.requestId)).toThrow("Untrusted IPC sender");
+    expect(app.invoke("control:received", undefined, volumeRequest.requestId)).toEqual({ ok: true });
+    expect(app.invoke("control:received", undefined, settingRequest.requestId)).toEqual({ ok: true });
     expect(() => app.invoke("control:result", { ...app.event, senderFrame: { url: app.event.senderFrame.url } }, volumeRequest.requestId, volumeResult)).toThrow("Untrusted IPC sender");
     app.invoke("control:result", undefined, volumeRequest.requestId, volumeResult);
     app.invoke("control:result", undefined, settingRequest.requestId, settingResult);
