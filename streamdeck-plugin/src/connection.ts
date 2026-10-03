@@ -24,6 +24,7 @@ export class Connection {
   snapshot: ControlSnapshot | null = null;
   private serverProtocol = CONTROL_PROTOCOL_VERSION;
   private discovery: ControlDiscovery | null = null;
+  private distributionUnsupportedFor: string | null = null;
   private readonly readDiscovery: () => Promise<DiscoveryFile | null>;
   private readonly launcher: LaunchThrottle;
   private readonly retryMin: number;
@@ -133,6 +134,9 @@ export class Connection {
     // establish compatibility, or allow a press to launch it if it is stopped.
     // ws is a native client: no origin option or Origin header is supplied.
     // The discovery bind host is deliberately ignored, including LAN mode.
+    const serverKey = JSON.stringify([file.path, file.state.port, file.state.token, file.state.appVersion, file.state.appPath]);
+    const sendDistribution = Boolean(this.options.distribution) && this.distributionUnsupportedFor !== serverKey;
+    let awaitingWelcome = false;
     const socket = new WebSocket(`ws://127.0.0.1:${file.state.port}/`, {
       perMessageDeflate: false,
       handshakeTimeout: this.options.handshakeTimeoutMs ?? 5000,
@@ -146,8 +150,9 @@ export class Connection {
       if (!current()) return socket.terminate();
       const hello: ControlHello = {
         type: "hello", protocol: CONTROL_PROTOCOL_VERSION, token: file.state!.token,
-        client: { name: "SoundDeck Stream Deck plugin", version: this.version, ...(this.options.distribution ? { distribution: this.options.distribution } : {}) },
+        client: { name: "SoundDeck Stream Deck plugin", version: this.version, ...(sendDistribution ? { distribution: this.options.distribution } : {}) },
       };
+      awaitingWelcome = true;
       socket.send(JSON.stringify(hello));
       this.handshakeTimer = setTimeout(() => socket.terminate(), this.options.handshakeTimeoutMs ?? 5000);
       this.handshakeTimer.unref?.();
@@ -166,6 +171,16 @@ export class Connection {
       try {
         if (binary) return socket.terminate();
         const message = JSON.parse(data.toString()) as ControlServerMessage;
+        if (awaitingWelcome && (message.type === "error" || message.type === "welcome")) {
+          awaitingWelcome = false;
+          if (sendDistribution && message.type === "error" && message.code === "invalid-message"
+            && message.protocol === CONTROL_PROTOCOL_VERSION) {
+            // Older protocol-1 servers strictly validate client metadata. Retry
+            // without provenance on the next socket, and keep it omitted on
+            // reconnects until the discovered endpoint/token/app version changes.
+            this.distributionUnsupportedFor = serverKey;
+          }
+        }
         this.receive(message, socket);
       } catch { socket.terminate(); }
     });

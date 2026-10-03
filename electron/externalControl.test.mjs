@@ -525,6 +525,29 @@ describe("external control authentication", () => {
     await session();
   });
 
+  it("does not count invalid-message hellos with credentials toward the auth throttle", async () => {
+    await create();
+    // Stay one real credential mismatch below the throttle threshold.
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      expect((await request("/v1/state", { headers: { Authorization: "Bearer wrong" } })).status).toBe(401);
+    }
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      for (const token of [bridge.getState().token, "wrong"]) {
+        for (const invalid of [{ extra: true }, { client: { name: "client", version: "1", distribution: "other" } }]) {
+          const connection = await client();
+          connection.send(hello({ token, ...invalid }));
+          expect((await connection.next()).code).toBe("invalid-message");
+          await connection.closed;
+        }
+      }
+    }
+    expect((await request()).status).toBe(200);
+    await session();
+    // A fifth actual credential mismatch still triggers the existing throttle.
+    expect((await request("/v1/state", { headers: { Authorization: "Bearer wrong" } })).status).toBe(401);
+    expect((await request()).status).toBe(429);
+  });
+
   it("rotates the token, disconnects authenticated clients, and rejects the previous token", async () => {
     const initial = await create();
     const connection = await session();

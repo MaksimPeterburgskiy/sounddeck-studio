@@ -635,7 +635,8 @@ function createExternalControlBridge({
           || !Number.isInteger(message.protocol) || (message.token !== undefined && (typeof message.token !== "string" || message.token.length > 256))
           || !fields(message.client, ["name", "version", "distribution"]) || !text(message.client.name, 128) || !text(message.client.version, 64)
           || (message.client.distribution !== undefined && !["github", "marketplace"].includes(message.client.distribution))) {
-          if (hasToken) authFailure(address);
+          // Schema rejection is not a credential mismatch (for example, a newer
+          // client can send metadata that this server does not understand).
           return rejectSocket(ws, "invalid-message");
         }
         if (!authenticated(message.token)) {
