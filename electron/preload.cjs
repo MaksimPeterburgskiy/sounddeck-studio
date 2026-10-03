@@ -6,6 +6,10 @@ const controlReadyToken = new Promise((resolve) => {
   ipcRenderer.once("control-ready-token", (_event, token) => resolve(token));
 });
 
+// Pending callbacks survive renderer subscription changes within this document.
+const controlCommandRequests = new Map();
+let controlCommandStarts = Promise.resolve();
+
 contextBridge.exposeInMainWorld("sounddeck", {
   loadLibrary: () => controlReadyToken.then((token) => ipcRenderer.invoke("library:load", token)),
   saveLibrary: (library) => controlReadyToken.then((token) => ipcRenderer.invoke("library:save", library, token)),
@@ -47,7 +51,7 @@ contextBridge.exposeInMainWorld("sounddeck", {
   setControlSettings: (patch) => ipcRenderer.invoke("control:setSettings", patch),
   regenerateControlToken: () => ipcRenderer.invoke("control:regenerateToken"),
   pushControlState: (state) => controlReadyToken.then((token) => ipcRenderer.invoke("control:state", state, token)),
-  completeControlPlayback: (requestId, result) => controlReadyToken.then((token) => ipcRenderer.invoke("control:playbackResult", requestId, result, token)),
+
   controlReady: () => controlReadyToken.then((token) => ipcRenderer.invoke("control:ready", token)),
   onControlStatus: (callback) => {
     const listener = (_event, state) => callback(state);
@@ -55,7 +59,46 @@ contextBridge.exposeInMainWorld("sounddeck", {
     return () => ipcRenderer.removeListener("control-status", listener);
   },
   onControlCommand: (callback) => {
-    const listener = (_event, command) => callback(command);
+    const listener = (_event, { requestId, ...command }) => {
+      if (command.command === "control.cancel") {
+        const request = controlCommandRequests.get(requestId);
+        if (request) {
+          request.cancelled = true;
+          if (request.started) {
+            try { void Promise.resolve(request.callback({ ...command, requestId })).catch(() => {}); } catch {}
+          }
+        }
+        return Promise.resolve();
+      }
+      // Register before receipt can yield, so cancellation cannot get lost
+      // while main's acceptance reply is still in flight.
+      const request = { cancelled: false, started: false, callback };
+      if (requestId) controlCommandRequests.set(requestId, request);
+      const start = controlCommandStarts.then(async () => {
+        const token = await controlReadyToken;
+        try {
+          if (requestId) {
+            const receipt = await ipcRenderer.invoke("control:received", requestId, token);
+            if (!receipt.ok) return { skipped: true };
+          }
+          if (request.cancelled) return { token, result: { ok: false, code: "unavailable" } };
+          request.started = true;
+          // Return the operation promise inside an object: only callback
+          // invocation is ordered, while completion may await saves or audio.
+          return { token, result: callback({ ...command, requestId }) };
+        } catch {
+          return { token, result: { ok: false, code: "internal-error" } };
+        }
+      });
+      controlCommandStarts = start.then(() => undefined, () => undefined);
+      return start.then(async ({ skipped, token, result }) => {
+        if (skipped) return;
+        try { result = await result; } catch { result = { ok: false, code: "internal-error" }; }
+        if (requestId) await ipcRenderer.invoke("control:result", requestId, result, token).catch(() => {});
+      }).finally(() => {
+        if (requestId) controlCommandRequests.delete(requestId);
+      });
+    };
     ipcRenderer.on("control-command", listener);
     return () => ipcRenderer.removeListener("control-command", listener);
   },

@@ -8,6 +8,8 @@ const os = require("node:os");
 const { spawn } = require("node:child_process");
 const { createCorsairBridge, isCorsairSupportedPlatform, isGKeyAccelerator } = require("./corsair.cjs");
 const { createExternalControlBridge, launcherPath } = require("./externalControl.cjs");
+const { createControlRenderer } = require("./controlRenderer.cjs");
+const { createLibrarySaveQueue } = require("./librarySaveQueue.cjs");
 const { createHotkeyEngine } = require("./hotkeys.cjs");
 const { buildCropArgs } = require("./ffmpegArgs.cjs");
 const {
@@ -62,7 +64,6 @@ if (!app.requestSingleInstanceLock()) {
 let mainWindow;
 let controlRendererReady = false;
 let controlRendererToken = null;
-const pendingControlPlayback = new Map();
 let tray;
 let isQuitting = false;
 let allowWindowCloseForUpdate = false;
@@ -92,14 +93,6 @@ function handleTrustedIpc(channel, handler) {
   });
 }
 
-function clearPendingControlPlayback() {
-  for (const [requestId, resolve] of pendingControlPlayback) {
-    sendToMainWindow("control-command", { command: "sound.cancel", requestId });
-    resolve({ ok: false, code: "unavailable" });
-  }
-  pendingControlPlayback.clear();
-}
-
 const hotkeyEngine = createHotkeyEngine({
   onTrigger: (binding) => sendToMainWindow("hotkey-trigger", binding)
 });
@@ -118,6 +111,18 @@ const corsair = createCorsairBridge({
   }
 });
 
+// Readiness is owned by control:ready; this helper only tracks command replies.
+const controlRenderer = createControlRenderer({ send: (message) => sendToMainWindow("control-command", message) });
+
+function resetControlRenderer() {
+  hotkeyCaptureActive = false;
+  hotkeyEngine.setSuspended(false);
+  controlRendererReady = false;
+  controlRendererToken = null;
+  controlRenderer.cancelPending();
+  externalControl.setDocument(null);
+}
+
 const externalControl = createExternalControlBridge({
   userData: app.getPath("userData"),
   appVersion: app.getVersion(),
@@ -126,24 +131,7 @@ const externalControl = createExternalControlBridge({
   onCommand: ({ command, args }, signal) => {
     if (hotkeyCaptureActive) return { ok: false, code: "busy" };
     if (!controlRendererReady || !mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return { ok: false, code: "unavailable" };
-    if (command === "sound.play") {
-      if (signal?.aborted) return { ok: false, code: "unavailable" };
-      const requestId = crypto.randomUUID();
-      return new Promise((resolve) => {
-        const cancel = () => {
-          sendToMainWindow("control-command", { command: "sound.cancel", requestId });
-          complete({ ok: false, code: "unavailable" });
-        };
-        const complete = (result) => {
-          signal?.removeEventListener("abort", cancel);
-          pendingControlPlayback.delete(requestId);
-          resolve(result);
-        };
-        pendingControlPlayback.set(requestId, complete);
-        signal?.addEventListener("abort", cancel, { once: true });
-        sendToMainWindow("control-command", { command, args, requestId });
-      });
-    }
+    if (command === "sound.play" || command.startsWith("setting.") || command.startsWith("volume.")) return controlRenderer.dispatch({ command, args }, signal);
     const binding = { accelerator: "" };
     if (command === "playback.stopAll") binding.type = "stop-all";
     else if (command === "board.activate") Object.assign(binding, { type: "board", boardId: args.boardId });
@@ -159,8 +147,8 @@ const externalControl = createExternalControlBridge({
 const shutdownLifecycle = createShutdownLifecycle({
   onShutdown: () => {
     isQuitting = true;
-    clearPendingControlPlayback();
     hotkeyCaptureActive = false;
+    resetControlRenderer();
     hotkeyEngine.stop();
     corsair.stop();
     void externalControl.stop();
@@ -461,6 +449,10 @@ async function initializeLibrary() {
           micMonitorVolume: 1,
           soundboardVirtualVolume: 1,
           soundboardMonitorVolume: 1,
+          micVirtualMuted: false,
+          micMonitorMuted: false,
+          soundboardVirtualMuted: false,
+          soundboardMonitorMuted: false,
           monitorDeviceId: "",
           monitorDeviceLabel: "",
           virtualOutputDeviceId: "",
@@ -831,16 +823,9 @@ async function createWindow() {
     }
   });
   mainWindow = window;
-  controlRendererReady = false;
-  controlRendererToken = null;
+  resetControlRenderer();
   const clearControlRendererState = () => {
-    if (mainWindow !== window) return;
-    hotkeyCaptureActive = false;
-    hotkeyEngine.setSuspended(false);
-    controlRendererReady = false;
-    controlRendererToken = null;
-    clearPendingControlPlayback();
-    externalControl.setDocument(null);
+    if (mainWindow === window) resetControlRenderer();
   };
   window.webContents.on("did-start-navigation", (details) => {
     if (details.isMainFrame && !details.isSameDocument) clearControlRendererState();
@@ -881,7 +866,7 @@ async function createWindow() {
   });
   window.on("closed", () => {
     if (mainWindow === window) {
-      clearControlRendererState();
+      resetControlRenderer();
       mainWindow = undefined;
     }
   });
@@ -1094,10 +1079,7 @@ function setupAutoUpdates() {
 app.whenReady().then(async () => {
   await createWindow();
   if (shutdownLifecycle.isShuttingDown() || !mainWindow) return;
-  void externalControl.start(async () => {
-    await ensureLibrary();
-    return readJson(libraryFile());
-  });
+  void externalControl.start(() => librarySaveQueue.load());
   app.on("activate", () => {
     if (shutdownLifecycle.isShuttingDown()) return;
     if (mainWindow) {
@@ -1124,36 +1106,33 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
 
-// Keep disk reads/writes in request order as well as publishing cache updates
-// with their original ownership. Finish accepted saves before a new document
-// reads the disk, so its library includes every edit accepted before reload.
-let libraryIo = Promise.resolve();
-function serialLibrary(operation) {
-  const result = libraryIo.then(operation);
-  libraryIo = result.catch(() => {});
-  return result;
-}
+// One disk queue coalesces cumulative saves and keeps reads behind accepted
+// writes. Cache publication retains the ownership captured at IPC receipt.
+const librarySaveQueue = createLibrarySaveQueue({
+  load: async () => {
+    await ensureLibrary();
+    return readJson(libraryFile());
+  },
+  save: async (library) => {
+    await ensureLibrary();
+    await fs.writeFile(libraryFile(), JSON.stringify(library, null, 2));
+    return { ok: true };
+  }
+});
 
 handleTrustedIpc("library:load", (_event, token) => {
   const owner = token && externalControl.beginUpdate(token);
   if (!owner) throw new Error("Obsolete library document");
-  return serialLibrary(async () => {
-    await ensureLibrary();
-    const library = await readJson(libraryFile());
+  return librarySaveQueue.load().then((library) => {
     externalControl.updateLibrary(library, owner);
     return library;
   });
 });
-
 handleTrustedIpc("library:save", (_event, library, token) => {
   const owner = token && externalControl.beginUpdate(token);
   if (!owner) return { ok: false };
   externalControl.updateLibrary(library, owner);
-  return serialLibrary(async () => {
-    await ensureLibrary();
-    await fs.writeFile(libraryFile(), JSON.stringify(library, null, 2));
-    return { ok: true };
-  });
+  return librarySaveQueue.save(library);
 });
 
 handleTrustedIpc("library:reveal", async () => {
@@ -1411,22 +1390,19 @@ handleTrustedIpc("control:ready", (_event, token) => {
   controlRendererReady = true;
   return { ok: true };
 });
-handleTrustedIpc("control:playbackResult", (_event, requestId, result, token) => {
-  if (!controlRendererToken || token !== controlRendererToken) return { ok: false };
-  const resolve = pendingControlPlayback.get(requestId);
-  if (!resolve) return { ok: false };
-  if (!result || (result.ok !== true && (result.ok !== false || !["unavailable", "not-found", "internal-error"].includes(result.code)))) {
-    throw new Error("Invalid control playback result");
-  }
-  pendingControlPlayback.delete(requestId);
-  resolve(result.ok ? { ok: true } : { ok: false, code: result.code });
-  return { ok: true };
-});
 handleTrustedIpc("control:state", (_event, state, token) => {
   const owner = token && externalControl.beginUpdate(token);
   if (!owner) return { ok: false };
   externalControl.updateLiveState(state, owner);
   return { ok: true };
+});
+handleTrustedIpc("control:received", (_event, requestId, token) => {
+  if (!controlRendererToken || token !== controlRendererToken) return { ok: false };
+  return { ok: controlRenderer.receive(requestId) };
+});
+handleTrustedIpc("control:result", (_event, requestId, result, token) => {
+  if (!controlRendererToken || token !== controlRendererToken) return { ok: false };
+  return { ok: controlRenderer.complete(requestId, result) };
 });
 
 handleTrustedIpc("app:openExternal", async (_event, url) => {

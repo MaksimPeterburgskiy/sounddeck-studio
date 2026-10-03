@@ -368,6 +368,27 @@ describe("AudioEngine output routing", () => {
     }
   });
 
+  it("mutes soundboard buses independently, including preview, and restores their saved gains", async () => {
+    const initial = { ...dualRouteSettings, soundboardMonitorVolume: 0.3, soundboardVirtualVolume: 0.7, soundboardVirtualMuted: true };
+    const engine = new AudioEngine(initial, vi.fn());
+    await engine.configure(initial, "cable-device");
+    const [monitorBus, previewBus] = monitorContext().gains;
+    const virtualBus = virtualContext().gains[0];
+    expect(monitorBus.gain.value).toBe(0.3);
+    expect(virtualBus.gain.value).toBe(0);
+    await engine.play(makeSound());
+    await engine.configure({ ...initial, soundboardMonitorMuted: true, soundboardVirtualMuted: false }, "cable-device");
+    expect(monitorBus.gain.value).toBe(0);
+    expect(previewBus.gain.value).toBe(0);
+    expect(virtualBus.gain.value).toBe(0.7);
+    await engine.configure({ ...initial, soundboardVirtualMuted: false }, "cable-device");
+    expect(monitorBus.gain.value).toBe(0.3);
+    expect(previewBus.gain.value).toBe(0.3);
+    expect(virtualBus.gain.value).toBe(0.7);
+    expect(engine.isPlaying("sound-1")).toBe(true);
+    await engine.dispose();
+  });
+
   it("routes a monitor-target sound to the monitor context only", async () => {
     const engine = new AudioEngine(playbackSettings, vi.fn());
 
