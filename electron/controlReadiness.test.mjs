@@ -37,10 +37,12 @@ describe("preload control readiness", () => {
     expect(document.ipcRenderer.invoke).not.toHaveBeenCalled();
     document.ipcRenderer.emit("control-ready-token", {}, "source-document");
     await Promise.all(pending);
-    await document.sounddeck.completeControlPlayback("request", { ok: true });
+    document.sounddeck.onControlCommand(async () => ({ ok: true }));
+    document.ipcRenderer.emit("control-command", {}, { command: "sound.play", args: { soundId: "sound" }, requestId: "request" });
+    await vi.waitFor(() => expect(document.ipcRenderer.invoke).toHaveBeenCalledWith("control:result", "request", { ok: true }, "source-document"));
     expect(document.ipcRenderer.invoke.mock.calls).toEqual([
       ["library:load", "source-document"], ["library:save", library, "source-document"],
-      ["control:state", state, "source-document"], ["control:playbackResult", "request", { ok: true }, "source-document"]
+      ["control:state", state, "source-document"], ["control:result", "request", { ok: true }, "source-document"]
     ]);
   });
 });

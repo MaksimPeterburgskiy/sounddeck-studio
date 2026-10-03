@@ -1,4 +1,4 @@
-import type { ControlLiveState, ControlPlaybackResult, ControlSettingsPatch, ControlStatus, RendererControlCommand } from "./lib/controlProtocol";
+import type { ControlLiveState, ControlSettingsPatch, ControlStatus, RendererControlCommand, RendererControlResult } from "./lib/controlProtocol";
 
 export type OutputTarget = "monitor" | "virtual" | "both";
 export type RetriggerMode = "restart" | "overlap" | "stop";
@@ -85,6 +85,10 @@ export interface AudioSettings {
   micMonitorVolume: number;
   soundboardVirtualVolume: number;
   soundboardMonitorVolume: number;
+  micVirtualMuted: boolean;
+  micMonitorMuted: boolean;
+  soundboardVirtualMuted: boolean;
+  soundboardMonitorMuted: boolean;
   monitorDeviceId: string;
   monitorDeviceLabel: string;
   virtualOutputDeviceId: string;
@@ -224,10 +228,9 @@ declare global {
       setControlSettings: (patch: ControlSettingsPatch) => Promise<ControlStatus>;
       regenerateControlToken: () => Promise<ControlStatus>;
       pushControlState: (state: Pick<ControlLiveState, "playback">) => Promise<{ ok: boolean }>;
-      completeControlPlayback: (requestId: string, result: ControlPlaybackResult) => Promise<{ ok: boolean }>;
       controlReady: () => Promise<{ ok: boolean }>;
       onControlStatus: (callback: (status: ControlStatus) => void) => () => void;
-      onControlCommand: (callback: (command: RendererControlCommand) => void) => () => void;
+      onControlCommand: (callback: (command: RendererControlCommand) => RendererControlResult | void | Promise<RendererControlResult | void>) => () => void;
       getCorsairStatus: () => Promise<CorsairState>;
       onCorsairStatus: (callback: (state: CorsairState) => void) => () => void;
       onCorsairKey: (callback: (key: string) => void) => () => void;

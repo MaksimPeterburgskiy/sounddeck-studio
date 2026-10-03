@@ -1,6 +1,13 @@
 export const CONTROL_PROTOCOL_VERSION = 1;
 export const CONTROL_DEFAULT_PORT = 41730;
 
+export type ControlSettingKey = "micPassthrough" | "soundboardToVirtualMic" | "noiseSuppressionEnabled" | "echoCancellationEnabled" | "monitorToHeadphones";
+export type ControlVolumeBus = "micVirtual" | "micMonitor" | "soundboardVirtual" | "soundboardMonitor";
+export type ControlToggleSettings = Record<ControlSettingKey, boolean>;
+export type ControlVolumes = Record<ControlVolumeBus, { value: number; muted: boolean }>;
+export interface ControlSettingResult { key: ControlSettingKey; value: boolean }
+export interface ControlVolumeResult { bus: ControlVolumeBus; value: number; muted: boolean }
+
 export interface ControlPlaybackVoice {
   soundId: string;
   startedAt: number;
@@ -27,6 +34,8 @@ export interface ControlLibrary {
 
 export interface ControlSnapshot extends ControlLiveState {
   library: ControlLibrary;
+  settings: ControlToggleSettings;
+  volumes: ControlVolumes;
 }
 
 export interface ControlCommandArgs {
@@ -37,6 +46,11 @@ export interface ControlCommandArgs {
   "board.cycle": { direction?: 1 | -1 };
   "library.get": Record<string, never>;
   "sound.image": { soundId: string };
+  "setting.set": { key: ControlSettingKey; value: boolean };
+  "setting.toggle": { key: ControlSettingKey };
+  "volume.set": { bus: ControlVolumeBus; value: number };
+  "volume.adjust": { bus: ControlVolumeBus; delta: number };
+  "volume.mute": { bus: ControlVolumeBus; muted?: boolean };
 }
 
 export type ControlCommandName = keyof ControlCommandArgs;
@@ -58,13 +72,20 @@ export interface ControlHello {
 
 export type ControlErrorCode = "unauthorized" | "forbidden" | "disabled" | "protocol-mismatch" | "invalid-message" | "invalid-args" | "unknown-command" | "not-found" | "rate-limited" | "payload-too-large" | "busy" | "unavailable" | "internal-error";
 export type ControlResult =
-  | { type: "result"; id: string; ok: true; data?: ControlLibrary | { image: string | null } }
+  | { type: "result"; id: string; ok: true; data?: ControlLibrary | { image: string | null } | ControlSettingResult | ControlVolumeResult }
   | { type: "result"; id: string; ok: false; code: ControlErrorCode };
+
+export type RendererControlResult =
+  | ControlPlaybackResult
+  | { ok: true; data: ControlSettingResult | ControlVolumeResult }
+  | { ok: false; code: ControlErrorCode };
 
 export interface ControlEventData {
   "library.changed": ControlLibrary;
   "board.changed": { activeBoardId: string };
   "playback.changed": ControlPlaybackVoice[];
+  "settings.changed": ControlToggleSettings;
+  "volumes.changed": ControlVolumes;
 }
 
 export type ControlEventName = keyof ControlEventData;
@@ -100,8 +121,10 @@ export interface ControlStatus extends ControlSettings {
   error: { code: string; message: string } | null;
 }
 
+type RendererControlCommandName = "sound.stop" | "board.cycle" | "setting.set" | "setting.toggle" | "volume.set" | "volume.adjust" | "volume.mute";
 export type RendererControlCommand =
   | { command: "sound.cancel"; requestId: string }
   | { command: "sound.play"; requestId: string; args: ControlCommandArgs["sound.play"] }
-  | { command: "sound.stop"; args: ControlCommandArgs["sound.stop"] }
-  | { command: "board.cycle"; args: ControlCommandArgs["board.cycle"] };
+  | {
+    [Name in RendererControlCommandName]: { command: Name; requestId?: string; args: ControlCommandArgs[Name] }
+  }[RendererControlCommandName];

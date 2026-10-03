@@ -77,8 +77,15 @@ let onCommand;
 const sockets = new Set();
 const extraServers = new Set();
 const icon = "data:image/png;base64,aWNvbg==";
+const audioSettings = {
+  micPassthrough: false, soundboardToVirtualMic: false, noiseSuppressionEnabled: false,
+  echoCancellationEnabled: false, monitorToHeadphones: true,
+  micVirtualVolume: 1, micMonitorVolume: 1, soundboardVirtualVolume: 1, soundboardMonitorVolume: 1,
+  micVirtualMuted: false, micMonitorMuted: false, soundboardVirtualMuted: false, soundboardMonitorMuted: false
+};
 const library = {
   activeBoardId: "board-a",
+  settings: audioSettings,
   boards: [
     { id: "board-a", name: "Main", color: "#123456", sounds: [{ id: "sound-new", title: "Airhorn", color: "#654321", image: icon, mediaPath: "/private/media.wav" }] },
     { id: "board-b", name: "Other", color: "#abcdef", sounds: [{ id: "sound-other", title: "Airhorn", color: "#000000" }] }
@@ -217,6 +224,24 @@ describe("external control discovery and listener", () => {
     bridge.updateLibrary(library, earlier);
     bridge.updateLiveState({ playback: [] }, earlier);
     expect((await request()).body).toMatchObject({ activeBoardId: "board-b", playback });
+  });
+
+  it("rejects stale audio snapshots without emitting settings or volume changes", async () => {
+    await create();
+    const connection = await session();
+    bridge.setDocument("old");
+    const old = bridge.beginUpdate("old");
+    bridge.setDocument("new");
+    const earlier = bridge.beginUpdate("new");
+    const settings = { ...audioSettings, micPassthrough: true, micVirtualVolume: 0.3, micVirtualMuted: true };
+    expect(bridge.updateLibrary({ ...library, settings }, bridge.beginUpdate("new"))).toBe(true);
+    expect(await connection.next()).toMatchObject({ event: "settings.changed", data: { micPassthrough: true } });
+    expect(await connection.next()).toMatchObject({ event: "volumes.changed", data: { micVirtual: { value: 0.3, muted: true } } });
+    expect(bridge.updateLibrary(library, old)).toBe(false);
+    expect(bridge.updateLibrary(library, earlier)).toBe(false);
+    connection.send({ type: "command", id: "after-stale-audio", command: "library.get", args: {} });
+    expect(await connection.next()).toMatchObject({ type: "result", id: "after-stale-audio" });
+    expect(bridge.getSnapshot()).toMatchObject({ settings: { micPassthrough: true }, volumes: { micVirtual: { value: 0.3, muted: true } } });
   });
 
   it("preserves an empty renderer library published before startup initialization finishes", async () => {
@@ -648,14 +673,18 @@ describe("external control protocol and dispatch", () => {
     }
   });
 
-  it("keeps a fully received HTTP command alive during dispatch and does not cancel a completed response", async () => {
+  it.each([
+    ["/v1/sounds/sound-new/play", {}],
+    ["/v1/settings/micPassthrough", { toggle: true }],
+    ["/v1/volumes/micVirtual", { delta: -0.1 }]
+  ])("keeps fully received HTTP %s alive during dispatch and does not cancel a completed response", async (url, body) => {
     let listener;
     await create({ createServer: (...args) => { listener = memoryServer(...args); return listener; } });
     let socket;
     listener.once("request", (req) => { socket = req.socket; });
     let complete;
     onCommand.mockImplementation(() => new Promise((resolve) => { complete = resolve; }));
-    const response = request("/v1/sounds/sound-new/play", { method: "POST", body: {} });
+    const response = request(url, { method: "POST", body });
     await vi.waitFor(() => expect(complete).toBeTypeOf("function"));
     const signal = onCommand.mock.lastCall[1];
     expect(socket.timeoutMs).toBe(0);
@@ -781,6 +810,111 @@ describe("external control protocol and dispatch", () => {
     finish();
     const result = await pending;
     if (reason === "token") expect(result).toEqual({ status: 503, body: { ok: false, code: "unavailable" } });
+  });
+
+  it("dispatches every setting and bus over WebSocket and returns renderer values", async () => {
+    await create();
+    const connection = await session();
+    for (const key of ["micPassthrough", "soundboardToVirtualMic", "noiseSuppressionEnabled", "echoCancellationEnabled", "monitorToHeadphones"]) {
+      for (const [command, args] of [["setting.set", { key, value: false }], ["setting.toggle", { key }]]) {
+        const data = { key, value: command === "setting.toggle" };
+        onCommand.mockReturnValueOnce({ ok: true, data });
+        connection.send({ type: "command", id: "setting", command, args });
+        expect(await connection.next()).toEqual({ type: "result", id: "setting", ok: true, data });
+        expect(onCommand).toHaveBeenLastCalledWith({ command, args }, expect.any(AbortSignal));
+      }
+    }
+    for (const bus of ["micVirtual", "micMonitor", "soundboardVirtual", "soundboardMonitor"]) {
+      for (const [command, args] of [
+        ["volume.set", { bus, value: 0 }], ["volume.set", { bus, value: 1 }],
+        ["volume.adjust", { bus, delta: -2 }], ["volume.adjust", { bus, delta: 2 }],
+        ["volume.mute", { bus, muted: false }], ["volume.mute", { bus, muted: true }], ["volume.mute", { bus }]
+      ]) {
+        const data = { bus, value: 0.5, muted: command === "volume.mute" };
+        onCommand.mockReturnValueOnce({ ok: true, data });
+        connection.send({ type: "command", id: "volume", command, args });
+        expect(await connection.next()).toEqual({ type: "result", id: "volume", ok: true, data });
+        expect(onCommand).toHaveBeenLastCalledWith({ command, args }, expect.any(AbortSignal));
+      }
+    }
+  });
+
+  it("maps exclusive HTTP setting and volume bodies to the same commands and results", async () => {
+    await create();
+    for (const [url, body, expected, data] of [
+      ["/v1/settings/micPassthrough", { value: false }, { command: "setting.set", args: { key: "micPassthrough", value: false } }, { key: "micPassthrough", value: false }],
+      ["/v1/settings/monitorToHeadphones", { toggle: true }, { command: "setting.toggle", args: { key: "monitorToHeadphones" } }, { key: "monitorToHeadphones", value: false }],
+      ["/v1/volumes/micVirtual", { value: 0.4 }, { command: "volume.set", args: { bus: "micVirtual", value: 0.4 } }, { bus: "micVirtual", value: 0.4, muted: false }],
+      ["/v1/volumes/micMonitor", { delta: -0.1 }, { command: "volume.adjust", args: { bus: "micMonitor", delta: -0.1 } }, { bus: "micMonitor", value: 0.9, muted: false }],
+      ["/v1/volumes/soundboardVirtual", { muted: false }, { command: "volume.mute", args: { bus: "soundboardVirtual", muted: false } }, { bus: "soundboardVirtual", value: 1, muted: false }],
+      ["/v1/volumes/soundboardMonitor", { toggleMute: true }, { command: "volume.mute", args: { bus: "soundboardMonitor" } }, { bus: "soundboardMonitor", value: 1, muted: true }]
+    ]) {
+      onCommand.mockReturnValueOnce({ ok: true, data });
+      expect(await request(url, { method: "POST", body })).toEqual({ status: 200, body: { ok: true, data } });
+      expect(onCommand).toHaveBeenLastCalledWith(expected, expect.any(AbortSignal));
+    }
+    onCommand.mockReturnValueOnce({ ok: false, code: "unavailable" });
+    expect(await request("/v1/settings/micPassthrough", { method: "POST", body: { toggle: true } })).toEqual({ status: 503, body: { ok: false, code: "unavailable" } });
+  });
+
+  it("rejects unsupported audio keys, buses, extra arguments and invalid values without dispatch", async () => {
+    await create();
+    const connection = await session();
+    for (const [command, args] of [
+      ["setting.set", { key: "monitorMicToHeadphones", value: true }],
+      ["setting.set", { key: "micPassthrough" }],
+      ["setting.set", { key: "micPassthrough", value: 1 }],
+      ["setting.toggle", { key: "micPassthrough", value: true }],
+      ["setting.toggle", { key: ["micPassthrough"] }],
+      ["volume.set", { bus: "micVirtual", value: -0.01 }],
+      ["volume.set", { bus: "micVirtual", value: 1.01 }],
+      ["volume.set", { bus: "micVirtual", value: "0.5" }],
+      ["volume.adjust", { bus: "micVirtual", delta: Infinity }],
+      ["volume.adjust", { bus: "micVirtual" }],
+      ["volume.adjust", { bus: "micVirtual", delta: 0.1, value: 0.5 }],
+      ["volume.mute", { bus: "micVolume", muted: true }],
+      ["volume.mute", { bus: "micVirtual", muted: null }],
+      ["volume.mute", { bus: "micVirtual", toggleMute: true }]
+    ]) {
+      connection.send({ type: "command", id: "invalid-audio", command, args });
+      expect(await connection.next()).toMatchObject({ id: "invalid-audio", ok: false, code: "invalid-args" });
+    }
+    for (const [url, bodies] of [
+      ["/v1/settings/micPassthrough", [{}, [], { value: true, toggle: true }, { toggle: false }, { toggle: 1 }, { value: null }, { value: true, key: "monitorToHeadphones" }]],
+      ["/v1/volumes/micVirtual", [{}, { value: 0.5, delta: 0.1 }, { value: 0.5, muted: true }, { muted: true, toggleMute: true }, { toggleMute: false }, { delta: "0.1" }, { muted: null }, { value: 1.01 }, { delta: null }, { bus: "micMonitor", muted: true }]],
+      ["/v1/settings/unknown", [{ toggle: true }]],
+      ["/v1/volumes/unknown", [{ muted: true }]]
+    ]) {
+      for (const body of bodies) expect((await request(url, { method: "POST", body })).status).toBe(400);
+    }
+    expect(onCommand).not.toHaveBeenCalled();
+  });
+
+  it("includes audio values in both snapshots and emits changes once from cached library updates", async () => {
+    await create();
+    const connection = await client();
+    connection.send(hello());
+    const initial = (await connection.next()).state;
+    expect(initial.settings).toEqual({ micPassthrough: false, soundboardToVirtualMic: false, noiseSuppressionEnabled: false, echoCancellationEnabled: false, monitorToHeadphones: true });
+    expect(initial.volumes).toEqual({ micVirtual: { value: 1, muted: false }, micMonitor: { value: 1, muted: false }, soundboardVirtual: { value: 1, muted: false }, soundboardMonitor: { value: 1, muted: false } });
+    expect((await request()).body).toEqual(initial);
+    const changed = { ...library, settings: { ...audioSettings, micPassthrough: true, micVirtualVolume: 0.3, micVirtualMuted: true } };
+    bridge.updateLibrary(changed);
+    expect(await connection.next()).toEqual({ type: "event", event: "settings.changed", data: { ...initial.settings, micPassthrough: true } });
+    expect(await connection.next()).toEqual({ type: "event", event: "volumes.changed", data: { ...initial.volumes, micVirtual: { value: 0.3, muted: true } } });
+    bridge.updateLibrary(changed);
+    bridge.updateLiveState({ activeBoardId: "board-a", playback: [] });
+    connection.send({ type: "command", id: "audio-no-duplicate", command: "library.get", args: {} });
+    expect(await connection.next()).toMatchObject({ type: "result", id: "audio-no-duplicate" });
+    expect((await request()).body).toMatchObject({ settings: { micPassthrough: true }, volumes: { micVirtual: { value: 0.3, muted: true } } });
+    const unmuted = { ...changed, settings: { ...changed.settings, micVirtualMuted: false } };
+    bridge.updateLibrary(unmuted);
+    expect(await connection.next()).toEqual({ type: "event", event: "volumes.changed", data: { ...initial.volumes, micVirtual: { value: 0.3, muted: false } } });
+    bridge.updateLibrary({ ...unmuted, settings: { ...unmuted.settings, noiseSuppressionEnabled: true } });
+    expect(await connection.next()).toEqual({ type: "event", event: "settings.changed", data: { ...initial.settings, micPassthrough: true, noiseSuppressionEnabled: true } });
+    bridge.updateLibrary({ ...library, settings: undefined });
+    expect(await connection.next()).toEqual({ type: "event", event: "settings.changed", data: initial.settings });
+    expect(await connection.next()).toEqual({ type: "event", event: "volumes.changed", data: initial.volumes });
   });
 
   it("rejects unknown commands, paths, extra fields, wrong types and invalid direction without dispatch", async () => {

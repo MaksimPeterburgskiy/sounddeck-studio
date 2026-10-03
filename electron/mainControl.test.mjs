@@ -82,14 +82,14 @@ async function boot(storageError) {
   const electron = {
     app, BrowserWindow: Window, ipcMain: { handle: (name, handler) => handlers.set(name, handler) },
     Menu: { setApplicationMenu: () => {}, buildFromTemplate: () => [] },
-    Tray: class extends EventEmitter { setToolTip() {} setContextMenu() {} },
+    Tray: class extends EventEmitter { setToolTip() {} setContextMenu() {} destroy() {} },
     nativeImage: { createFromPath: () => icon }
   };
   const overrides = {
     ...helperModules,
     electron, "node:fs/promises": fileSystem,
-    "./hotkeys.cjs": { createHotkeyEngine: () => ({ setSuspended: vi.fn() }) },
-    "./corsair.cjs": { createCorsairBridge: () => ({ start: () => {} }) },
+    "./hotkeys.cjs": { createHotkeyEngine: () => ({ stop: () => {}, setSuspended: vi.fn() }) },
+    "./corsair.cjs": { createCorsairBridge: () => ({ start: () => {}, stop: () => {} }) },
     "./externalControl.cjs": { ...controlModule, createExternalControlBridge: (options) => {
       onCommand = options.onCommand;
       bridge = controlModule.createExternalControlBridge({ ...options, fileSystem });
@@ -110,7 +110,7 @@ async function boot(storageError) {
   };
   return { window, bridge, onCommand, event, fileSystem, token, documentLoaded,
     invoke: (name, sender = event, ...args) => {
-      const arity = { "library:load": 0, "library:save": 1, "control:state": 1, "control:playbackResult": 2, "hotkeys:capture": 1 }[name];
+      const arity = { "library:load": 0, "library:save": 1, "control:state": 1, "control:result": 2, "hotkeys:capture": 1 }[name];
       if (arity !== undefined && args.length === arity) args.push(token());
       return handlers.get(name)(sender, ...args);
     },
@@ -185,11 +185,16 @@ describe("main-process external control lifecycle", () => {
   it("requires trusted renderer readiness and clears it on reload, crash and destruction", async () => {
     const app = await boot();
     const command = { command: "board.cycle", args: { direction: 1 } };
-    expect(app.onCommand(command)).toEqual({ ok: false, code: "unavailable" });
+    const audioCommand = { command: "volume.mute", args: { bus: "micVirtual" } };
+    for (const pending of [command, audioCommand, { command: "setting.toggle", args: { key: "micPassthrough" } }]) {
+      expect(app.onCommand(pending)).toEqual({ ok: false, code: "unavailable" });
+    }
     expect(() => app.invoke("control:ready", { ...app.event, senderFrame: { url: app.event.senderFrame.url } })).toThrow("Untrusted IPC sender");
     await app.loaded();
     await app.invoke("control:getSettings");
+    app.invoke("control:state", undefined, { activeBoardId: "board-a", playback: [] });
     expect(app.onCommand(command).code).toBe("unavailable");
+    expect(app.onCommand(audioCommand).code).toBe("unavailable");
     app.ready();
     for (const direction of [1, -1]) {
       const cycle = { command: "board.cycle", args: { direction } };
@@ -201,14 +206,20 @@ describe("main-process external control lifecycle", () => {
     expect(app.onCommand(command)).toEqual({ ok: true });
     for (const name of ["did-start-navigation", "render-process-gone", "destroyed"]) {
       app.bridge.updateLiveState({ activeBoardId: "board-default", playback: [{ soundId: "sound-a", startedAt: 1, duration: 2, loop: true }] });
+      const pending = app.onCommand(audioCommand);
       app.window.webContents.emit(name, { isMainFrame: true, isSameDocument: false });
+      expect(await pending).toEqual({ ok: false, code: "unavailable" });
       expect(app.onCommand(command).code).toBe("unavailable");
       expect(app.bridge.getSnapshot()).toMatchObject({ activeBoardId: "board-default", playback: [] });
+      expect(app.invoke("control:state", undefined, { activeBoardId: "board-a", playback: [] })).toEqual({ ok: false });
+      expect(app.onCommand(audioCommand).code).toBe("unavailable");
       app.window.webContents.emit("did-navigate");
       app.window.webContents.emit("did-finish-load");
       app.ready();
     }
+    const pending = app.onCommand(audioCommand);
     app.window.emit("closed");
+    expect(await pending).toEqual({ ok: false, code: "unavailable" });
     expect(app.onCommand(command).code).toBe("unavailable");
     await app.bridge.stop();
   });
@@ -328,8 +339,8 @@ describe("main-process external control lifecycle", () => {
     firstCancellation.abort();
     expect(app.window.webContents.send).toHaveBeenLastCalledWith("control-command", { command: "sound.cancel", requestId: firstId });
     expect(await first).toEqual({ ok: false, code: "unavailable" });
-    expect(app.invoke("control:playbackResult", app.event, firstId, { ok: true })).toEqual({ ok: false });
-    app.invoke("control:playbackResult", app.event, secondId, { ok: true });
+    expect(app.invoke("control:result", app.event, firstId, { ok: true })).toEqual({ ok: false });
+    app.invoke("control:result", app.event, secondId, { ok: true });
     expect(await second).toEqual({ ok: true });
     const sent = app.window.webContents.send.mock.calls.length;
     secondCancellation.abort();
@@ -353,12 +364,12 @@ describe("main-process external control lifecycle", () => {
     expect(request.requestId).toBeTypeOf("string");
     await Promise.resolve();
     expect(completed).not.toHaveBeenCalled();
-    expect(() => app.invoke("control:playbackResult", { ...app.event, senderFrame: { url: app.event.senderFrame.url } }, request.requestId, result)).toThrow("Untrusted IPC sender");
-    expect(() => app.invoke("control:playbackResult", app.event, request.requestId, { ok: "yes" })).toThrow("Invalid control playback result");
-    expect(app.invoke("control:playbackResult", app.event, request.requestId, result)).toEqual({ ok: true });
+    expect(() => app.invoke("control:result", { ...app.event, senderFrame: { url: app.event.senderFrame.url } }, request.requestId, result)).toThrow("Untrusted IPC sender");
+    expect(() => app.invoke("control:result", app.event, request.requestId, { ok: "yes" })).toThrow("Invalid control playback result");
+    expect(app.invoke("control:result", app.event, request.requestId, result)).toEqual({ ok: true });
     await pending;
     expect(completed).toHaveBeenCalledExactlyOnceWith(result);
-    expect(app.invoke("control:playbackResult", app.event, request.requestId, result)).toEqual({ ok: false });
+    expect(app.invoke("control:result", app.event, request.requestId, result)).toEqual({ ok: false });
     await app.bridge.stop();
   });
 
@@ -373,7 +384,40 @@ describe("main-process external control lifecycle", () => {
     target.emit(name, { isMainFrame: true, isSameDocument: false });
     expect(app.window.webContents.send).toHaveBeenCalledWith("control-command", { command: "sound.cancel", requestId });
     expect(await pending).toEqual({ ok: false, code: "unavailable" });
-    if (name !== "closed") expect(app.invoke("control:playbackResult", app.event, requestId, { ok: true })).toEqual({ ok: false });
+    if (name !== "closed") expect(app.invoke("control:result", app.event, requestId, { ok: true })).toEqual({ ok: false });
+    await app.bridge.stop();
+  });
+
+  it("returns trusted renderer acknowledgements through the shared readiness gate", async () => {
+    const app = await boot();
+    await app.loaded();
+    app.ready();
+    const setting = app.onCommand({ command: "setting.toggle", args: { key: "micPassthrough" } });
+    const settingRequest = app.window.webContents.send.mock.lastCall[1];
+    const volume = app.onCommand({ command: "volume.mute", args: { bus: "micVirtual" } });
+    const volumeRequest = app.window.webContents.send.mock.lastCall[1];
+    const settingResult = { ok: true, data: { key: "micPassthrough", value: true } };
+    const volumeResult = { ok: true, data: { bus: "micVirtual", value: 0.6, muted: true } };
+    expect(() => app.invoke("control:result", { ...app.event, senderFrame: { url: app.event.senderFrame.url } }, volumeRequest.requestId, volumeResult)).toThrow("Untrusted IPC sender");
+    app.invoke("control:result", undefined, volumeRequest.requestId, volumeResult);
+    app.invoke("control:result", undefined, settingRequest.requestId, settingResult);
+    expect(await volume).toEqual(volumeResult);
+    expect(await setting).toEqual(settingResult);
+    app.invoke("hotkeys:capture", undefined, true);
+    expect(app.onCommand({ command: "volume.mute", args: { bus: "micVirtual" } })).toEqual({ ok: false, code: "busy" });
+    expect(app.onCommand({ command: "board.cycle", args: {} })).toEqual({ ok: false, code: "busy" });
+    await app.bridge.stop();
+  });
+
+  it("cancels pending replies and clears readiness on shutdown", async () => {
+    const app = await boot();
+    await app.loaded();
+    app.ready();
+    const command = { command: "setting.toggle", args: { key: "micPassthrough" } };
+    const pending = app.onCommand(command);
+    app.window.emit("session-end");
+    expect(await pending).toEqual({ ok: false, code: "unavailable" });
+    expect(app.onCommand(command)).toEqual({ ok: false, code: "unavailable" });
     await app.bridge.stop();
   });
 
