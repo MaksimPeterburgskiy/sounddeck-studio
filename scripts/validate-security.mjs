@@ -26,6 +26,10 @@ for (const [name, source] of workflows) {
       `${name} uses a mutable action reference: ${match[1]}`
     );
   }
+  for (const line of source.split("\n")) {
+    if (!/\belectron-builder\s+--/.test(line) || /^\s*#/.test(line)) continue;
+    assert(/--publish\s+never\b/.test(line), `${name} electron-builder invocations must explicitly disable publishing.`);
+  }
   for (const match of source.matchAll(/uses:\s*actions\/checkout@[a-f0-9]{40}[\s\S]*?(?=\n\s*-\s+[\w-]+:|$)/g)) {
     assert(
       /persist-credentials:\s*false/.test(match[0]),
@@ -60,8 +64,7 @@ for (const [name, source] of workflows) {
   }
 }
 
-// The workflows delegate packaging to the dist scripts, so the builder publish
-// flags are only meaningful there. Every electron-builder invocation must carry
+// Most workflows delegate packaging to the dist scripts. Every invocation must carry
 // its own --publish never, not just one of them.
 for (const script of ["dist-win.mjs", "dist-mac.mjs"]) {
   const source = await readFile(path.join(repoRoot, "scripts", script), "utf8");

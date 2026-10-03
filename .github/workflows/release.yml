@@ -133,7 +133,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         run: |
-          $patterns = @("release/*.exe", "release/*.exe.blockmap", "release/latest.yml")
+          $plugin = "streamdeck-plugin/dist/SoundDeck-Studio-StreamDeck-${{ needs.version.outputs.version }}.streamDeckPlugin"
+          if (-not (Test-Path $plugin -PathType Leaf)) { throw "No Stream Deck plugin artifact found." }
+          $patterns = @("release/*.exe", "release/*.exe.blockmap", "release/latest.yml", $plugin)
           $artifactPaths = @($patterns | ForEach-Object {
             Get-ChildItem $_ -File -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }
           })
@@ -322,6 +324,7 @@ jobs:
           require_asset "SoundDeck-Studio-Setup-$VERSION.exe.blockmap"
           require_asset "SoundDeck-Studio-$VERSION.exe"
           require_asset "latest.yml"
+          require_asset "SoundDeck-Studio-StreamDeck-$VERSION.streamDeckPlugin"
           require_asset "SoundDeck.Studio-$VERSION.pkg"
           require_asset "SoundDeck.Studio-$VERSION.zip"
           require_asset "latest-mac.yml"

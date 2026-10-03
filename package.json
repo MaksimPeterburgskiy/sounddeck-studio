@@ -23,7 +23,8 @@
     "test:coverage": "vitest run --coverage",
     "validate:security": "node scripts/validate-security.mjs",
     "version:streamdeck": "node streamdeck-plugin/scripts/version.mjs",
-    "build:streamdeck": "pnpm --filter @sounddeck/streamdeck-plugin build"
+    "build:streamdeck": "pnpm --filter @sounddeck/streamdeck-plugin build",
+    "pack:streamdeck": "node scripts/pack-streamdeck.mjs"
   },
   "build": {
     "appId": "com.sounddeck.studio",
@@ -47,6 +48,10 @@
         {
           "from": "build/icon.ico",
           "to": "icon.ico"
+        },
+        {
+          "from": "streamdeck-plugin/dist/com.sounddeck.studio.streamDeckPlugin",
+          "to": "streamdeck/com.sounddeck.studio.streamDeckPlugin"
         }
       ],
       "target": [
@@ -89,6 +94,10 @@
         {
           "from": "build/blackhole/NOTICE.txt",
           "to": "blackhole/NOTICE.txt"
+        },
+        {
+          "from": "streamdeck-plugin/dist/com.sounddeck.studio.streamDeckPlugin",
+          "to": "streamdeck/com.sounddeck.studio.streamDeckPlugin"
         }
       ],
       "binaries": [
