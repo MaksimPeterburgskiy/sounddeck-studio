@@ -1,3 +1,7 @@
+packages:
+  - .
+  - streamdeck-plugin
+
 allowBuilds:
   cue-sdk: true
   electron-winstaller: true

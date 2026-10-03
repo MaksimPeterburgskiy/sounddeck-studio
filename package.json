@@ -21,7 +21,8 @@
     "fix:macos-dev-signatures": "node scripts/codesign-macos-dev-deps.mjs",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "validate:security": "node scripts/validate-security.mjs"
+    "validate:security": "node scripts/validate-security.mjs",
+    "build:streamdeck": "pnpm --filter @sounddeck/streamdeck-plugin build"
   },
   "build": {
     "appId": "com.sounddeck.studio",

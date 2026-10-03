@@ -1,0 +1,175 @@
+import streamDeck, {
+  SingletonAction, type KeyAction, type WillAppearEvent, type WillDisappearEvent,
+  type DidReceiveSettingsEvent, type KeyDownEvent, type PropertyInspectorDidAppearEvent,
+  type PropertyInspectorDidDisappearEvent, type SendToPluginEvent,
+} from "@elgato/streamdeck";
+import type { ControlCommandArgs, ControlCommandName } from "../../../src/lib/controlProtocol";
+import type { Connection } from "../connection";
+import { keyImage } from "../render/keyImage";
+import type { ActionSettings } from "../settings";
+
+type Visual = Parameters<typeof keyImage>[0] & { state?: 0 | 1 };
+type VisibleKey = {
+  action: KeyAction<ActionSettings>;
+  settings: ActionSettings;
+  image?: string;
+  title?: string;
+  state?: 0 | 1;
+  rendering: boolean;
+  dirty: boolean;
+};
+
+/** Keeps subscriptions, animation, and SDK writes scoped to visible keys. */
+export abstract class LiveAction extends SingletonAction<ActionSettings> {
+  private readonly visible = new Map<string, VisibleKey>();
+  private timer?: ReturnType<typeof setInterval>;
+  private inspectorId?: string;
+  private inspectorSettings?: ActionSettings;
+  private inspectorPayload = "";
+
+  constructor(protected readonly connection: Connection) {
+    super();
+    connection.subscribe(() => {
+      this.refresh();
+      void this.sendInspector().catch(console.error);
+    });
+  }
+
+  protected abstract visual(settings: ActionSettings): Visual;
+  protected abstract press(ev: KeyDownEvent<ActionSettings>): Promise<void>;
+
+  override onWillAppear(ev: WillAppearEvent<ActionSettings>): void {
+    if (!ev.action.isKey()) return;
+    this.visible.set(ev.action.id, { action: ev.action, settings: ev.payload.settings, rendering: false, dirty: false });
+    this.refresh();
+  }
+  override onWillDisappear(ev: WillDisappearEvent<ActionSettings>): void {
+    this.visible.delete(ev.action.id);
+    this.updateTimer();
+  }
+  override onDidReceiveSettings(ev: DidReceiveSettingsEvent<ActionSettings>): void {
+    const entry = this.visible.get(ev.action.id);
+    if (entry) entry.settings = ev.payload.settings;
+    if (this.inspectorId === ev.action.id) {
+      this.inspectorSettings = ev.payload.settings;
+      void this.sendInspector().catch(console.error);
+    }
+    this.refresh();
+  }
+  override async onKeyDown(ev: KeyDownEvent<ActionSettings>): Promise<void> {
+    if (this.connection.status !== "connected") {
+      this.connection.handleDisconnectedPress();
+      await ev.action.showAlert();
+      return;
+    }
+    await this.press(ev);
+  }
+
+  protected async command<Name extends ControlCommandName>(ev: KeyDownEvent<ActionSettings>, name: Name, args: ControlCommandArgs[Name]): Promise<void> {
+    const result = await this.connection.command(name, args);
+    if (!result.ok) await ev.action.showAlert();
+  }
+
+  private view(settings: ActionSettings): Visual {
+    const visual = this.visual(settings);
+    return this.connection.status === "connected" ? visual : {
+      ...visual, playing: undefined, active: false, state: 0,
+      dimmed: true, warning: this.connection.status !== "offline", title: this.connection.statusLabel,
+    };
+  }
+  private refresh(): void {
+    for (const entry of this.visible.values()) this.render(entry);
+    this.updateTimer();
+  }
+  private updateTimer(): void {
+    const animate = this.connection.status === "connected"
+      && [...this.visible.values()].some((entry) => !!this.visual(entry.settings).playing);
+    if (animate && !this.timer) {
+      this.timer = setInterval(() => {
+        for (const entry of this.visible.values()) {
+          if (this.visual(entry.settings).playing) this.render(entry);
+        }
+      }, 125);
+      this.timer.unref();
+    } else if (!animate && this.timer) {
+      clearInterval(this.timer);
+      this.timer = undefined;
+    }
+  }
+  private render(entry: VisibleKey): void {
+    entry.dirty = true;
+    if (entry.rendering) return;
+    entry.rendering = true;
+    void (async () => {
+      while (entry.dirty && this.visible.get(entry.action.id) === entry) {
+        entry.dirty = false;
+        const visual = this.view(entry.settings);
+        const image = keyImage(visual);
+        // Both states receive the same live title/image, so a state transition
+        // cannot flash an old title or default icon.
+        if (visual.state !== undefined && entry.state !== visual.state) {
+          await entry.action.setState(visual.state);
+          entry.state = visual.state;
+        }
+        if (entry.image !== image) {
+          await entry.action.setImage(image);
+          entry.image = image;
+        }
+        if (entry.title !== visual.title) {
+          await entry.action.setTitle(visual.title);
+          entry.title = visual.title;
+        }
+      }
+    })().catch(console.error).finally(() => {
+      entry.rendering = false;
+      // An unchanged render can exit synchronously while a following event
+      // queues a change before this promise's finalizer runs.
+      if (entry.dirty && this.visible.get(entry.action.id) === entry) this.render(entry);
+    });
+  }
+
+  override async onPropertyInspectorDidAppear(ev: PropertyInspectorDidAppearEvent<ActionSettings>): Promise<void> {
+    this.inspectorId = ev.action.id;
+    this.inspectorPayload = "";
+    const settings = await ev.action.getSettings();
+    if (this.inspectorId !== ev.action.id || streamDeck.ui.action?.id !== ev.action.id) return;
+    this.inspectorSettings = settings;
+    await this.sendInspector();
+  }
+  override onPropertyInspectorDidDisappear(ev: PropertyInspectorDidDisappearEvent<ActionSettings>): void {
+    if (this.inspectorId !== ev.action.id || streamDeck.ui.action?.id === ev.action.id) return;
+    this.inspectorId = undefined;
+    this.inspectorSettings = undefined;
+    this.inspectorPayload = "";
+  }
+  override async onSendToPlugin(ev: SendToPluginEvent<unknown & { event: string }, ActionSettings>): Promise<void> {
+    if (!ev.payload || typeof ev.payload !== "object" || !["boards", "sounds", "status"].includes(ev.payload.event)) return;
+    if (streamDeck.ui.action?.id !== ev.action.id) return;
+    this.inspectorId = ev.action.id;
+    const settings = await ev.action.getSettings();
+    if (this.inspectorId !== ev.action.id || streamDeck.ui.action?.id !== ev.action.id) return;
+    this.inspectorSettings = settings;
+    this.inspectorPayload = "";
+    await this.sendInspector();
+  }
+  private async sendInspector(): Promise<void> {
+    if (!this.inspectorId || streamDeck.ui.action?.id !== this.inspectorId) return;
+    const library = this.connection.status === "connected" ? this.connection.snapshot?.library : undefined;
+    const board = library?.boards.find((item) => item.id === this.inspectorSettings?.boardId);
+    const boards = library?.boards.map((item) => ({ label: item.name, value: item.id })) ?? [];
+    const sounds = board?.sounds.map((item) => ({ label: item.title, value: item.id })) ?? [];
+    const label = this.connection.status === "connected" ? "" : this.connection.statusLabel;
+    const payload = JSON.stringify({ boards, sounds, label });
+    if (payload === this.inspectorPayload) return;
+    this.inspectorPayload = payload;
+    const inspectorId = this.inspectorId;
+    for (const message of [
+      { event: "boards", items: boards },
+      { event: "sounds", items: sounds },
+      { event: "status", label },
+    ]) {
+      if (streamDeck.ui.action?.id !== inspectorId || this.inspectorId !== inspectorId) return;
+      await streamDeck.ui.sendToPropertyInspector(message);
+    }
+  }
+}
