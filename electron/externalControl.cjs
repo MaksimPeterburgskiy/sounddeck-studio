@@ -112,6 +112,17 @@ function createExternalControlBridge({
   const clients = new Map();
   const failures = new Map();
   const pendingHttpCommands = new Map();
+  const httpControllers = new Set();
+  const sessionControllers = new Map();
+
+  function abortCommands(controllers) {
+    for (const cancellation of [...(controllers || [])]) cancellation.abort();
+  }
+
+  function revokeSession(ws) {
+    abortCommands(sessionControllers.get(ws));
+    if (clients.delete(ws)) notify();
+  }
 
   function getState() {
     return { ...settings, listening: Boolean(server?.listening), error, clients: [...clients.values()] };
@@ -132,6 +143,7 @@ function createExternalControlBridge({
   function send(ws, message) {
     if (ws.readyState !== 1) return;
     if (ws.bufferedAmount > MAX_BUFFERED) {
+      revokeSession(ws);
       ws.terminate();
       return;
     }
@@ -376,6 +388,7 @@ function createExternalControlBridge({
       // lifetime once an authenticated command has been fully received.
       res.setTimeout(0);
       const cancellation = new AbortController();
+      httpControllers.add(cancellation);
       const disconnected = () => { if (!res.writableFinished) cancellation.abort(); };
       res.once("close", disconnected);
       if (res.destroyed) cancellation.abort();
@@ -383,6 +396,7 @@ function createExternalControlBridge({
       try {
         result = await dispatch(command, { ...body, ...routeArgs }, cancellation.signal);
       } finally {
+        httpControllers.delete(cancellation);
         res.removeListener("close", disconnected);
       }
       const status = result.ok ? 200 : result.code === "not-found" ? 404 : result.code === "busy" || result.code === "unavailable" || result.code === "disabled" ? 503 : result.code === "internal-error" ? 500 : 400;
@@ -397,6 +411,7 @@ function createExternalControlBridge({
   }
 
   function rejectSocket(ws, code) {
+    revokeSession(ws);
     send(ws, errorMessage(code));
     ws.close(1008, code);
     const timer = setTimeout(() => ws.terminate(), 250);
@@ -407,13 +422,14 @@ function createExternalControlBridge({
   function connect(ws, req) {
     const address = req.socket.remoteAddress;
     const pendingCommands = new Set();
+    sessionControllers.set(ws, pendingCommands);
     const timer = setTimeout(() => rejectSocket(ws, "unauthorized"), helloTimeoutMs);
     timer.unref?.();
-    ws.on("error", () => {});
+    ws.on("error", () => revokeSession(ws));
     ws.on("close", () => {
       clearTimeout(timer);
-      for (const cancellation of pendingCommands) cancellation.abort();
-      if (clients.delete(ws)) notify();
+      revokeSession(ws);
+      sessionControllers.delete(ws);
     });
     ws.on("message", async (data, binary) => {
       if (ws.readyState !== 1) return;
@@ -470,7 +486,9 @@ function createExternalControlBridge({
     const oldSockets = webSockets;
     server = null;
     webSockets = null;
+    abortCommands(httpControllers);
     for (const ws of oldSockets?.clients || []) {
+      revokeSession(ws);
       send(ws, errorMessage(code));
       ws.terminate();
     }
@@ -589,6 +607,7 @@ function createExternalControlBridge({
       const next = { ...settings, token: randomBytes(32).toString("base64url") };
       await persist(next);
       settings = next;
+      abortCommands(httpControllers);
       for (const ws of webSockets?.clients || []) rejectSocket(ws, "unauthorized");
       clients.clear();
       notify();

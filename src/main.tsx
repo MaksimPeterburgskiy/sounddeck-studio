@@ -45,7 +45,7 @@ import {
 } from "lucide-react";
 import { AudioEngine } from "./lib/audioEngine";
 import { CONTROL_DEFAULT_PORT } from "./lib/controlProtocol";
-import { trackAudioConfiguration, waitForAudioConfiguration } from "./lib/controlReadiness";
+import { beginAudioConfiguration, trackAudioConfiguration, waitForAudioConfiguration, watchAudioDeviceChanges } from "./lib/controlReadiness";
 import { createSoundPlayQueue } from "./lib/soundPlayQueue";
 import type { ControlPlaybackResult, ControlPlaybackVoice, ControlSettingsPatch, ControlStatus } from "./lib/controlProtocol";
 import type { AudioDeviceStatus, MicrophoneProcessingStatus } from "./lib/audioEngine";
@@ -128,6 +128,7 @@ function App() {
   const startupSettingsRequestTokenRef = useRef(0);
   const engineRef = useRef<AudioEngine | null>(null);
   const audioConfigurationRef = useRef<Promise<void> | null>(null);
+  const pendingAudioSettingsRef = useRef<ReturnType<typeof beginAudioConfiguration>[]>([]);
   const controlRequests = useRef(new Map<string, AbortController>());
   const queueSoundPlay = useMemo(() => createSoundPlayQueue(), []);
   const stopSound = useCallback((soundId: string) => {
@@ -297,6 +298,7 @@ function App() {
   useEffect(() => {
     const disposeAudio = () => {
       queueSoundPlay.cancelAll();
+      for (const complete of pendingAudioSettingsRef.current.splice(0)) complete(Promise.resolve());
       const engine = engineRef.current;
       engineRef.current = null;
       void engine?.dispose();
@@ -308,7 +310,7 @@ function App() {
     };
   }, []);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!library) return;
     const engineSettings = {
       ...library.settings,
@@ -327,7 +329,9 @@ function App() {
         setDeviceStatus(status);
       }
     );
-    trackAudioConfiguration(audioConfigurationRef, engineRef.current.configure(engineSettings, library.settings.virtualOutputDeviceId));
+    const work = engineRef.current.configure(engineSettings, library.settings.virtualOutputDeviceId);
+    for (const complete of pendingAudioSettingsRef.current.splice(0)) complete(work);
+    trackAudioConfiguration(audioConfigurationRef, work);
   }, [library?.settings]);
 
   useEffect(() => {
@@ -483,7 +487,7 @@ function App() {
   }, []);
 
   const refreshDevicesAndRetryPreferredDevices = useCallback(() => {
-    const retry = (async () => {
+    return (async () => {
       const list = await refreshDevices();
       const currentDeviceStatus = deviceStatusRef.current;
       const micNeedsRetry = currentDeviceStatus.microphone.state === "fallback" || currentDeviceStatus.microphone.state === "unavailable";
@@ -496,8 +500,6 @@ function App() {
         await engineRef.current?.retryPreferredDevices({ recheckMonitor: monitorMissing });
       }
     })();
-    // Track enumeration too: the selected sink can disappear before retry starts.
-    return trackAudioConfiguration(audioConfigurationRef, retry);
   }, [refreshDevices]);
 
   useEffect(() => {
@@ -507,19 +509,7 @@ function App() {
   useEffect(() => {
     const mediaDevices = navigator.mediaDevices;
     if (!mediaDevices?.addEventListener) return;
-    let retryTimer: ReturnType<typeof setTimeout> | null = null;
-    const handleDeviceChange = () => {
-      if (retryTimer !== null) clearTimeout(retryTimer);
-      retryTimer = setTimeout(() => {
-        retryTimer = null;
-        void refreshDevicesAndRetryPreferredDevices();
-      }, 600);
-    };
-    mediaDevices.addEventListener("devicechange", handleDeviceChange);
-    return () => {
-      mediaDevices.removeEventListener("devicechange", handleDeviceChange);
-      if (retryTimer !== null) clearTimeout(retryTimer);
-    };
+    return watchAudioDeviceChanges(mediaDevices, audioConfigurationRef, refreshDevicesAndRetryPreferredDevices);
   }, [refreshDevicesAndRetryPreferredDevices]);
 
   const registerHotkeys = useCallback(async (current: SoundLibrary) => {
@@ -556,7 +546,7 @@ function App() {
         setMessage(`Stopped ${sound.title}`);
         return { ok: true };
       }
-      const started = await engineRef.current?.play(sound, signal);
+      const started = await engineRef.current?.play(sound, signal, external ? () => waitForAudioConfiguration(() => audioConfigurationRef.current) : undefined);
       if (!started) {
         setMessage(`No output route enabled for ${sound.title}`);
         return { ok: false, code: "unavailable" };
@@ -1022,6 +1012,8 @@ function App() {
   }
 
   function changeSettings(patch: Partial<SoundLibrary["settings"]>) {
+    if (!library) return;
+    pendingAudioSettingsRef.current.push(beginAudioConfiguration(audioConfigurationRef));
     const normalizedPatch = { ...patch };
     if ("microphoneDeviceId" in normalizedPatch) {
       normalizedPatch.microphoneDeviceId = normalizeSelectableDeviceId(normalizedPatch.microphoneDeviceId);
@@ -1295,7 +1287,7 @@ function App() {
             activeMicrophoneLabel={activeMicrophoneLabel}
             preferredMonitorLabel={preferredMonitorLabel}
             activeMonitorLabel={activeMonitorLabel}
-            onRefresh={refreshDevicesAndRetryPreferredDevices}
+            onRefresh={() => trackAudioConfiguration(audioConfigurationRef, refreshDevicesAndRetryPreferredDevices())}
             onChange={changeSettings}
           />
         )}

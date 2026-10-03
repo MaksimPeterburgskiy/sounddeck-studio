@@ -8,6 +8,48 @@ export function trackAudioConfiguration(configuration: { current: Promise<void> 
   return pending;
 }
 
+// Reserve readiness at the point a change is requested, then complete it with
+// the actual work once that work can start (for example, after a React render).
+export function beginAudioConfiguration(configuration: { current: Promise<void> | null }) {
+  let complete!: (work: Promise<void>) => void;
+  const work = new Promise<void>((resolve, reject) => {
+    complete = (pending) => { void pending.then(resolve, reject); };
+  });
+  void trackAudioConfiguration(configuration, work).catch(() => undefined);
+  return complete;
+}
+
+// The debounce itself owns routing readiness, before enumeration or sink work
+// starts. Repeated events extend that wait; cleanup releases a cancelled timer.
+export function watchAudioDeviceChanges(
+  mediaDevices: Pick<MediaDevices, "addEventListener" | "removeEventListener">,
+  configuration: { current: Promise<void> | null },
+  retry: () => Promise<void>
+) {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let scheduled: ReturnType<typeof beginAudioConfiguration> | null = null;
+  const changed = () => {
+    if (timer !== null) clearTimeout(timer);
+    if (!scheduled) {
+      scheduled = beginAudioConfiguration(configuration);
+    }
+    const work = scheduled;
+    timer = setTimeout(() => {
+      timer = null;
+      scheduled = null;
+      work(Promise.resolve().then(retry));
+    }, 600);
+  };
+  mediaDevices.addEventListener("devicechange", changed);
+  return () => {
+    mediaDevices.removeEventListener("devicechange", changed);
+    if (timer !== null) clearTimeout(timer);
+    scheduled?.(Promise.resolve());
+    timer = null;
+    scheduled = null;
+  };
+}
+
 // Wait for the latest configuration at startup and before every external play.
 export async function waitForAudioConfiguration(getConfiguration: () => Promise<void> | null) {
   let configuration;

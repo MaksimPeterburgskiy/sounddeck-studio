@@ -700,6 +700,89 @@ describe("external control protocol and dispatch", () => {
     await vi.waitFor(() => expect(onCommand.mock.lastCall[1].aborted).toBe(true));
   });
 
+  it.each(["token", "disable", "port", "LAN", "stop", "invalid-message", "backpressure", "socket-error"])("aborts every pending session play synchronously on %s revocation", async (reason) => {
+    let serverSocket;
+    await create({ createWebSocketServer: (options) => {
+      const server = new WebSocketServer(options);
+      server.on("connection", (ws) => { serverSocket = ws; });
+      return server;
+    } });
+    const connection = await session();
+    const completions = [];
+    const played = vi.fn();
+    onCommand.mockImplementation(async (_command, signal) => {
+      await new Promise((resolve) => completions.push(resolve));
+      if (signal.aborted) return { ok: false, code: "unavailable" };
+      played();
+      return { ok: true };
+    });
+    for (const id of ["first", "second"]) connection.send({ type: "command", id, command: "sound.play", args: { soundId: "sound-new" } });
+    await vi.waitFor(() => expect(onCommand).toHaveBeenCalledTimes(2));
+    const closed = vi.fn();
+    serverSocket.on("close", closed);
+    const signals = onCommand.mock.calls.map((call) => call[1]);
+    const assertRevoked = () => {
+      expect(signals.every((signal) => signal.aborted)).toBe(true);
+      expect(closed).not.toHaveBeenCalled();
+    };
+    const method = ["token", "invalid-message"].includes(reason) ? "close" : "terminate";
+    const original = serverSocket[method].bind(serverSocket);
+    const closing = vi.spyOn(serverSocket, method).mockImplementation((...args) => {
+      assertRevoked();
+      return original(...args);
+    });
+    if (reason === "token") await bridge.regenerateToken();
+    else if (reason === "disable") await bridge.setSettings({ enabled: false });
+    else if (reason === "port") await bridge.setSettings({ port: bridge.getState().port + 1 });
+    else if (reason === "LAN") await bridge.setSettings({ allowLan: true });
+    else if (reason === "stop") await bridge.stop();
+    else if (reason === "invalid-message") serverSocket.emit("message", Buffer.from("{"), false);
+    else if (reason === "backpressure") {
+      Object.defineProperty(serverSocket, "bufferedAmount", { configurable: true, value: 8 * 1024 * 1024 + 1 });
+      bridge.updateLiveState({ activeBoardId: "board-b", playback: [] });
+    } else {
+      serverSocket.emit("error", new Error("Socket failed"));
+      assertRevoked();
+    }
+    if (reason !== "socket-error") expect(closing).toHaveBeenCalled();
+    expect(signals.every((signal) => signal.aborted)).toBe(true);
+    completions.forEach((complete) => complete());
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(played).not.toHaveBeenCalled();
+    closing.mockRestore();
+    serverSocket.terminate();
+  });
+
+  it.each(["token", "disable", "port", "LAN", "stop"])("aborts dispatched HTTP plays at %s revocation before response closure", async (reason) => {
+    let listener;
+    await create({ createServer: (...args) => { listener = memoryServer(...args); return listener; } });
+    let response;
+    listener.once("request", (_req, res) => { response = res; });
+    let finish;
+    onCommand.mockImplementation(async (_command, signal) => {
+      await new Promise((resolve) => { finish = resolve; });
+      return signal.aborted ? { ok: false, code: "unavailable" } : { ok: true };
+    });
+    const pending = request("/v1/sounds/sound-new/play", { method: "POST" }).catch(() => null);
+    await vi.waitFor(() => expect(onCommand).toHaveBeenCalledOnce());
+    const signal = onCommand.mock.lastCall[1];
+    const closed = vi.fn();
+    response.once("close", closed);
+    const abort = vi.fn(() => expect(closed).not.toHaveBeenCalled());
+    signal.addEventListener("abort", abort);
+    if (reason === "token") await bridge.regenerateToken();
+    else if (reason === "disable") await bridge.setSettings({ enabled: false });
+    else if (reason === "port") await bridge.setSettings({ port: bridge.getState().port + 1 });
+    else if (reason === "LAN") await bridge.setSettings({ allowLan: true });
+    else await bridge.stop();
+    expect(signal.aborted).toBe(true);
+    expect(abort).toHaveBeenCalledOnce();
+    finish();
+    const result = await pending;
+    if (reason === "token") expect(result).toEqual({ status: 503, body: { ok: false, code: "unavailable" } });
+  });
+
   it("rejects unknown commands, paths, extra fields, wrong types and invalid direction without dispatch", async () => {
     await create();
     const connection = await session();
