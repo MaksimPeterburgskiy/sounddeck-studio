@@ -83,7 +83,6 @@ export abstract class LiveAction extends SingletonAction<ActionSettings> {
     const visual = this.visual(settings);
     return this.connection.status === "connected" ? visual : {
       ...visual, playing: undefined, playingRing: false, active: false, state: 0,
-      warningPosition: visual.glyph || visual.image || visual.icon ? "corner" : "center",
       dimmed: true, warning: this.connection.status !== "offline", title: this.connection.statusLabel,
     };
   }
