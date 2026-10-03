@@ -4,6 +4,7 @@ import { SoundKeyPresses } from "./soundKeyPresses";
 
 const success: ControlResult = { type: "result", id: "ack", ok: true };
 const failure: ControlResult = { type: "result", id: "ack", ok: false, code: "unavailable" };
+const unknownCommand: ControlResult = { type: "result", id: "ack", ok: false, code: "unknown-command" };
 const binding = { soundId: "sound", boardId: "board", title: "Horn" };
 
 function setup() {
@@ -18,6 +19,82 @@ function pressId(args: ControlCommandArgs[ControlCommandName]): string {
 }
 
 describe("sound key presses", () => {
+  it.each([success, failure])("retries an unsupported press as play and shares that capability for the session: %j", async (playResult) => {
+    const { connection, keys } = setup();
+    connection.command.mockResolvedValueOnce(unknownCommand).mockResolvedValueOnce(playResult);
+    expect(await keys.press("key", binding)).toEqual(playResult);
+    expect(connection.command.mock.calls).toEqual([
+      ["sound.press", { ...binding, pressId: expect.any(String) }],
+      ["sound.play", binding],
+    ]);
+    await keys.release("key");
+    await keys.press("key", binding);
+    await keys.press("key", binding);
+    await keys.release("key");
+    const otherKeys = new SoundKeyPresses(connection);
+    await otherKeys.press("other-key", binding);
+    await otherKeys.release("other-key");
+    expect(connection.command.mock.calls.slice(2)).toEqual(Array.from({ length: 3 }, () => ["sound.play", binding]));
+  });
+
+  it("tries press again after reconnect without releasing the old fallback", async () => {
+    const { connection, keys } = setup();
+    connection.command.mockResolvedValueOnce(unknownCommand);
+    await keys.press("key", binding);
+    await keys.press("other-key", binding);
+    connection.session = {};
+    await keys.release("key");
+    await keys.release("other-key");
+    await keys.press("key", binding);
+    const id = pressId(connection.command.mock.lastCall![1]);
+    await keys.release("key");
+    expect(connection.command.mock.calls.map(([name]) => name)).toEqual([
+      "sound.press", "sound.play", "sound.play", "sound.press", "sound.release",
+    ]);
+    expect(connection.command).toHaveBeenLastCalledWith("sound.release", { pressId: id });
+  });
+
+  it("retries concurrent unsupported presses and suppresses releases for pending keys", async () => {
+    const { connection, keys } = setup();
+    let acknowledge!: (result: ControlResult) => void;
+    connection.command.mockImplementationOnce(() => new Promise((resolve) => { acknowledge = resolve; }));
+    const pending = keys.press("a", binding);
+    connection.command.mockResolvedValueOnce(unknownCommand);
+    expect(await keys.press("b", binding)).toEqual(success);
+    await keys.release("a");
+    await keys.release("b");
+    acknowledge(unknownCommand);
+    expect(await pending).toEqual(success);
+    expect(connection.command.mock.calls.map(([name]) => name)).toEqual([
+      "sound.press", "sound.press", "sound.play", "sound.play",
+    ]);
+  });
+
+  it.each(["invalid-args", "unavailable"] as const)("does not treat %s as an unsupported command", async (code) => {
+    const { connection, keys } = setup();
+    const result: ControlResult = { type: "result", id: "ack", ok: false, code };
+    connection.command.mockResolvedValueOnce(result);
+    expect(await keys.press("key", binding)).toEqual(result);
+    await keys.release("key");
+    await keys.press("key", binding);
+    expect(connection.command.mock.calls.map(([name]) => name)).toEqual(["sound.press", "sound.release", "sound.press"]);
+  });
+
+  it("does not replay or downgrade a reconnected session for a late unknown-command result", async () => {
+    const { connection, keys } = setup();
+    let acknowledge!: (result: ControlResult) => void;
+    connection.command.mockImplementationOnce(() => new Promise((resolve) => { acknowledge = resolve; }));
+    const pending = keys.press("key", binding);
+    connection.session = {};
+    await keys.press("key", binding);
+    const id = pressId(connection.command.mock.lastCall![1]);
+    acknowledge(unknownCommand);
+    expect(await pending).toEqual(unknownCommand);
+    await keys.release("key");
+    expect(connection.command.mock.calls.map(([name]) => name)).toEqual(["sound.press", "sound.press", "sound.release"]);
+    expect(connection.command).toHaveBeenLastCalledWith("sound.release", { pressId: id });
+  });
+
   it("preserves bindings, gives each down a fresh id, and releases a key only once", async () => {
     const { connection, keys } = setup();
     await keys.press("key", binding);
