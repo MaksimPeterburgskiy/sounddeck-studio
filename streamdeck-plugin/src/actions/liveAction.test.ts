@@ -49,18 +49,6 @@ function inspectorFixture() {
   return { connection, action, key, send: vi.mocked(streamDeck.ui.sendToPropertyInspector) };
 }
 
-function inspectorFixture() {
-  const connection = fakeConnection();
-  connection.snapshot.library.boards = ["a", "b"].map((id) => ({
-    id, name: id, sounds: [{ id: `sound-${id}`, title: `Sound ${id}`, hasImage: false }],
-  }));
-  const action = new ToggleSetting(connection as unknown as Connection);
-  const key = { ...fakeKey(), getSettings: vi.fn(async (): Promise<ActionSettings> => ({ boardId: "a" })) };
-  streamDeck.ui.action = key as never;
-  return { connection, action, key, send: vi.mocked(streamDeck.ui.sendToPropertyInspector) };
-}
-
-
 function boundSoundKey(kind: "play" | "slot", title = "Horn") {
   const connection = fakeConnection();
   const library: ControlLibrary = { activeBoardId: "board", boards: [{ id: "board", name: "Main", color: "#1db7a6",

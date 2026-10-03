@@ -41,7 +41,10 @@ export class VolumeDial extends LiveAction {
 
   // Toggle once on down. The SDK's corresponding dialUp needs no handler.
   override async onDialDown(ev: DialDownEvent<ActionSettings>): Promise<void> { await this.toggleMute(ev); }
-  override async onTouchTap(ev: TouchTapEvent<ActionSettings>): Promise<void> { await this.toggleMute(ev); }
+  override async onTouchTap(ev: TouchTapEvent<ActionSettings>): Promise<void> {
+    if (ev.payload.hold === true) return;
+    await this.toggleMute(ev);
+  }
 
   private async toggleMute(ev: { action: DialAction<ActionSettings>; payload: { settings: ActionSettings } }): Promise<void> {
     if (this.connection.status !== "connected") {
