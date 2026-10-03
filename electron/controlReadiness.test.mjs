@@ -45,4 +45,16 @@ describe("preload control readiness", () => {
       ["control:state", state, "source-document"], ["control:result", "request", { ok: true }, "source-document"]
     ]);
   });
+  it("forwards request ids while cancellation messages do not complete the request", async () => {
+    const document = preload();
+    document.ipcRenderer.emit("control-ready-token", {}, "source-document");
+    const callback = vi.fn(async () => ({ ok: true }));
+    document.sounddeck.onControlCommand(callback);
+    document.ipcRenderer.emit("control-command", {}, { command: "sound.cancel", requestId: "request" });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(callback).toHaveBeenCalledWith({ command: "sound.cancel", requestId: "request" });
+    expect(document.ipcRenderer.invoke).not.toHaveBeenCalled();
+  });
+
 });

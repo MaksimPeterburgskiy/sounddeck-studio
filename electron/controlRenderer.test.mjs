@@ -11,9 +11,12 @@ describe("renderer control acknowledgements", () => {
     const bridge = createControlRenderer({ send });
     const volume = bridge.dispatch(command);
     const setting = bridge.dispatch({ command: "setting.toggle", args: { key: "micPassthrough" } });
+    const playback = bridge.dispatch({ command: "sound.play", args: { soundId: "sound-a" } });
     bridge.cancelPending();
     expect(await volume).toEqual({ ok: false, code: "unavailable" });
     expect(await setting).toEqual({ ok: false, code: "unavailable" });
+    expect(await playback).toEqual({ ok: false, code: "unavailable" });
+    expect(bridge.complete(send.mock.calls[2][0].requestId, { ok: true })).toBe(false);
     bridge.complete(send.mock.calls[0][0].requestId, { ok: true, data: { bus: "micVirtual", value: 0.6, muted: false } });
   });
 
@@ -22,11 +25,29 @@ describe("renderer control acknowledgements", () => {
     const bridge = createControlRenderer({ send });
     const volume = bridge.dispatch(command);
     const setting = bridge.dispatch({ command: "setting.toggle", args: { key: "micPassthrough" } });
-    const [volumeRequest, settingRequest] = send.mock.calls.map(([message]) => message);
+    const playback = bridge.dispatch({ command: "sound.play", args: { soundId: "sound-a" } });
+    const [volumeRequest, settingRequest, playbackRequest] = send.mock.calls.map(([message]) => message);
     bridge.complete(settingRequest.requestId, { ok: true, data: { key: "micPassthrough", value: true } });
+    bridge.complete(playbackRequest.requestId, { ok: false, code: "not-found" });
     bridge.complete(volumeRequest.requestId, { ok: true, data: { bus: "micVirtual", value: 0.6, muted: false } });
     expect(await volume).toEqual({ ok: true, data: { bus: "micVirtual", value: 0.6, muted: false } });
     expect(await setting).toEqual({ ok: true, data: { key: "micPassthrough", value: true } });
+    expect(await playback).toEqual({ ok: false, code: "not-found" });
+  });
+
+  it("keeps playback pending through slow routing while settings replies time out", async () => {
+    vi.useFakeTimers();
+    const send = vi.fn();
+    const bridge = createControlRenderer({ send });
+    const completed = vi.fn();
+    const playback = bridge.dispatch({ command: "sound.play", args: { soundId: "sound-a" } }).then(completed);
+    const setting = bridge.dispatch({ command: "setting.toggle", args: { key: "micPassthrough" } });
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(await setting).toEqual({ ok: false, code: "unavailable" });
+    expect(completed).not.toHaveBeenCalled();
+    expect(bridge.complete(send.mock.calls[0][0].requestId, { ok: true })).toBe(true);
+    await playback;
+    expect(completed).toHaveBeenCalledExactlyOnceWith({ ok: true });
   });
 
   it("relays operation cancellation without disturbing concurrent requests", async () => {

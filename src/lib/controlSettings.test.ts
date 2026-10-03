@@ -23,7 +23,7 @@ describe("external audio controls", () => {
     const restored = applyAudioControlCommand(muted.settings, { command: "volume.mute", args: { bus, muted: false } });
     expect(restored.data).toEqual({ bus, value: 0.4, muted: false });
     const adjusted = applyAudioControlCommand(muted.settings, { command: "volume.adjust", args: { bus, delta: 0.2 } });
-    expect(adjusted.settings[`${bus}Volume`]).toBeCloseTo(0.6);
+    expect(adjusted.settings[`${bus}Volume`]).toBe(0.6);
     expect(adjusted.settings[`${bus}Muted`]).toBe(false);
     const set = applyAudioControlCommand(muted.settings, { command: "volume.set", args: { bus, value: 0 } });
     expect(set.data).toEqual({ bus, value: 0, muted: false });
@@ -38,5 +38,23 @@ describe("external audio controls", () => {
     expect(settings.micVirtualVolume).toBe(0.8);
     const result = applyAudioControlCommand(settings, { command: "volume.adjust", args: { bus: "micVirtual", delta: -2 } });
     expect(result.data).toEqual({ bus: "micVirtual", value: 0, muted: false });
+  });
+
+  it("rounds set and adjusted volumes to four decimals", () => {
+    const initial = makeAudioSettings({ micVirtualVolume: 0.95 });
+    const adjusted = applyAudioControlCommand(initial, { command: "volume.adjust", args: { bus: "micVirtual", delta: -0.05 } });
+    expect(adjusted.data).toEqual({ bus: "micVirtual", value: 0.9, muted: false });
+    const set = applyAudioControlCommand(initial, { command: "volume.set", args: { bus: "micVirtual", value: 0.123456 } });
+    expect(set.data).toEqual({ bus: "micVirtual", value: 0.1235, muted: false });
+    const fractional = applyAudioControlCommand(initial, { command: "volume.adjust", args: { bus: "micVirtual", delta: -0.123456 } });
+    expect(fractional.data).toEqual({ bus: "micVirtual", value: 0.8265, muted: false });
+  });
+
+  it("reaches exactly zero after twenty decrements of 0.05 from one", () => {
+    let settings = makeAudioSettings({ micVirtualVolume: 1 });
+    for (let press = 0; press < 20; press++) {
+      settings = applyAudioControlCommand(settings, { command: "volume.adjust", args: { bus: "micVirtual", delta: -0.05 } }).settings;
+    }
+    expect(settings.micVirtualVolume).toBe(0);
   });
 });

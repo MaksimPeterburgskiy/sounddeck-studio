@@ -45,11 +45,12 @@ import {
   X
 } from "lucide-react";
 import { applyAudioControlCommand } from "./lib/controlSettings";
+import { createControlReplies } from "./lib/controlReplies";
 import { AudioEngine } from "./lib/audioEngine";
 import { CONTROL_DEFAULT_PORT } from "./lib/controlProtocol";
 import { beginAudioConfiguration, trackAudioConfiguration, waitForAudioConfiguration, watchAudioDeviceChanges } from "./lib/controlReadiness";
 import { createSoundPlayQueue } from "./lib/soundPlayQueue";
-import type { ControlPlaybackResult, ControlPlaybackVoice, ControlSettingsPatch, ControlStatus, RendererControlResult } from "./lib/controlProtocol";
+import type { ControlPlaybackResult, ControlPlaybackVoice, ControlSettingsPatch, ControlStatus } from "./lib/controlProtocol";
 import type { AudioDeviceStatus, MicrophoneProcessingStatus } from "./lib/audioEngine";
 import { findVirtualAudioCandidates, getDefaultDeviceLabel, isSelectableMediaDevice, makeMicrophoneConstraints, normalizeMonitorDeviceId, normalizeSelectableDeviceId } from "./lib/devices";
 import type { VirtualAudioCandidate } from "./lib/devices";
@@ -93,7 +94,7 @@ function getActiveMonitorLabel(devices: MediaDeviceInfo[], activeDeviceId: strin
 function App() {
   const [library, setLibrary] = useState<SoundLibrary | null>(null);
   const libraryRef = useRef<SoundLibrary | null>(null);
-  const controlRepliesRef = useRef<Array<{ result: RendererControlResult; resolve: (result: RendererControlResult) => void }>>([]);
+  const controlRepliesRef = useRef(createControlReplies());
   const [view, setView] = useState<View>("board");
   const [selectedSoundId, setSelectedSoundId] = useState<string>("");
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
@@ -262,12 +263,7 @@ function App() {
   useEffect(() => {
     // Coalesce drag updates, but persist API changes before acknowledging them.
     if (!library || library !== libraryRef.current || (draggingSoundId && !controlRepliesRef.current.length)) return;
-    const replies = controlRepliesRef.current.splice(0);
-    void window.sounddeck.saveLibrary(library).then(() => {
-      for (const reply of replies) reply.resolve(reply.result);
-    }).catch(() => {
-      for (const reply of replies) reply.resolve({ ok: false, code: "internal-error" });
-    });
+    void controlRepliesRef.current.save(() => window.sounddeck.saveLibrary(library));
   }, [library, draggingSoundId]);
 
   const virtualAudioCandidates = useMemo(() => findVirtualAudioCandidates(devices, platform), [devices, platform]);
@@ -611,10 +607,9 @@ function App() {
       const current = libraryRef.current;
       if (!current) return { ok: false, code: "unavailable" };
       const applied = applyAudioControlCommand(current.settings, request);
-      return new Promise<RendererControlResult>((resolve) => {
-        controlRepliesRef.current.push({ result: { ok: true, data: applied.data }, resolve });
-        updateLibrary((latest) => ({ ...latest, settings: applied.settings }));
-      });
+      const reply = controlRepliesRef.current.add({ ok: true, data: applied.data });
+      updateLibrary((latest) => ({ ...latest, settings: applied.settings }));
+      return reply;
     }
     if (command === "sound.play") {
       const sound = libraryRef.current?.boards.flatMap((board) => board.sounds).find((candidate) => candidate.id === args.soundId);
@@ -1727,7 +1722,7 @@ function VolumeControl({ label, value, muted, disabled, onChange, onToggleMute }
   return (
     <div className={`volumeRow${onToggleMute ? " volumeRowWithMute" : ""}`}>
       {onToggleMute && (
-        <button type="button" className="settingsButton" aria-label={`${muted ? "Unmute" : "Mute"} ${label}`} title={`${muted ? "Unmute" : "Mute"} ${label}`} aria-pressed={muted} disabled={disabled} onClick={onToggleMute}>
+        <button type="button" className="settingsButton" aria-label={`Mute ${label}`} title={`${muted ? "Unmute" : "Mute"} ${label}`} aria-pressed={muted} disabled={disabled} onClick={onToggleMute}>
           {muted ? <VolumeX size={16} /> : <Volume2 size={16} />}
         </button>
       )}

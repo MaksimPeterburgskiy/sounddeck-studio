@@ -9,6 +9,7 @@ const { spawn } = require("node:child_process");
 const { createCorsairBridge, isCorsairSupportedPlatform, isGKeyAccelerator } = require("./corsair.cjs");
 const { createExternalControlBridge, launcherPath } = require("./externalControl.cjs");
 const { createControlRenderer } = require("./controlRenderer.cjs");
+const { createLibrarySaveQueue } = require("./librarySaveQueue.cjs");
 const { createHotkeyEngine } = require("./hotkeys.cjs");
 const { buildCropArgs } = require("./ffmpegArgs.cjs");
 const {
@@ -1078,10 +1079,7 @@ function setupAutoUpdates() {
 app.whenReady().then(async () => {
   await createWindow();
   if (shutdownLifecycle.isShuttingDown() || !mainWindow) return;
-  void externalControl.start(async () => {
-    await ensureLibrary();
-    return readJson(libraryFile());
-  });
+  void externalControl.start(() => librarySaveQueue.load());
   app.on("activate", () => {
     if (shutdownLifecycle.isShuttingDown()) return;
     if (mainWindow) {
@@ -1108,37 +1106,33 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
 
-// Keep disk reads/writes in request order as well as publishing cache updates
-// with their original ownership. Finish accepted saves before a new document
-// reads the disk, so its library includes every edit accepted before reload.
-let libraryIo = Promise.resolve();
-function serialLibrary(operation) {
-  const result = libraryIo.then(operation);
-  libraryIo = result.catch(() => {});
-  return result;
-}
+// One disk queue coalesces cumulative saves and keeps reads behind accepted
+// writes. Cache publication retains the ownership captured at IPC receipt.
+const librarySaveQueue = createLibrarySaveQueue({
+  load: async () => {
+    await ensureLibrary();
+    return readJson(libraryFile());
+  },
+  save: async (library) => {
+    await ensureLibrary();
+    await fs.writeFile(libraryFile(), JSON.stringify(library, null, 2));
+    return { ok: true };
+  }
+});
 
 handleTrustedIpc("library:load", (_event, token) => {
   const owner = token && externalControl.beginUpdate(token);
   if (!owner) throw new Error("Obsolete library document");
-  return serialLibrary(async () => {
-    await ensureLibrary();
-    const library = await readJson(libraryFile());
+  return librarySaveQueue.load().then((library) => {
     externalControl.updateLibrary(library, owner);
     return library;
   });
 });
-
 handleTrustedIpc("library:save", (_event, library, token) => {
   const owner = token && externalControl.beginUpdate(token);
   if (!owner) return { ok: false };
   externalControl.updateLibrary(library, owner);
-  return serialLibrary(async () => {
-    await ensureLibrary();
-    await fs.writeFile(libraryFile(), JSON.stringify(library, null, 2));
-    return { ok: true };
-  });
-
+  return librarySaveQueue.save(library);
 });
 
 handleTrustedIpc("library:reveal", async () => {

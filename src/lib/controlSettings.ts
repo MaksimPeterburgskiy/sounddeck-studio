@@ -15,8 +15,10 @@ export function applyAudioControlCommand(settings: AudioSettings, message: Audio
   const { bus } = message.args;
   const volumeKey = `${bus}Volume` as const;
   const muteKey = `${bus}Muted` as const;
+  const requested = message.command === "volume.set" ? message.args.value
+    : message.command === "volume.adjust" ? settings[volumeKey] + message.args.delta : settings[volumeKey];
   const value = message.command === "volume.mute" ? settings[volumeKey]
-    : Math.min(1, Math.max(0, message.command === "volume.set" ? message.args.value : settings[volumeKey] + message.args.delta));
+    : Math.min(1, Math.max(0, Math.round(requested * 10000) / 10000));
   const muted = message.command === "volume.mute" ? (message.args.muted ?? !settings[muteKey]) : false;
   return { settings: { ...settings, [volumeKey]: value, [muteKey]: muted }, data: { bus, value, muted } };
 }
