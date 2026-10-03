@@ -32,7 +32,6 @@ export class Connection {
   private running = false;
   private generation = 0;
   private socket: WebSocket | null = null;
-  private listenerUnavailable = false;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
   private handshakeTimer?: ReturnType<typeof setTimeout>;
   private readonly listeners = new Set<() => void>();
@@ -111,7 +110,6 @@ export class Connection {
     this.discovery = file?.state ?? null;
     const status = discoveryStatus(file);
     this.serverProtocol = file?.state?.protocol ?? CONTROL_PROTOCOL_VERSION;
-    this.listenerUnavailable = false;
     if ((status !== "offline" && status !== "protocol-mismatch") || !file?.state) {
       this.setStatus(status);
       this.schedule(generation);
@@ -174,7 +172,9 @@ export class Connection {
     });
     socket.on("error", (error) => {
       if (!current()) return;
-      this.listenerUnavailable = (error as NodeJS.ErrnoException).code === "ECONNREFUSED";
+      // A stopped listener supersedes authentication or protocol errors from
+      // an earlier attempt, even when discovery still has the same token/port.
+      if ((error as NodeJS.ErrnoException).code === "ECONNREFUSED") this.setStatus("offline");
       // Close schedules the next discovery attempt.
     });
     socket.on("close", () => {
@@ -290,7 +290,6 @@ export class Connection {
     return request;
   }
   handleDisconnectedPress(): void {
-    if ((this.status === "offline" || this.status === "protocol-mismatch" && this.listenerUnavailable)
-      && this.discovery?.appPath) this.launcher.attempt(this.discovery.appPath);
+    if (this.status === "offline" && this.discovery?.appPath) this.launcher.attempt(this.discovery.appPath);
   }
 }

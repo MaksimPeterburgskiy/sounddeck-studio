@@ -27,6 +27,8 @@ export abstract class LiveAction extends SingletonAction<ActionSettings> {
   private inspectorId?: string;
   private inspectorSettings?: ActionSettings;
   private inspectorPayload = "";
+  private inspectorGeneration = 0;
+  private inspectorSettingsGeneration = 0;
 
   constructor(protected readonly connection: Connection) {
     super();
@@ -54,6 +56,7 @@ export abstract class LiveAction extends SingletonAction<ActionSettings> {
     const entry = this.visible.get(ev.action.id);
     if (entry) entry.settings = ev.payload.settings;
     if (this.inspectorId === ev.action.id) {
+      ++this.inspectorSettingsGeneration;
       this.inspectorSettings = ev.payload.settings;
       void this.sendInspector().catch((error) => streamDeck.logger.error(error));
     }
@@ -119,11 +122,13 @@ export abstract class LiveAction extends SingletonAction<ActionSettings> {
           if (this.visible.get(entry.action.id) !== entry) return;
           if (entry.settings !== settings) { entry.dirty = true; continue; }
           if (this.inspectorId === entry.action.id) {
+            ++this.inspectorSettingsGeneration;
             this.inspectorSettings = settings;
             await this.sendInspector();
           }
         }
         if (this.visible.get(entry.action.id) !== entry) return;
+        if (entry.dirty) continue;
         const visual = this.view(entry.settings);
         const image = keyImage(visual);
         // Both states receive the same live title/image, so a state transition
@@ -132,11 +137,13 @@ export abstract class LiveAction extends SingletonAction<ActionSettings> {
           await entry.action.setState(visual.state);
           entry.state = visual.state;
           if (this.visible.get(entry.action.id) !== entry) return;
+          if (entry.dirty) continue;
         }
         if (entry.image !== image) {
           await entry.action.setImage(image);
           entry.image = image;
           if (this.visible.get(entry.action.id) !== entry) return;
+          if (entry.dirty) continue;
         }
         const title = keyTitle(visual.title);
         if (entry.title !== title) {
@@ -154,9 +161,12 @@ export abstract class LiveAction extends SingletonAction<ActionSettings> {
 
   override async onPropertyInspectorDidAppear(ev: PropertyInspectorDidAppearEvent<ActionSettings>): Promise<void> {
     this.inspectorId = ev.action.id;
+    this.inspectorSettings = undefined;
     this.inspectorPayload = "";
+    ++this.inspectorGeneration;
+    const generation = ++this.inspectorSettingsGeneration;
     const settings = await ev.action.getSettings();
-    if (this.inspectorId !== ev.action.id || streamDeck.ui.action?.id !== ev.action.id) return;
+    if (generation !== this.inspectorSettingsGeneration || this.inspectorId !== ev.action.id || streamDeck.ui.action?.id !== ev.action.id) return;
     this.inspectorSettings = settings;
     await this.sendInspector();
   }
@@ -165,13 +175,18 @@ export abstract class LiveAction extends SingletonAction<ActionSettings> {
     this.inspectorId = undefined;
     this.inspectorSettings = undefined;
     this.inspectorPayload = "";
+    ++this.inspectorGeneration;
+    ++this.inspectorSettingsGeneration;
   }
   override async onSendToPlugin(ev: SendToPluginEvent<unknown & { event: string }, ActionSettings>): Promise<void> {
     if (!ev.payload || typeof ev.payload !== "object" || !["boards", "sounds", "status"].includes(ev.payload.event)) return;
     if (streamDeck.ui.action?.id !== ev.action.id) return;
     this.inspectorId = ev.action.id;
+    this.inspectorPayload = "";
+    ++this.inspectorGeneration;
+    const generation = ++this.inspectorSettingsGeneration;
     const settings = await ev.action.getSettings();
-    if (this.inspectorId !== ev.action.id || streamDeck.ui.action?.id !== ev.action.id) return;
+    if (generation !== this.inspectorSettingsGeneration || this.inspectorId !== ev.action.id || streamDeck.ui.action?.id !== ev.action.id) return;
     this.inspectorSettings = settings;
     this.inspectorPayload = "";
     await this.sendInspector();
@@ -186,13 +201,14 @@ export abstract class LiveAction extends SingletonAction<ActionSettings> {
     const payload = JSON.stringify({ boards, sounds, label });
     if (payload === this.inspectorPayload) return;
     this.inspectorPayload = payload;
+    const generation = ++this.inspectorGeneration;
     const inspectorId = this.inspectorId;
     for (const message of [
       { event: "boards", items: boards },
       { event: "sounds", items: sounds },
       { event: "status", label },
     ]) {
-      if (streamDeck.ui.action?.id !== inspectorId || this.inspectorId !== inspectorId) return;
+      if (generation !== this.inspectorGeneration || streamDeck.ui.action?.id !== inspectorId || this.inspectorId !== inspectorId) return;
       await streamDeck.ui.sendToPropertyInspector(message);
     }
   }
