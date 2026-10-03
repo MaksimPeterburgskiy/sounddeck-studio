@@ -150,6 +150,9 @@ export function installDevBridge() {
     async pushControlState() {
       return { ok: true };
     },
+    async controlReady() {
+      return { ok: true };
+    },
     onControlStatus() {
       return () => undefined;
     },

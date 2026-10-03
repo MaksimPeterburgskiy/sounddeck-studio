@@ -178,7 +178,12 @@ function createExternalControlBridge({
   }
 
   function serial(operation) {
-    const pending = queue.then(operation);
+    const pending = queue.then(operation).catch(async (caught) => {
+      await closeServer();
+      error = { code: caught.code || "initialization-error", message: "Could not initialize or save external control. Check your app data folder." };
+      notify();
+      return getState();
+    });
     queue = pending.catch(() => {});
     return pending;
   }
@@ -285,8 +290,9 @@ function createExternalControlBridge({
     const rejected = requestError(req);
     if (rejected) return respond(res, rejected[0], errorMessage(rejected[1]));
     const authorization = req.headers.authorization;
-    if (!authenticated(typeof authorization === "string" && authorization.startsWith("Bearer ") ? authorization.slice(7) : "")) {
-      authFailure(req.socket.remoteAddress);
+    const token = typeof authorization === "string" && authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
+    if (!authenticated(token)) {
+      if (token.length > 0) authFailure(req.socket.remoteAddress);
       return respond(res, 401, errorMessage("unauthorized"));
     }
     if (Number(req.headers["content-length"]) > MAX_PAYLOAD) return respond(res, 413, errorMessage("payload-too-large"));
@@ -337,7 +343,7 @@ function createExternalControlBridge({
 
   function connect(ws, req) {
     const address = req.socket.remoteAddress;
-    const timer = setTimeout(() => { authFailure(address); rejectSocket(ws, "unauthorized"); }, helloTimeoutMs);
+    const timer = setTimeout(() => rejectSocket(ws, "unauthorized"), helloTimeoutMs);
     timer.unref?.();
     ws.on("error", () => {});
     ws.on("close", () => {
@@ -358,17 +364,19 @@ function createExternalControlBridge({
       if (!clients.has(ws)) {
         clearTimeout(timer);
         if (isThrottled(address)) return rejectSocket(ws, "rate-limited");
-        if (!fields(message, ["type", "protocol", "token", "client"]) || message.type !== "hello"
+        if (message?.type !== "hello") return rejectSocket(ws, "invalid-message");
+        if (Number.isInteger(message.protocol) && message.protocol !== PROTOCOL_VERSION) return rejectSocket(ws, "protocol-mismatch");
+        const hasToken = typeof message.token === "string" && message.token.length > 0;
+        if (!fields(message, ["type", "protocol", "token", "client"])
           || !Number.isInteger(message.protocol) || (message.token !== undefined && (typeof message.token !== "string" || message.token.length > 256))
           || !fields(message.client, ["name", "version"]) || !text(message.client.name, 128) || !text(message.client.version, 64)) {
-          authFailure(address);
+          if (hasToken) authFailure(address);
           return rejectSocket(ws, "invalid-message");
         }
         if (!authenticated(message.token)) {
-          authFailure(address);
+          if (hasToken) authFailure(address);
           return rejectSocket(ws, "unauthorized");
         }
-        if (message.protocol !== PROTOCOL_VERSION) return rejectSocket(ws, "protocol-mismatch");
         clients.set(ws, { name: message.client.name, version: message.client.version });
         send(ws, { type: "welcome", protocol: PROTOCOL_VERSION, app: { version: appVersion }, state: getSnapshot() });
         notify();
@@ -412,11 +420,13 @@ function createExternalControlBridge({
     listener.headersTimeout = 10000;
     listener.setTimeout(10000, (socket) => socket.destroy());
     listener.on("upgrade", (req, socket, head) => {
+      // HTTP no longer handles socket errors once an upgrade reaches us.
+      socket.on("error", () => socket.destroy());
       const rejected = requestError(req) || (req.url !== "/" ? [404, "not-found"] : null)
         || (sockets.clients.size >= MAX_CLIENTS ? [503, "busy"] : null);
       if (rejected) {
         const body = JSON.stringify(errorMessage(rejected[1]));
-        socket.end(`HTTP/1.1 ${rejected[0]} Rejected\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`);
+        socket.end(`HTTP/1.1 ${rejected[0]} Rejected\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`, () => socket.destroy());
         return;
       }
       sockets.handleUpgrade(req, socket, head, (ws) => {
@@ -446,9 +456,20 @@ function createExternalControlBridge({
     notify();
   }
 
-  function start() {
+  function start(loadLibrary) {
     stopped = false;
-    return serial(async () => { await initialize(); await listen(); notify(); return getState(); });
+    return serial(async () => {
+      await initialize();
+      if (loadLibrary) {
+        const value = await loadLibrary();
+        updateLibrary(value);
+        updateLiveState({ activeBoardId: value.activeBoardId || "", playback: [] });
+      }
+      error = null;
+      await listen();
+      notify();
+      return getState();
+    });
   }
 
   function stop() {

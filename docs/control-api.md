@@ -37,7 +37,7 @@ The directory follows [Electron's userData application-name rules](https://www.e
 
 Native clients must omit `Origin`: every HTTP request or WebSocket upgrade carrying that header is rejected, even an empty header or `null`. In local mode, `Host` must be exactly `127.0.0.1:<port>` or `localhost:<port>`. Browser pages cannot use this API.
 
-Five failed authentication attempts from one remote address trigger a 30-second cooldown, shared across HTTP and WebSocket. Messages and HTTP bodies are limited to 64 KiB. WebSocket input must be text JSON. At most 64 WebSocket sessions, including unauthenticated sessions, are admitted. Unknown fields, commands and invalid argument types are rejected. IDs contain only letters, digits, `_` and `-`, up to 128 characters. Titles are nonempty strings up to 256 characters. No command accepts file paths.
+Five failed authentication attempts with nonempty credentials from one remote address trigger a 30-second cooldown, shared across HTTP and WebSocket. Missing credentials and hello timeouts do not count toward the cooldown. Messages and HTTP bodies are limited to 64 KiB. WebSocket input must be text JSON. At most 64 WebSocket sessions, including unauthenticated sessions, are admitted. Unknown fields, commands and invalid argument types are rejected. IDs contain only letters, digits, `_` and `-`, up to 128 characters. Titles are nonempty strings up to 256 characters. No command accepts file paths.
 
 ## WebSocket
 
@@ -74,7 +74,7 @@ Responses carry the same ID:
 {"type":"result","id":"c7","ok":false,"code":"not-found"}
 ```
 
-A successful playback/board result acknowledges dispatch to the app, not audio completion. Commands respect the sound's existing tap/retrigger behavior. Trigger commands return `busy` while a hotkey is being captured and `unavailable` if the renderer is absent; cached library/image queries still work.
+A successful playback/board result acknowledges dispatch to the app, not audio completion. Commands respect the sound's existing tap/retrigger behavior. Trigger commands return `busy` while a hotkey is being captured and `unavailable` if the renderer is absent or still initializing, including during a reload; cached library/image queries still work.
 
 | Command | Args | Result data |
 | --- | --- | --- |
@@ -147,7 +147,7 @@ Session/HTTP errors use `{type:"error",code,message,protocol:1}`; WebSocket comm
 | `not-found` | Sound, board or endpoint missing / 404 |
 | `payload-too-large` | Body exceeds 64 KiB / 413; oversized WS frames close with code 1009 |
 | `busy` | Hotkey capture active, or session capacity reached / 503 |
-| `unavailable` | Renderer unavailable / 503 |
+| `unavailable` | Renderer unavailable or still initializing / 503 |
 | `internal-error` | Command could not be dispatched / 500 |
 
-There is **no stability promise**. Additive changes retain the integer protocol number; breaking changes bump it. The server supports exactly one version. A mismatch includes the server's `protocol` so a client can report which side needs updating. HTTP paths carry the same version (`/v1`). Shared TypeScript definitions live in `src/lib/controlProtocol.ts` and have no Electron or React dependency.
+There is **no stability promise**. Additive changes retain the integer protocol number; breaking changes bump it. The server supports exactly one version. A hello with a different integer protocol is rejected before validating that version's fields or credentials, without counting an authentication failure. A mismatch includes the server's `protocol` so a client can report which side needs updating. HTTP paths carry the same version (`/v1`). Shared TypeScript definitions live in `src/lib/controlProtocol.ts` and have no Electron or React dependency.

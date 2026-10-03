@@ -224,6 +224,7 @@ declare global {
       setControlSettings: (patch: ControlSettingsPatch) => Promise<ControlStatus>;
       regenerateControlToken: () => Promise<ControlStatus>;
       pushControlState: (state: ControlLiveState) => Promise<{ ok: boolean }>;
+      controlReady: () => Promise<{ ok: boolean }>;
       onControlStatus: (callback: (status: ControlStatus) => void) => () => void;
       onControlCommand: (callback: (command: RendererControlCommand) => void) => () => void;
       getCorsairStatus: () => Promise<CorsairState>;

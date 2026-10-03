@@ -60,6 +60,7 @@ if (!app.requestSingleInstanceLock()) {
 }
 
 let mainWindow;
+let controlRendererReady = false;
 let tray;
 let isQuitting = false;
 let allowWindowCloseForUpdate = false;
@@ -114,12 +115,11 @@ const externalControl = createExternalControlBridge({
   onStateChange: (state) => sendToMainWindow("control-status", state),
   onCommand: ({ command, args }) => {
     if (hotkeyCaptureActive) return { ok: false, code: "busy" };
-    if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return { ok: false, code: "unavailable" };
+    if (!controlRendererReady || !mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return { ok: false, code: "unavailable" };
     const binding = { accelerator: "" };
     if (command === "sound.play") Object.assign(binding, { type: "sound", soundId: args.soundId });
     else if (command === "playback.stopAll") binding.type = "stop-all";
     else if (command === "board.activate") Object.assign(binding, { type: "board", boardId: args.boardId });
-    else if (command === "board.cycle" && args.direction !== -1) binding.type = "cycle-board";
     else {
       sendToMainWindow("control-command", { command, args });
       return { ok: true };
@@ -769,7 +769,6 @@ function createTray() {
 }
 
 async function createWindow() {
-  await ensureLibrary();
   if (shutdownLifecycle.isShuttingDown()) return;
   const rendererTarget = await selectRendererTarget();
   trustedRendererPolicy = rendererTarget.policy;
@@ -795,6 +794,12 @@ async function createWindow() {
     }
   });
   mainWindow = window;
+  controlRendererReady = false;
+  window.webContents.on("did-start-navigation", (details) => {
+    if (details.isMainFrame && !details.isSameDocument) controlRendererReady = false;
+  });
+  window.webContents.on("render-process-gone", () => { controlRendererReady = false; });
+  window.webContents.on("destroyed", () => { controlRendererReady = false; });
   installNavigationGuards(window.webContents, rendererTarget.policy);
 
   if (isDev) {
@@ -820,7 +825,10 @@ async function createWindow() {
     window.hide();
   });
   window.on("closed", () => {
-    if (mainWindow === window) mainWindow = undefined;
+    if (mainWindow === window) {
+      controlRendererReady = false;
+      mainWindow = undefined;
+    }
   });
   for (const eventName of ["maximize", "unmaximize", "enter-full-screen", "leave-full-screen"]) {
     window.on(eventName, () => sendToMainWindow("window-state", windowState(window)));
@@ -1029,16 +1037,12 @@ function setupAutoUpdates() {
 }
 
 app.whenReady().then(async () => {
-  await ensureLibrary();
-  if (shutdownLifecycle.isShuttingDown()) return;
-  const library = await readJson(libraryFile());
-  if (shutdownLifecycle.isShuttingDown()) return;
-  externalControl.updateLibrary(library);
-  externalControl.updateLiveState({ activeBoardId: library.activeBoardId || "", playback: [] });
-  await externalControl.start();
-  if (shutdownLifecycle.isShuttingDown()) return;
   await createWindow();
   if (shutdownLifecycle.isShuttingDown() || !mainWindow) return;
+  void externalControl.start(async () => {
+    await ensureLibrary();
+    return readJson(libraryFile());
+  });
   app.on("activate", () => {
     if (shutdownLifecycle.isShuttingDown()) return;
     if (mainWindow) {
@@ -1328,6 +1332,10 @@ handleTrustedIpc("corsair:status", async () => corsair.getState());
 handleTrustedIpc("control:getSettings", () => externalControl.getState());
 handleTrustedIpc("control:setSettings", (_event, patch) => externalControl.setSettings(patch));
 handleTrustedIpc("control:regenerateToken", () => externalControl.regenerateToken());
+handleTrustedIpc("control:ready", () => {
+  controlRendererReady = true;
+  return { ok: true };
+});
 handleTrustedIpc("control:state", (_event, state) => {
   externalControl.updateLiveState(state);
   return { ok: true };
