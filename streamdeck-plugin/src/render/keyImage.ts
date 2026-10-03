@@ -13,6 +13,7 @@ export interface KeyTitleLayout {
 export interface KeyImageInput {
   title: string;
   titleLayout?: KeyTitleLayout;
+  badge?: string;
   color?: string;
   image?: string | null;
   playing?: ControlPlaybackVoice;
@@ -92,7 +93,7 @@ export function keyImage(input: KeyImageInput): string {
     ? Math.round(Math.min(1, elapsed / (input.playing.duration * 1000)) * BAR_WIDTH)
     : 0;
   const loopStep = indeterminate ? Math.floor(elapsed / 125) % 16 : 0;
-  const cacheKey = JSON.stringify([color, image, glyph, Boolean(input.playing), progress, indeterminate, loopStep, Boolean(input.dimmed), Boolean(input.warning), Boolean(input.active), input.icon, input.iconOn, ring, titleHeight, alignment]);
+  const cacheKey = JSON.stringify([color, image, glyph, Boolean(input.playing), progress, indeterminate, loopStep, Boolean(input.dimmed), Boolean(input.warning), Boolean(input.active), input.icon, input.iconOn, input.badge, ring, titleHeight, alignment]);
   const existing = cache.get(cacheKey);
   if (existing) {
     cache.delete(cacheKey);
@@ -112,8 +113,10 @@ export function keyImage(input: KeyImageInput): string {
     artTop = Math.max(ART_TOP, titleTop + titleHeight + ART_GAP);
     artBottom = 144 - ART_TOP - ART_GAP;
   }
-  const size = Math.max(0, Math.min(ART_MAX, artBottom - artTop));
-  const centerY = Math.round((artTop + artBottom) / 2);
+  // A status badge (for example a volume level) sits under the artwork.
+  const badgeSpace = input.badge ? 24 : 0;
+  const size = Math.max(0, Math.min(ART_MAX, artBottom - badgeSpace - artTop));
+  const centerY = Math.round((artTop + artBottom - badgeSpace) / 2);
   const icon = (name: string, body: string, color: string, attributes: string) => {
     if (!size) return "";
     const scale = size / 24;
@@ -129,6 +132,7 @@ export function keyImage(input: KeyImageInput): string {
           // Arial capitals are about 0.72em tall; offset the baseline so the capital is centered.
           ? `<text data-glyph="initial" x="72" y="${Math.round(centerY + size * 0.9 * 0.36)}" text-anchor="middle" fill="${glyphColor(color)}" font-family="Arial, sans-serif" font-size="${Math.round(size * 0.9)}" font-weight="700">${escapeXml(glyph)}</text>`
           : "";
+  const badge = input.badge ? `<text data-badge="status" x="72" y="${artBottom - 4}" text-anchor="middle" fill="${input.iconOn ? "#ffffff" : "#8fa5a4"}" font-family="Arial, sans-serif" font-size="18">${escapeXml(input.badge)}</text>` : "";
   const shadeTop = Math.max(8, titleTop - 12);
   const shade = lines ? `<rect x="8" y="${shadeTop}" width="128" height="${Math.min(136, titleTop + titleHeight) - shadeTop}" rx="12" fill="url(#titleShade)"/>` : "";
   const bar = input.playing
@@ -137,7 +141,7 @@ export function keyImage(input: KeyImageInput): string {
       : `<rect x="16" y="12" width="${progress}" height="5" rx="2.5" fill="#62ffe7" data-progress="determinate" data-progress-pixels="${progress}"/>`}`
     : "";
   const warning = input.warning ? icon('warning="true"', keyIcons.warning, "#ffb020", "") : "";
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="144" height="144" viewBox="0 0 144 144"><defs><linearGradient id="titleShade" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#000" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity="0.8"/></linearGradient></defs><rect width="144" height="144" rx="18" fill="#11181b"/><rect data-pad="${input.icon ? "control" : "sound"}" x="8" y="8" width="128" height="128" rx="12" fill="${input.icon ? "#11181b" : color}"/>${content}${shade}<rect data-ring="${ring}" x="2.5" y="2.5" width="139" height="139" rx="16.5" fill="none" stroke="${ring === "playing" ? "#62ffe7" : ring === "active" ? "#ffffff" : "#283f3e"}" stroke-width="${ring === "playing" ? 4 : ring === "active" ? 3 : 1}"/>${bar}${input.dimmed ? '<rect width="144" height="144" rx="18" fill="#000000" fill-opacity="0.6" data-dimmed="true"/>' : ""}${warning}</svg>`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="144" height="144" viewBox="0 0 144 144"><defs><linearGradient id="titleShade" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#000" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity="0.8"/></linearGradient></defs><rect width="144" height="144" rx="18" fill="#11181b"/><rect data-pad="${input.icon ? "control" : "sound"}" x="8" y="8" width="128" height="128" rx="12" fill="${input.icon ? "#11181b" : color}"/>${content}${badge}${shade}<rect data-ring="${ring}" x="2.5" y="2.5" width="139" height="139" rx="16.5" fill="none" stroke="${ring === "playing" ? "#62ffe7" : ring === "active" ? "#ffffff" : "#283f3e"}" stroke-width="${ring === "playing" ? 4 : ring === "active" ? 3 : 1}"/>${bar}${input.dimmed ? '<rect width="144" height="144" rx="18" fill="#000000" fill-opacity="0.6" data-dimmed="true"/>' : ""}${warning}</svg>`;
   const result = `data:image/svg+xml,${encodeURIComponent(svg)}`;
   const bytes = (cacheKey.length + result.length) * 2;
   if (bytes <= MAX_CACHE_BYTES) {

@@ -20,7 +20,6 @@ type VisibleKey = {
   state?: 0 | 1;
   rendering: boolean;
   dirty: boolean;
-  layout?: boolean;
   feedback?: string;
 };
 
@@ -44,7 +43,7 @@ export abstract class LiveAction extends SingletonAction<ActionSettings> {
 
   protected syncSettings(settings: ActionSettings): ActionSettings { return settings; }
 
-  protected abstract visual(settings: ActionSettings, action: KeyAction<ActionSettings>): Visual;
+  protected abstract visual(settings: ActionSettings, action: KeyAction<ActionSettings> | DialAction<ActionSettings>): Visual;
   protected abstract press(ev: KeyDownEvent<ActionSettings>): Promise<void>;
   protected feedback(_settings: ActionSettings): FeedbackPayload | undefined { return undefined; }
 
@@ -100,7 +99,7 @@ export abstract class LiveAction extends SingletonAction<ActionSettings> {
     const visual = this.visual(settings, action);
     if (visual.blank) return visual;
     return this.connection.status === "connected" ? visual : {
-      ...visual, playing: undefined, playingRing: false, active: false, state: 0,
+      ...visual, badge: undefined, playing: undefined, playingRing: false, active: false, state: visual.state === undefined ? undefined : 0,
       dimmed: true, warning: this.connection.status !== "offline", title: this.connection.statusLabel,
     };
   }
@@ -155,9 +154,10 @@ export abstract class LiveAction extends SingletonAction<ActionSettings> {
         if (this.visible.get(entry.action.id) !== entry) return;
         if (entry.dirty) continue;
         if (entry.action.isDial()) {
-          if (!entry.layout) {
-            await entry.action.setFeedbackLayout("$B1");
-            entry.layout = true;
+          const title = this.visual(entry.settings, entry.action).title;
+          if (entry.title !== title) {
+            await entry.action.setTitle(title);
+            entry.title = title;
             if (this.visible.get(entry.action.id) !== entry) return;
             if (entry.dirty) continue;
           }

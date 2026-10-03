@@ -1,93 +1,112 @@
 import streamDeck, {
   action, type DialAction, type DialRotateEvent, type DialDownEvent, type TouchTapEvent,
-  type KeyDownEvent, type WillDisappearEvent, type DidReceiveSettingsEvent,
+  type WillDisappearEvent, type DidReceiveSettingsEvent,
 } from "@elgato/streamdeck";
 import type { ControlVolumeBus } from "../../../src/lib/controlProtocol";
 import type { Connection } from "../connection";
 import type { ActionSettings } from "../settings";
-import { volumeBus, volumeStep, volumeVisual, volumeFeedback } from "../volume";
+import { volumeBus, volumeBuses, volumeStep, volumeFeedback } from "../volume";
 import { LiveAction } from "./liveAction";
 
-type Rotation = { bus: ControlVolumeBus; session: object; delta: number; pending: boolean };
+type Input = { name: "volume.adjust"; bus: ControlVolumeBus; delta: number } | { name: "volume.mute"; bus: ControlVolumeBus };
+type Queue = { bus: ControlVolumeBus | undefined; step: number; session: object; inputs: Input[]; pending: boolean };
 
 @action({ UUID: "com.sounddeck.studio.volume-dial" })
 export class VolumeDial extends LiveAction {
-  private readonly rotations = new Map<string, Rotation>();
+  private readonly queues = new Map<string, Queue>();
 
   constructor(connection: Connection) {
     super(connection);
     connection.subscribe(() => {
-      for (const [id, rotation] of this.rotations) {
-        if (connection.session !== rotation.session) this.rotations.delete(id);
+      for (const [id, queue] of this.queues) {
+        if (connection.session !== queue.session) this.queues.delete(id);
       }
     });
   }
 
-  protected override visual(settings: ActionSettings) { return volumeVisual(this.connection, settings); }
+  protected override visual(settings: ActionSettings) {
+    const bus = volumeBus(settings);
+    return { title: bus ? volumeBuses[bus].name : "Missing" };
+  }
   protected override feedback(settings: ActionSettings) { return volumeFeedback(this.connection, settings); }
-  protected override async press(ev: KeyDownEvent<ActionSettings>): Promise<void> { await this.toggleMute(ev); }
+  protected override async press(): Promise<void> {}
 
   override async onDialRotate(ev: DialRotateEvent<ActionSettings>): Promise<void> {
-    if (!this.ready(ev.action)) return;
+    if (this.connection.status !== "connected") return;
     const bus = volumeBus(ev.payload.settings);
     if (!bus) { await ev.action.showAlert(); return; }
     if (!Number.isFinite(ev.payload.ticks) || !ev.payload.ticks) return;
-    const session = this.connection.session;
-    if (!session) return;
-    let rotation = this.rotations.get(ev.action.id);
-    if (!rotation || rotation.session !== session) {
-      rotation = { bus, session, delta: 0, pending: false };
-      this.rotations.set(ev.action.id, rotation);
-    }
-    if (rotation.bus !== bus) { rotation.delta = 0; rotation.bus = bus; }
-    rotation.delta += ev.payload.ticks * volumeStep(ev.payload.settings, 2);
-    if (rotation.pending) return;
-    rotation.pending = true;
-    // Yield one microtask to combine synchronous tick bursts as well as ticks
-    // arriving while the API acknowledgement is pending.
-    await Promise.resolve();
-    try {
-      while (this.rotations.get(ev.action.id) === rotation && this.connection.session === session && rotation.delta !== 0) {
-        const delta = rotation.delta;
-        rotation.delta = 0;
-        const result = await this.connection.command("volume.adjust", { bus: rotation.bus, delta });
-        if (this.rotations.get(ev.action.id) !== rotation || this.connection.session !== session) return;
-        await this.reportResult(ev.action, "volume.adjust", result);
-        if (!result.ok) { rotation.delta = 0; break; }
-      }
-    } catch (error) {
-      rotation.delta = 0;
-      streamDeck.logger.error(error);
-    } finally {
-      rotation.pending = false;
-    }
+    await this.enqueue(ev.action, ev.payload.settings, { name: "volume.adjust", bus, delta: ev.payload.ticks * volumeStep(ev.payload.settings, 2) });
   }
 
   // Toggle once on down. The SDK's corresponding dialUp needs no handler.
   override async onDialDown(ev: DialDownEvent<ActionSettings>): Promise<void> { await this.toggleMute(ev); }
   override async onTouchTap(ev: TouchTapEvent<ActionSettings>): Promise<void> { await this.toggleMute(ev); }
 
-  private ready(action: DialAction<ActionSettings> | KeyDownEvent<ActionSettings>["action"]): boolean {
-    if (this.connection.status === "connected") return true;
-    this.connection.handleDisconnectedPress();
-    void action.showAlert().catch((error) => streamDeck.logger.error(error));
-    return false;
-  }
-  private async toggleMute(ev: { action: DialAction<ActionSettings> | KeyDownEvent<ActionSettings>["action"]; payload: { settings: ActionSettings } }): Promise<void> {
-    if (!this.ready(ev.action)) return;
+  private async toggleMute(ev: { action: DialAction<ActionSettings>; payload: { settings: ActionSettings } }): Promise<void> {
+    if (this.connection.status !== "connected") {
+      this.connection.handleDisconnectedPress();
+      await ev.action.showAlert();
+      return;
+    }
     const bus = volumeBus(ev.payload.settings);
     if (!bus) { await ev.action.showAlert(); return; }
-    await this.command(ev, "volume.mute", { bus });
+    await this.enqueue(ev.action, ev.payload.settings, { name: "volume.mute", bus });
+  }
+
+  private updateSettings(queue: Queue, settings: ActionSettings): void {
+    const bus = volumeBus(settings);
+    const step = volumeStep(settings, 2);
+    if (queue.bus !== bus || queue.step !== step) {
+      queue.inputs = [];
+      queue.bus = bus;
+      queue.step = step;
+    }
+  }
+
+  private async enqueue(action: DialAction<ActionSettings>, settings: ActionSettings, input: Input): Promise<void> {
+    const session = this.connection.session;
+    if (!session) return;
+    let queue = this.queues.get(action.id);
+    if (!queue || queue.session !== session) {
+      queue = { bus: volumeBus(settings), step: volumeStep(settings, 2), session, inputs: [], pending: false };
+      this.queues.set(action.id, queue);
+    }
+    this.updateSettings(queue, settings);
+    const last = queue.inputs.at(-1);
+    // Clamp-sensitive direction changes and mute gestures must retain their order.
+    if (last?.name === "volume.adjust" && input.name === "volume.adjust" && Math.sign(last.delta) === Math.sign(input.delta)) {
+      last.delta += input.delta;
+    } else {
+      queue.inputs.push(input);
+    }
+    if (queue.pending) return;
+    queue.pending = true;
+    try {
+      while (this.queues.get(action.id) === queue && this.connection.session === session && queue.inputs.length) {
+        const next = queue.inputs.shift()!;
+        const result = next.name === "volume.adjust"
+          ? await this.connection.command(next.name, { bus: next.bus, delta: next.delta })
+          : await this.connection.command(next.name, { bus: next.bus });
+        if (this.queues.get(action.id) !== queue || this.connection.session !== session) return;
+        await this.reportResult(action, next.name, result);
+        if (!result.ok) { queue.inputs = []; break; }
+      }
+    } catch (error) {
+      queue.inputs = [];
+      streamDeck.logger.error(error);
+    } finally {
+      queue.pending = false;
+    }
   }
 
   override onWillDisappear(ev: WillDisappearEvent<ActionSettings>): void {
-    this.rotations.delete(ev.action.id);
+    this.queues.delete(ev.action.id);
     super.onWillDisappear(ev);
   }
   override onDidReceiveSettings(ev: DidReceiveSettingsEvent<ActionSettings>): void {
-    // Keep the in-flight slot occupied while discarding ticks for old settings.
-    const rotation = this.rotations.get(ev.action.id);
-    if (rotation) rotation.delta = 0;
+    const queue = this.queues.get(ev.action.id);
+    if (queue) this.updateSettings(queue, ev.payload.settings);
     super.onDidReceiveSettings(ev);
   }
 }

@@ -4,7 +4,7 @@ import type { ActionSettings } from "../settings";
 import { volumeBus, volumeStep, volumeVisual } from "../volume";
 import { LiveAction } from "./liveAction";
 
-type Repeat = { session: object; timer?: ReturnType<typeof setTimeout>; interval?: ReturnType<typeof setInterval> };
+type Repeat = { settings: ActionSettings; session: object; timer?: ReturnType<typeof setTimeout>; interval?: ReturnType<typeof setInterval> };
 
 @action({ UUID: "com.sounddeck.studio.volume" })
 export class Volume extends LiveAction {
@@ -25,16 +25,10 @@ export class Volume extends LiveAction {
     this.stopRepeat(ev.action.id);
     const bus = volumeBus(ev.payload.settings);
     const mode = ev.payload.settings.mode ?? "up";
-    if (!bus || !["up", "down", "mute"].includes(mode)) { await ev.action.showAlert(); return; }
-    if (mode === "mute") {
-      await this.command(ev, "volume.mute", {
-        bus, ...(ev.payload.isInMultiAction && ev.payload.userDesiredState !== undefined && { muted: ev.payload.userDesiredState === 1 }),
-      });
-      return;
-    }
+    if (!bus || !["up", "down"].includes(mode)) { await ev.action.showAlert(); return; }
     const delta = volumeStep(ev.payload.settings, 5) * (mode === "down" ? -1 : 1);
     const session = this.connection.session;
-    const repeat: Repeat | undefined = session && !ev.payload.isInMultiAction ? { session } : undefined;
+    const repeat: Repeat | undefined = session && !ev.payload.isInMultiAction ? { session, settings: ev.payload.settings } : undefined;
     const adjust = async () => {
       if (repeat && (this.held.get(ev.action.id) !== repeat || this.connection.session !== session)) return;
       try {
@@ -65,7 +59,10 @@ export class Volume extends LiveAction {
     super.onWillDisappear(ev);
   }
   override onDidReceiveSettings(ev: DidReceiveSettingsEvent<ActionSettings>): void {
-    this.stopRepeat(ev.action.id);
+    const repeat = this.held.get(ev.action.id);
+    if (repeat && (volumeBus(repeat.settings) !== volumeBus(ev.payload.settings)
+      || (repeat.settings.mode ?? "up") !== (ev.payload.settings.mode ?? "up")
+      || volumeStep(repeat.settings, 5) !== volumeStep(ev.payload.settings, 5))) this.stopRepeat(ev.action.id);
     super.onDidReceiveSettings(ev);
   }
   private stopRepeat(id: string): void {
