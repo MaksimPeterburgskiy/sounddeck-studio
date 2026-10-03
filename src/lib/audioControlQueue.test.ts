@@ -36,6 +36,32 @@ describe("external audio mutation FIFO", () => {
     expect(await later).toEqual({ ok: true, data: { bus: "micVirtual", value: 0.6, muted: false } });
   });
 
+  it("reports a persisted mutation as applied when audio configuration rejects and continues the FIFO", async () => {
+    const app = setup({ micVirtualVolume: 0.4, micVirtualMuted: true });
+    const configuration = deferred<void>();
+    app.waitForConfiguration.mockReturnValueOnce(configuration.promise);
+    const replied = vi.fn();
+    const applied = app.queue.enqueue({ command: "volume.set", args: { bus: "micVirtual", value: 0.6 } }).then(replied);
+    const later = app.queue.enqueue({ command: "volume.mute", args: { bus: "micVirtual" } });
+    await vi.waitFor(() => expect(app.waitForConfiguration).toHaveBeenCalledOnce());
+    expect(app.persist).toHaveBeenCalledOnce();
+    expect(app.writeSettings).toHaveBeenCalledOnce();
+    expect(replied).not.toHaveBeenCalled();
+    expect(app.getSettings().micVirtualVolume).toBe(0.6);
+    expect(app.getSettings().micVirtualMuted).toBe(false);
+
+    configuration.reject(new Error("audio device unavailable"));
+    await applied;
+    expect(replied).toHaveBeenCalledExactlyOnceWith({ ok: true, data: { bus: "micVirtual", value: 0.6, muted: false } });
+    expect(await later).toEqual({ ok: true, data: { bus: "micVirtual", value: 0.6, muted: true } });
+    expect(app.persist).toHaveBeenCalledTimes(2);
+    expect(app.waitForConfiguration).toHaveBeenCalledTimes(2);
+    expect(app.writeSettings.mock.calls.map(([settings]) => ({ value: settings.micVirtualVolume, muted: settings.micVirtualMuted })))
+      .toEqual([{ value: 0.6, muted: false }, { value: 0.6, muted: true }]);
+    expect(app.getSettings().micVirtualVolume).toBe(0.6);
+    expect(app.getSettings().micVirtualMuted).toBe(true);
+  });
+
   it("skips a disconnected client's queued mutation without blocking later clients", async () => {
     const app = setup({ micVirtualVolume: 0.4, micPassthrough: false });
     const save = deferred<void>();
