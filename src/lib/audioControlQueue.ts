@@ -46,7 +46,9 @@ export function createAudioControlQueue({ getSettings, writeSettings, persist, w
       await waitForConfiguration().catch(() => undefined);
       return { ok: false, code: "internal-error" };
     }
-    await waitForConfiguration();
+    // Persistence commits the mutation. Audio failures are surfaced by the app
+    // and must not turn a saved change into a failed command.
+    await waitForConfiguration().catch(() => undefined);
     return { ok: true, data: applied.data };
   }
 
