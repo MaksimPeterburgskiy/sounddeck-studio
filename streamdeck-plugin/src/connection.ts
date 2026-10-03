@@ -52,6 +52,11 @@ export class Connection {
     this.retryDelay = this.retryMin;
   }
 
+  /** Opaque identity of the authenticated socket; changes on every reconnect. */
+  get session(): object | null {
+    return this.status === "connected" && this.socket?.readyState === WebSocket.OPEN ? this.socket : null;
+  }
+
   get statusLabel(): string {
     switch (this.status) {
       case "not-installed": return "Not\ninstalled";
