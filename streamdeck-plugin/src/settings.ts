@@ -1,6 +1,8 @@
 import type { ControlSettingKey } from "../../src/lib/controlProtocol";
 
 export type ActionSettings = {
+  /** Monotonic property inspector snapshot revision; preserved by plugin updates. */
+  inspectorRevision?: number;
   boardId?: string;
   soundId?: string;
   title?: string;
