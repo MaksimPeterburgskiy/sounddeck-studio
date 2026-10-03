@@ -177,6 +177,58 @@
           "FontSize": 13
         }
       ]
+    },
+    {
+      "UUID": "com.sounddeck.studio.volume",
+      "Name": "Volume",
+      "Tooltip": "Adjust or mute an audio bus. Hold up/down to repeat.",
+      "Icon": "imgs/volume",
+      "Controllers": [
+        "Keypad"
+      ],
+      "UserTitleEnabled": true,
+      "States": [
+        {
+          "Image": "imgs/volume-key",
+          "TitleAlignment": "bottom",
+          "FontSize": 13,
+          "Name": "Unmute"
+        },
+        {
+          "Image": "imgs/volume-muted-key",
+          "TitleAlignment": "bottom",
+          "FontSize": 13,
+          "Name": "Mute"
+        }
+      ],
+      "PropertyInspectorPath": "ui/volume.html",
+      "DisableAutomaticStates": true
+    },
+    {
+      "UUID": "com.sounddeck.studio.volume-dial",
+      "Name": "Volume dial",
+      "Tooltip": "Rotate to adjust volume; press or tap to mute.",
+      "Icon": "imgs/volume-dial",
+      "Controllers": [
+        "Encoder"
+      ],
+      "UserTitleEnabled": true,
+      "Encoder": {
+        "layout": "$B1",
+        "TriggerDescription": {
+          "Rotate": "Adjust volume",
+          "Push": "Toggle mute",
+          "Touch": "Toggle mute"
+        }
+      },
+      "States": [
+        {
+          "Image": "imgs/volume-key",
+          "TitleAlignment": "bottom",
+          "FontSize": 13
+        }
+      ],
+      "PropertyInspectorPath": "ui/volume-dial.html"
     }
   ]
 }
