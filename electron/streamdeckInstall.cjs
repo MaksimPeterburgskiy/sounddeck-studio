@@ -29,7 +29,7 @@ function isOlderVersion(installed, bundled) {
 }
 
 function installedPluginPath(platform, home, env) {
-  if (platform === "darwin") return path.join(home, "Library", "Application Support", "com.elgato.StreamDeck", "Plugins", PLUGIN_DIRECTORY);
+  if (platform === "darwin") return path.posix.join(home, "Library", "Application Support", "com.elgato.StreamDeck", "Plugins", PLUGIN_DIRECTORY);
   if (platform === "win32" && env.APPDATA) return path.win32.join(env.APPDATA, "Elgato", "StreamDeck", "Plugins", PLUGIN_DIRECTORY);
   return undefined;
 }
