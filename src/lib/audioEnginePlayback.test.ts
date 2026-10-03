@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AudioEngine } from "./audioEngine";
 import { waitForAudioConfiguration } from "./controlReadiness";
+import { createSoundPlayQueue } from "./soundPlayQueue";
 import { FakeAudioContext, deferred, makeAudioSettings, makeSound, voiceGains, waitForMockCalls } from "./testing/webAudioFakes";
 
 const playbackSettings = makeAudioSettings({
@@ -49,6 +50,50 @@ afterEach(() => {
 });
 
 describe("AudioEngine output routing", () => {
+  it.each(["decode", "routing"])("serializes external and hotkey toggle plays while %s is pending", async (preparation) => {
+    const engine = new AudioEngine(dualRouteSettings, vi.fn());
+    const sound = makeSound({ outputTarget: "virtual", retriggerMode: "stop" });
+    const ready = deferred<void>();
+    let configuration: Promise<void>;
+    if (preparation === "routing") {
+      virtualContext().setSinkId.mockReturnValueOnce(ready.promise);
+      configuration = engine.configure(dualRouteSettings, "cable-device");
+    } else {
+      configuration = engine.configure(dualRouteSettings, "cable-device");
+      await configuration;
+      const decode = decodeContext().decodeAudioData.getMockImplementation()!;
+      decodeContext().decodeAudioData.mockImplementationOnce(async () => {
+        await ready.promise;
+        return decode();
+      });
+    }
+    const queue = createSoundPlayQueue();
+    const play = vi.spyOn(engine, "play");
+    const trigger = (external: boolean) => queue(sound.id, async () => {
+      if (external) await waitForAudioConfiguration(() => configuration);
+      if (engine.isPlaying(sound.id)) {
+        engine.stop(sound.id);
+        return true;
+      }
+      return engine.play(sound);
+    });
+    const first = trigger(true);
+    if (preparation === "decode") await waitForMockCalls(decodeContext().decodeAudioData, 1);
+    else await waitForMockCalls(virtualContext().setSinkId, 1);
+    const second = trigger(true);
+    expect(engine.isPlaying(sound.id)).toBe(false);
+    ready.resolve();
+    expect(await Promise.all([first, second])).toEqual([true, true]);
+    expect(play).toHaveBeenCalledOnce();
+    expect(virtualContext().bufferSources).toHaveLength(1);
+    expect(engine.isPlaying(sound.id)).toBe(false);
+    // Hotkeys and external commands share the same queue and toggle semantics.
+    expect(await Promise.all([trigger(false), trigger(true)])).toEqual([true, true]);
+    expect(play).toHaveBeenCalledTimes(2);
+    expect(engine.isPlaying(sound.id)).toBe(false);
+    await engine.dispose();
+  });
+
   it("waits for a delayed virtual sink before accepting the first external play command", async () => {
     const engine = new AudioEngine(dualRouteSettings, vi.fn());
     const sink = deferred<void>();

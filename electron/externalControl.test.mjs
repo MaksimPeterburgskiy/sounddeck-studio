@@ -169,6 +169,23 @@ function upgradeStatus(headers) {
 }
 
 describe("external control discovery and listener", () => {
+  it("preserves renderer playback received while the startup library load is pending", async () => {
+    await create();
+    await bridge.stop();
+    let finishLoading;
+    const startup = bridge.start(() => new Promise((resolve) => { finishLoading = resolve; }));
+    await vi.waitFor(() => expect(finishLoading).toBeTypeOf("function"));
+    const playback = [{ soundId: "sound-new", startedAt: 123, duration: 10, loop: true }];
+    bridge.updateLiveState({ activeBoardId: "board-a", playback });
+    finishLoading(library);
+    expect(await startup).toMatchObject({ listening: true, error: null });
+    expect(bridge.getSnapshot().playback).toEqual(playback);
+    expect((await request()).body.playback).toEqual(playback);
+    const connection = await client();
+    connection.send(hello());
+    expect(await connection.next()).toMatchObject({ type: "welcome", state: { playback } });
+  });
+
   it.each(["readFile", "mkdir", "writeFile", "chmod", "rename"])("reports initialization %s failures without rejecting or listening", async (method) => {
     if (method === "chmod" && process.platform === "win32") return;
     const onStateChange = vi.fn();

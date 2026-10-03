@@ -470,7 +470,6 @@ function createExternalControlBridge({
       if (loadLibrary) {
         const value = await loadLibrary();
         updateLibrary(value);
-        updateLiveState({ playback: [] });
       }
       error = null;
       await listen();
