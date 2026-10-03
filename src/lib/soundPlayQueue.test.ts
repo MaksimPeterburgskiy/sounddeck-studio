@@ -3,6 +3,44 @@ import { createSoundPlayQueue } from "./soundPlayQueue";
 import { deferred } from "./testing/webAudioFakes";
 
 describe("per-sound play queue", () => {
+  it("preserves an already cancelled request without cancelling the next play", async () => {
+    const queue = createSoundPlayQueue();
+    const cancellation = new AbortController();
+    cancellation.abort();
+    const signals: AbortSignal[] = [];
+    const play = async (signal: AbortSignal) => {
+      signals.push(signal);
+      return !signal.aborted;
+    };
+
+    expect(await Promise.all([
+      queue("sound-a", play, cancellation.signal),
+      queue("sound-a", play)
+    ])).toEqual([false, true]);
+    expect(signals[0]).not.toBe(signals[1]);
+  });
+
+  it.each([false, true])("detaches request cancellation after settlement (failed: %s)", async (failed) => {
+    const queue = createSoundPlayQueue();
+    const cancellation = new AbortController();
+    const removeListener = vi.spyOn(cancellation.signal, "removeEventListener");
+    let settledSignal!: AbortSignal;
+    const settled = queue("sound-a", async (signal) => {
+      settledSignal = signal;
+      if (failed) throw new Error("Decode failed");
+      return true;
+    }, cancellation.signal);
+    if (failed) await expect(settled).rejects.toThrow("Decode failed");
+    else expect(await settled).toBe(true);
+
+    expect(removeListener).toHaveBeenCalledWith("abort", expect.any(Function));
+    cancellation.abort();
+    queue.cancel("sound-a");
+    queue.cancelAll();
+    expect(settledSignal.aborted).toBe(false);
+    expect(await queue("sound-a", async (signal) => !signal.aborted)).toBe(true);
+  });
+
   it("lets different sounds play while earlier plays of one sound are pending", async () => {
     const queue = createSoundPlayQueue();
     const preparation = deferred<void>();

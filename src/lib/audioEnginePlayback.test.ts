@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AudioEngine } from "./audioEngine";
+import { normalizeSoundEffects } from "./model";
 import { waitForAudioConfiguration } from "./controlReadiness";
 import { createSoundPlayQueue } from "./soundPlayQueue";
 import { FakeAudioContext, deferred, makeAudioSettings, makeSound, voiceGains, waitForMockCalls } from "./testing/webAudioFakes";
@@ -50,6 +51,59 @@ afterEach(() => {
 });
 
 describe("AudioEngine output routing", () => {
+  it("rejects an already cancelled solo restart without reading media or stopping active voices", async () => {
+    const status = vi.fn();
+    const engine = new AudioEngine(playbackSettings, status);
+    try {
+      await engine.play(makeSound());
+      const source = monitorContext().bufferSources[0];
+      const reads = vi.mocked(window.sounddeck.readMedia).mock.calls.length;
+      const resumes = monitorContext().resume.mock.calls.length;
+      status.mockClear();
+      const cancellation = new AbortController();
+      cancellation.abort();
+
+      expect(await engine.play(makeSound({ soloPlay: true, retriggerMode: "restart" }), cancellation.signal)).toBe(false);
+      expect(window.sounddeck.readMedia).toHaveBeenCalledTimes(reads);
+      expect(monitorContext().resume).toHaveBeenCalledTimes(resumes);
+      expect(monitorContext().bufferSources).toEqual([source]);
+      expect(source.stop).not.toHaveBeenCalled();
+      expect(engine.isPlaying("sound-1")).toBe(true);
+      expect(status).not.toHaveBeenCalled();
+    } finally {
+      await engine.dispose();
+    }
+  });
+
+  it("cancels a solo restart during resume without silencing itself or other sounds", async () => {
+    const status = vi.fn();
+    const engine = new AudioEngine(playbackSettings, status);
+    const resumed = deferred<void>();
+    try {
+      await engine.play(makeSound());
+      await engine.play(makeSound({ id: "other" }));
+      const sources = [...monitorContext().bufferSources];
+      const gains = voiceGains(monitorContext());
+      status.mockClear();
+      monitorContext().resume.mockReturnValueOnce(resumed.promise);
+      const cancellation = new AbortController();
+      const pending = engine.play(makeSound({ soloPlay: true, retriggerMode: "restart" }), cancellation.signal);
+      await waitForMockCalls(monitorContext().resume, 3);
+      cancellation.abort();
+      resumed.resolve();
+
+      expect(await pending).toBe(false);
+      expect(monitorContext().bufferSources).toEqual(sources);
+      expect(gains.map((gain) => gain.gain.value)).toEqual([1, 1]);
+      expect(engine.isPlaying("sound-1")).toBe(true);
+      expect(engine.isPlaying("other")).toBe(true);
+      expect(status).not.toHaveBeenCalled();
+    } finally {
+      resumed.resolve();
+      await engine.dispose();
+    }
+  });
+
   it.each([
     ["sound", "routing"], ["sound", "decode"], ["sound", "resume"],
     ["all", "routing"], ["all", "decode"], ["all", "resume"]
@@ -713,6 +767,74 @@ describe("AudioEngine fades", () => {
 });
 
 describe("AudioEngine preview lifecycle", () => {
+  it("preserves preview position during live pitch updates without publishing it as soundboard playback", async () => {
+    const status = vi.fn();
+    const now = vi.spyOn(performance, "now").mockReturnValue(1000);
+    const engine = new AudioEngine(playbackSettings, status);
+    const sound = makeSound({ trimStartSec: 0.25, trimEndSec: 1.75 });
+    try {
+      await engine.previewPlay(sound, 0.5, 1);
+      const source = monitorContext().bufferSources[0];
+      now.mockReturnValue(1250);
+      engine.setSoundEffects("other", normalizeSoundEffects({ pitchEnabled: true, pitchSemitones: 12 }));
+      expect(source.detune.value).toBe(0);
+      engine.setSoundEffects(sound.id, normalizeSoundEffects({ pitchEnabled: true, pitchSemitones: 12 }));
+      expect(engine.getPreviewPosition()).toBe(0.75);
+      expect(source.detune.value).toBe(1200);
+      now.mockReturnValue(1500);
+      expect(engine.getPreviewPosition()).toBe(1.25);
+      expect(source.start).toHaveBeenCalledOnce();
+      expect(status).not.toHaveBeenCalled();
+      expect(engine.isPlaying(sound.id)).toBe(false);
+
+      await engine.previewRestart(sound, 0.5);
+      expect(source.stop).toHaveBeenCalledOnce();
+      expect(monitorContext().bufferSources[1].start).toHaveBeenCalledWith(0, 0.25, 1.5);
+      expect(engine.getPreviewPosition()).toBe(0.25);
+    } finally {
+      await engine.dispose();
+    }
+  });
+
+  it("finishes a preview once after its reverb tail and ignores a stale completion after restart", async () => {
+    vi.useFakeTimers();
+    window.setTimeout = setTimeout;
+    window.clearTimeout = clearTimeout;
+    const now = vi.spyOn(performance, "now").mockReturnValue(1000);
+    const engine = new AudioEngine(playbackSettings, vi.fn());
+    const sound = makeSound({
+      trimStartSec: 0.25,
+      trimEndSec: 1.75,
+      effects: normalizeSoundEffects({ reverb: { enabled: true, mix: 0.25, decaySec: 0.1 } })
+    });
+    try {
+      await engine.previewPlay(sound, 0.25, 1);
+      const staleEnded = monitorContext().bufferSources[0].onended!;
+      await engine.previewRestart(sound, 1);
+      staleEnded();
+      expect(engine.getPreviewPosition()).toBe(0.25);
+      const source = monitorContext().bufferSources[1];
+      const convolver = monitorContext().convolvers[1];
+      const ended = source.onended!;
+      now.mockReturnValue(2500);
+      ended();
+      ended();
+      expect(engine.getPreviewPosition()).toBe(1.75);
+      expect(convolver.disconnect).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(99);
+      expect(engine.isPreviewing()).toBe(true);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(engine.isPreviewing()).toBe(false);
+      expect(engine.getPreviewPosition()).toBe(1.75);
+      expect(convolver.disconnect).toHaveBeenCalledOnce();
+      expect(source.disconnect).toHaveBeenCalledOnce();
+      expect(source.stop).not.toHaveBeenCalled();
+    } finally {
+      await engine.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps editor preview audible when soundboard monitoring is disabled", async () => {
     const previewSettings = makeAudioSettings({
       micPassthrough: false,
@@ -851,6 +973,82 @@ describe("AudioEngine lifecycle and cache", () => {
     engine.stop("sound-1");
     expect(status.mock.lastCall?.[2]).toEqual([]);
     await engine.dispose();
+  });
+
+  it("removes only the completed overlapping voice from control state across both routes", async () => {
+    vi.useFakeTimers();
+    window.setTimeout = setTimeout;
+    window.clearTimeout = clearTimeout;
+    const status = vi.fn();
+    const engine = new AudioEngine(dualRouteSettings, status);
+    const epoch = vi.spyOn(Date, "now").mockReturnValue(1700000000000);
+    const sound = makeSound({ outputTarget: "both", effects: normalizeSoundEffects({
+      reverb: { enabled: true, mix: 0.25, decaySec: 0.1 }
+    }) });
+    try {
+      await engine.configure(dualRouteSettings, "cable-device");
+      await engine.play(sound);
+      epoch.mockReturnValue(1700000000200);
+      await engine.play(sound);
+      expect(status.mock.lastCall?.[2]).toHaveLength(2);
+
+      monitorContext().bufferSources[0].onended!();
+      const notifications = status.mock.calls.length;
+      virtualContext().bufferSources[0].onended!();
+      expect(status).toHaveBeenCalledTimes(notifications);
+      expect(status).toHaveBeenLastCalledWith("playing", [sound.id], [
+        { soundId: sound.id, startedAt: 1700000000200, duration: 2, loop: false }
+      ]);
+      expect(engine.isPlaying(sound.id)).toBe(true);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(monitorContext().bufferSources[0].disconnect).toHaveBeenCalledOnce();
+      expect(virtualContext().bufferSources[0].disconnect).toHaveBeenCalledOnce();
+      expect(monitorContext().bufferSources[1].disconnect).not.toHaveBeenCalled();
+
+      engine.stopAll();
+      expect(status).toHaveBeenLastCalledWith("idle", [], []);
+      await vi.advanceTimersByTimeAsync(50);
+      expect(monitorContext().bufferSources[1].stop).toHaveBeenCalledOnce();
+      expect(virtualContext().bufferSources[1].stop).toHaveBeenCalledOnce();
+    } finally {
+      await engine.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("rebases each overlapping voice independently through repeated live pitch changes", async () => {
+    const status = vi.fn();
+    const engine = new AudioEngine(playbackSettings, status);
+    const epoch = vi.spyOn(Date, "now").mockReturnValue(1700000000000);
+    const now = vi.spyOn(performance, "now").mockReturnValue(1000);
+    const sound = makeSound({ loop: true, trimStartSec: 0.25, trimEndSec: 1.75 });
+    try {
+      await engine.play(sound);
+      now.mockReturnValue(1200);
+      epoch.mockReturnValue(1700000000200);
+      await engine.play(sound);
+      now.mockReturnValue(1400);
+      epoch.mockReturnValue(1700000000400);
+      engine.setSoundEffects(sound.id, normalizeSoundEffects({ pitchEnabled: true, pitchSemitones: 12 }));
+      expect(status.mock.lastCall?.[2]).toEqual([
+        { soundId: sound.id, startedAt: 1700000000200, duration: 0.75, loop: true },
+        { soundId: sound.id, startedAt: 1700000000300, duration: 0.75, loop: true }
+      ]);
+      expect(engine.getPosition(sound.id)).toBeCloseTo(0.45);
+
+      now.mockReturnValue(1600);
+      epoch.mockReturnValue(1700000000600);
+      engine.setSoundEffects(sound.id, undefined);
+      expect(status.mock.lastCall?.[2]).toEqual([
+        { soundId: sound.id, startedAt: 1699999999800, duration: 1.5, loop: true },
+        { soundId: sound.id, startedAt: 1700000000000, duration: 1.5, loop: true }
+      ]);
+      expect(engine.getPosition(sound.id)).toBeCloseTo(0.85);
+      expect(monitorContext().bufferSources.map((source) => source.detune.value)).toEqual([0, 0]);
+      for (const source of monitorContext().bufferSources) expect(source.start).toHaveBeenCalledOnce();
+    } finally {
+      await engine.dispose();
+    }
   });
 
   it("updates effective duration and preserves progress when live pitch changes playback speed", async () => {
