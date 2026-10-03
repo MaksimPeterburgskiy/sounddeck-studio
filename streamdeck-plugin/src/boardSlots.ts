@@ -34,6 +34,7 @@ export function slotBoard(library: ControlLibrary | undefined, settings: ActionS
 export class BoardSlots {
   private readonly keys = new Map<string, VisibleSlotKey>();
   private readonly pages = new Map<string, number>();
+  private readonly layoutTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly listeners = new Set<() => void>();
   private library?: ControlLibrary;
 
@@ -43,24 +44,50 @@ export class BoardSlots {
   }
   private notify(): void { for (const listener of this.listeners) listener(); }
 
+  private clamp(deviceId: string): boolean {
+    const page = this.page(deviceId);
+    if (!page.size || !this.pages.has(deviceId) || this.pages.get(deviceId) === page.index) return false;
+    this.pages.set(deviceId, page.index);
+    return true;
+  }
+  private settleLayout(deviceId: string): void {
+    clearTimeout(this.layoutTimers.get(deviceId));
+    // Page/folder switches arrive as a burst of disappear/appear events. Render
+    // the current layout immediately, but only save clamps after it settles.
+    const timer = setTimeout(() => {
+      this.layoutTimers.delete(deviceId);
+      if (this.clamp(deviceId)) this.notify();
+    }, 100);
+    timer.unref();
+    this.layoutTimers.set(deviceId, timer);
+  }
+
   updateLibrary(library: ControlLibrary): void {
     if (this.library === library) return;
     if (this.library?.activeBoardId !== library.activeBoardId) this.pages.clear();
     this.library = library;
-    for (const deviceId of this.pages.keys()) this.pages.set(deviceId, this.page(deviceId).index);
+    for (const deviceId of this.pages.keys()) {
+      if (!this.layoutTimers.has(deviceId)) this.clamp(deviceId);
+    }
     this.notify();
   }
   appear(key: VisibleSlotKey): void {
     this.keys.set(key.id, key);
+    this.settleLayout(key.deviceId);
     this.notify();
   }
   disappear(id: string): void {
-    if (this.keys.delete(id)) this.notify();
+    const key = this.keys.get(id);
+    if (!key) return;
+    this.keys.delete(id);
+    this.settleLayout(key.deviceId);
+    this.notify();
   }
   settings(id: string, settings: ActionSettings): void {
     const key = this.keys.get(id);
     if (!key) return;
     this.keys.set(id, { ...key, settings });
+    this.settleLayout(key.deviceId);
     this.notify();
   }
   page(deviceId: string) {
@@ -80,14 +107,18 @@ export class BoardSlots {
     this.pages.set(deviceId, next);
     this.notify();
   }
-  /** null is an empty slot; undefined is a missing board or invalid binding. */
-  sound(id: string, settings: ActionSettings): LibrarySound | null | undefined {
-    const board = slotBoard(this.library, settings);
-    if (!board) return undefined;
+  board(id: string) {
     const key = this.keys.get(id);
+    return key ? slotBoard(this.library, key.settings) : undefined;
+  }
+  /** null is an empty slot; undefined is a missing board or invalid binding. */
+  sound(id: string): LibrarySound | null | undefined {
+    const key = this.keys.get(id);
+    const board = this.board(id);
+    if (!key || !board) return undefined;
+    const settings = key.settings;
     let index: number;
     if (isAutoSlot(settings)) {
-      if (!key) return null;
       const auto = autoSlots(this.keys.values(), key.deviceId);
       const position = auto.findIndex((item) => item.id === id);
       if (position < 0) return null;

@@ -11,8 +11,8 @@ export class BoardSlot extends SoundAction {
     super(connection);
     slots.subscribe(() => this.refresh());
   }
-  protected override sound(settings: ActionSettings, action: KeyAction<ActionSettings>) {
-    return this.slots.sound(action.id, settings);
+  protected override sound(_settings: ActionSettings, action: KeyAction<ActionSettings>) {
+    return this.slots.sound(action.id);
   }
   override onWillAppear(ev: WillAppearEvent<ActionSettings>): void {
     if (!ev.action.isKey()) return;

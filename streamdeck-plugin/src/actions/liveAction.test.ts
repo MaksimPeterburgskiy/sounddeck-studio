@@ -67,6 +67,27 @@ function boundSoundKey(kind: "play" | "slot", title = "Horn") {
   return { connection, action, key, event };
 }
 
+async function slotActions(secondSettings: ActionSettings = {}) {
+  const connection = fakeConnection();
+  const library: ControlLibrary = { activeBoardId: "board", boards: [{ id: "board", name: "Main", color: "#1db7a6",
+    sounds: ["one", "two", "three"].map((id, index) => ({ id, title: id, color: ["#1db7a6", "#aa2200", "#0033aa"][index], hasImage: false })) },
+    { id: "pinned", name: "Pinned", color: "#1db7a6",
+      sounds: [{ id: "pinned-one", title: "Pinned", color: "#772266", hasImage: false }] }] };
+  Object.assign(connection.snapshot.library, library);
+  const slots = new BoardSlots();
+  slots.updateLibrary(library);
+  const action = new BoardSlot(connection as unknown as Connection, slots);
+  const first = { ...fakeKey(), id: "first", device: { id: "deck" }, manifestId: BOARD_SLOT };
+  const second = { ...fakeKey(), id: "second", device: { id: "deck" }, manifestId: BOARD_SLOT };
+  for (const [column, key] of [first, second].entries()) {
+    action.onWillAppear({ action: key, payload: { settings: column ? secondSettings : {}, coordinates: { row: 0, column } } } as never);
+  }
+  await flush();
+  return { connection, slots, action, first, second,
+    next: new NextPage(connection as unknown as Connection, slots),
+    previous: new PreviousPage(connection as unknown as Connection, slots) };
+}
+
 describe("live actions", () => {
   it("tracks title layout per visible key and state, including hidden titles and generated-title changes", async () => {
     class TestAction extends LiveAction {
@@ -344,56 +365,77 @@ describe("live actions", () => {
     expect(key.showAlert).not.toHaveBeenCalled();
   });
 
-  it("releases the original slot press after paging while its acknowledgement is pending, and leaves empty keys blank and inert", async () => {
-    const connection = fakeConnection();
-    const library: ControlLibrary = { activeBoardId: "board", boards: [{ id: "board", name: "Main", color: "#1db7a6",
-      sounds: ["one", "two", "three"].map((id) => ({ id, title: id, color: "#1db7a6", hasImage: false })) }] };
-    Object.assign(connection.snapshot.library, library);
-    const slots = new BoardSlots();
-    slots.updateLibrary(library);
-    const action = new BoardSlot(connection as unknown as Connection, slots);
-    const first = { ...fakeKey(), id: "first", device: { id: "deck" }, manifestId: BOARD_SLOT };
-    const second = { ...fakeKey(), id: "second", device: { id: "deck" }, manifestId: BOARD_SLOT };
-    for (const [column, key] of [first, second].entries()) {
-      action.onWillAppear({ action: key, payload: { settings: {}, coordinates: { row: 0, column } } } as never);
-    }
-    await flush();
+  it("releases the original slot press after paging while its acknowledgement is pending", async () => {
+    const { connection, action, first, second, next } = await slotActions();
     let acknowledge!: (result: { ok: boolean }) => void;
     connection.command.mockImplementationOnce(() => new Promise((resolve) => { acknowledge = resolve; }));
     const down = action.onKeyDown({ action: second, payload: { settings: {} } } as never);
     expect(connection.command).toHaveBeenLastCalledWith("sound.press", { soundId: "two", pressId: expect.any(String) });
     const pressId = (connection.command.mock.lastCall as unknown as [string, { pressId: string }])[1].pressId;
-    const next = new NextPage(connection as unknown as Connection, slots);
+    await next.onKeyDown({ action: first, payload: { settings: {} } } as never);
+    await action.onKeyUp({ action: second } as never);
+    expect(connection.command).toHaveBeenLastCalledWith("sound.release", { pressId });
+    acknowledge({ ok: true });
+    await down;
+  });
+
+  it("leaves empty slots blank and inert when connected or offline", async () => {
+    const { connection, action, first, second, next } = await slotActions();
     await next.onKeyDown({ action: first, payload: { settings: {} } } as never);
     await flush();
     expect(first.setTitle).toHaveBeenLastCalledWith("three");
     expect(second.setTitle).toHaveBeenLastCalledWith("");
-    const image = decodeURIComponent(second.setImage.mock.lastCall![0].split(",")[1]);
+    const blankImage = second.setImage.mock.lastCall![0];
+    const image = decodeURIComponent(blankImage.split(",")[1]);
     expect(image).toContain('data-dimmed="true"');
     expect(image).not.toMatch(/data-glyph|data-warning|data-icon/);
-    await action.onKeyUp({ action: second } as never);
-    expect(connection.command).toHaveBeenLastCalledWith("sound.release", { pressId });
-    acknowledge({ ok: true }); await down;
-    const commands = connection.command.mock.calls.length;
     await action.onKeyDown({ action: second, payload: { settings: {} } } as never);
-    expect(connection.command).toHaveBeenCalledTimes(commands);
+    expect(connection.command).not.toHaveBeenCalled();
     expect(second.showAlert).not.toHaveBeenCalled();
     connection.status = "offline";
     connection.statusLabel = "Offline";
     action.onDidReceiveSettings({ action: second, payload: { settings: {} } } as never);
     await flush();
     expect(second.setTitle).toHaveBeenLastCalledWith("");
+    expect(second.setImage.mock.lastCall![0]).toBe(blankImage);
     await action.onKeyDown({ action: second, payload: { settings: {} } } as never);
+    expect(connection.command).not.toHaveBeenCalled();
     expect(connection.handleDisconnectedPress).not.toHaveBeenCalled();
     expect(second.showAlert).not.toHaveBeenCalled();
-    connection.status = "connected";
-    const previous = new PreviousPage(connection as unknown as Connection, slots);
+  });
+
+  it("releases a held slot press on disappearance after returning to the previous page", async () => {
+    const { connection, action, first, next, previous } = await slotActions();
+    await next.onKeyDown({ action: first, payload: { settings: {} } } as never);
     await previous.onKeyDown({ action: first, payload: { settings: {} } } as never);
     await action.onKeyDown({ action: first, payload: { settings: {} } } as never);
-    const held = (connection.command.mock.lastCall as unknown as [string, { pressId: string }])[1].pressId;
+    expect(connection.command).toHaveBeenLastCalledWith("sound.press", { soundId: "one", pressId: expect.any(String) });
+    const pressId = (connection.command.mock.lastCall as unknown as [string, { pressId: string }])[1].pressId;
     action.onWillDisappear({ action: first } as never);
     await flush();
-    expect(connection.command).toHaveBeenLastCalledWith("sound.release", { pressId: held });
-    action.onWillDisappear({ action: second } as never);
+    expect(connection.command).toHaveBeenLastCalledWith("sound.release", { pressId });
+  });
+
+  it.each([
+    [{}, { slot: 3 }, "three", "three"],
+    [{ slot: 3 }, {}, "two", "two"],
+    [{}, { boardId: "pinned", slot: 1 }, "Pinned", "pinned-one"],
+    [{ boardId: "pinned", slot: 1 }, { slot: 1 }, "one", "one"],
+  ] as const)("renders only the new slot binding when inspector settings change from %j to %j", async (before, after, title, soundId) => {
+    const { connection, action, second } = await slotActions(before);
+    second.setImage.mockClear();
+    second.setTitle.mockClear();
+    action.onDidReceiveSettings({ action: second, payload: { settings: after } } as never);
+    await flush();
+    expect(second.setTitle.mock.calls).toEqual([[title]]);
+    expect(second.setImage).toHaveBeenCalledTimes(1);
+    const image = decodeURIComponent(second.setImage.mock.calls[0][0].split(",")[1]);
+    expect(image).toContain('data-glyph="initial"');
+    expect(image).toContain(`>${title[0].toUpperCase()}</text>`);
+    expect(image).not.toContain('data-dimmed="true"');
+    // Even an event with the previous settings must use the visible key's binding.
+    await action.onKeyDown({ action: second, payload: { settings: before } } as never);
+    expect(connection.command).toHaveBeenLastCalledWith("sound.press", { soundId, pressId: expect.any(String) });
+    await action.onKeyUp({ action: second } as never);
   });
 });
