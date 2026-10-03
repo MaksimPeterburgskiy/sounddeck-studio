@@ -46,6 +46,45 @@ function setup() {
 function event(action: unknown, settings: ActionSettings = {}, extra = {}) { return { action, payload: { settings, ...extra } } as never; }
 
 describe("volume keys", () => {
+  it.each([
+    { bus: "micVirtual", mode: "up", limit: 1, away: 0.8, delta: 0.05 },
+    { bus: "soundboardMonitor", mode: "down", limit: 0, away: 0.2, delta: -0.05 },
+  ] as const)("pauses repeats at the $mode limit and resumes when $bus moves away", async ({ bus, mode, limit, away, delta }) => {
+    vi.useFakeTimers();
+    const { connection, key, volume } = setup();
+    const level = connection.snapshot.volumes[bus];
+    level.value = away;
+    const down = event(key, { bus, mode });
+    await volume.onKeyDown(down);
+    await vi.advanceTimersByTimeAsync(400);
+    expect(connection.command).toHaveBeenCalledTimes(2);
+    level.value = limit;
+    connection.emit();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(connection.command).toHaveBeenCalledTimes(2);
+    level.value = away;
+    connection.emit();
+    await vi.advanceTimersByTimeAsync(125);
+    expect(connection.command).toHaveBeenCalledTimes(3);
+    expect(connection.command).toHaveBeenLastCalledWith("volume.adjust", { bus, delta });
+    volume.onKeyUp(down);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(connection.command).toHaveBeenCalledTimes(3);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(["up", "down"] as const)("keeps the initial %s press at a limit to unmute but suppresses repeats", async (mode) => {
+    vi.useFakeTimers();
+    const { connection, key, volume } = setup();
+    connection.snapshot.volumes.micVirtual = { value: mode === "up" ? 1 : 0, muted: true };
+    const down = event(key, { mode });
+    await volume.onKeyDown(down);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(connection.command).toHaveBeenCalledExactlyOnceWith("volume.adjust", { bus: "micVirtual", delta: mode === "up" ? 0.05 : -0.05 });
+    volume.onKeyUp(down);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("adjusts immediately, starts at 400 ms, repeats at 8 Hz, and stops on up", async () => {
     vi.useFakeTimers();
     const { connection, key, volume } = setup();
@@ -163,6 +202,23 @@ describe("volume keys", () => {
 });
 
 describe("volume dials", () => {
+  it("ignores held touch gestures while connected and offline, without queuing mute behind a rotation", async () => {
+    const { connection, dial, volumeDial } = setup();
+    let resolve!: (result: ControlResult) => void;
+    connection.command.mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
+    const rotation = volumeDial.onDialRotate(event(dial, {}, { ticks: 1 }));
+    await volumeDial.onTouchTap(event(dial, {}, { hold: true }));
+    resolve(success); await rotation;
+    expect(connection.command).toHaveBeenCalledTimes(1);
+    await volumeDial.onTouchTap(event(dial, {}, { hold: false }));
+    expect(connection.command).toHaveBeenLastCalledWith("volume.mute", { bus: "micVirtual" });
+    connection.status = "offline"; connection.session = null;
+    await volumeDial.onTouchTap(event(dial, {}, { hold: true }));
+    expect(connection.command).toHaveBeenCalledTimes(2);
+    expect(connection.handleDisconnectedPress).not.toHaveBeenCalled();
+    expect(dial.showAlert).not.toHaveBeenCalled();
+  });
+
   it("sends the first rotation immediately but discards pending input on disappearance", async () => {
     const { connection, dial, volumeDial } = setup();
     let resolve!: (result: ControlResult) => void;

@@ -29,8 +29,10 @@ export class Volume extends LiveAction {
     const delta = volumeStep(ev.payload.settings, 5) * (mode === "down" ? -1 : 1);
     const session = this.connection.session;
     const repeat: Repeat | undefined = session && !ev.payload.isInMultiAction ? { session, settings: ev.payload.settings } : undefined;
-    const adjust = async () => {
+    const adjust = async (repeating = false) => {
       if (repeat && (this.held.get(ev.action.id) !== repeat || this.connection.session !== session)) return;
+      const value = this.connection.snapshot?.volumes[bus]?.value;
+      if (repeating && value !== undefined && (delta > 0 ? value >= 1 : value <= 0)) return;
       try {
         const result = await this.connection.command("volume.adjust", { bus, delta });
         if (!result.ok && this.held.get(ev.action.id) === repeat) this.stopRepeat(ev.action.id);
@@ -44,9 +46,9 @@ export class Volume extends LiveAction {
       this.held.set(ev.action.id, repeat);
       // Arm before awaiting the first acknowledgement so an early up cancels it.
       repeat.timer = setTimeout(() => {
-        repeat.interval = setInterval(() => { void adjust(); }, 125);
+        repeat.interval = setInterval(() => { void adjust(true); }, 125);
         repeat.interval.unref?.();
-        void adjust();
+        void adjust(true);
       }, 400);
       repeat.timer.unref?.();
     }

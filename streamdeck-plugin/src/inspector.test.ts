@@ -179,3 +179,40 @@ describe("single-picker inspectors", () => {
     expect(ui.client.setSettings).not.toHaveBeenCalled();
   });
 });
+
+describe("volume inspectors", () => {
+  it.each(["volume", "volume-dial", "volume-mute"])("protects bus changes against stale echoes in %s", async (page) => {
+    const ui = inspector({ bus: "micVirtual", inspectorRevision: 4, title: "Custom" }, page); await flush();
+    expect(ui.client.setSettings).not.toHaveBeenCalled();
+    ui.elements.bus.value = "micMonitor";
+    ui.elements.bus.value = "soundboardMonitor";
+    await flush();
+    expect(ui.client.setSettings.mock.calls).toEqual([
+      [{ bus: "micMonitor", inspectorRevision: 5, title: "Custom" }],
+      [{ bus: "soundboardMonitor", inspectorRevision: 6, title: "Custom" }],
+    ]);
+    const latest = ui.client.setSettings.mock.calls[1][0];
+    ui.receive(latest);
+    ui.receive(ui.client.setSettings.mock.calls[0][0]);
+    expect(ui.elements.bus.value).toBe("soundboardMonitor");
+  });
+
+  it.each([{ page: "volume", step: "5" }, { page: "volume-dial", step: "2" }])("shows defaults and saves numeric steps atomically in $page", async ({ page, step }) => {
+    const ui = inspector({}, page); await flush();
+    expect(ui.elements.bus.value).toBe("micVirtual");
+    expect(ui.elements.step.value).toBe(step);
+    if (ui.elements.mode) expect(ui.elements.mode.value).toBe("up");
+    expect(ui.client.setSettings).not.toHaveBeenCalled();
+    ui.elements.bus.value = "micMonitor";
+    ui.elements.step.value = "7";
+    if (ui.elements.mode) ui.elements.mode.value = "down";
+    await flush();
+    const latest = ui.client.setSettings.mock.lastCall![0];
+    ui.receive(latest);
+    ui.receive({});
+    expect(ui.elements.bus.value).toBe("micMonitor");
+    expect(ui.elements.step.value).toBe("7");
+    if (ui.elements.mode) expect(ui.elements.mode.value).toBe("down");
+    expect(latest).toEqual({ bus: "micMonitor", step: 7, ...(ui.elements.mode && { mode: "down" }), inspectorRevision: ui.elements.mode ? 3 : 2 });
+  });
+});

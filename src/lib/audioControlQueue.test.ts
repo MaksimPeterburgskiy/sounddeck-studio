@@ -102,8 +102,9 @@ describe("external audio mutation FIFO", () => {
     cleanup();
   });
 
-  it("holds replies and later mutations until tracked device retries and overlapping configuration settle", async () => {
-    const app = setup({ micVirtualVolume: 0.4, micPassthrough: false });
+  it.each([false, true])("holds replies and later mutations until tracked device retries and overlapping configuration settle (unchanged: %s)", async (unchanged) => {
+    const app = setup({ micVirtualVolume: 0.4, micVirtualMuted: unchanged, micPassthrough: false });
+    const expectedWrites = unchanged ? 0 : 1;
     const refresh = deferred<void>();
     const retry = deferred<void>();
     const configured = deferred<void>();
@@ -115,7 +116,7 @@ describe("external audio mutation FIFO", () => {
     trackAudioConfiguration(configuration, configured.promise);
     app.waitForConfiguration.mockImplementation(() => waitForAudioConfiguration(() => configuration.current));
     const replied = vi.fn();
-    const first = app.queue.enqueue({ command: "volume.mute", args: { bus: "micVirtual" } }).then(replied);
+    const first = app.queue.enqueue({ command: "volume.mute", args: { bus: "micVirtual", muted: true } }).then(replied);
     const later = app.queue.enqueue({ command: "setting.toggle", args: { key: "micPassthrough" } });
     try {
       await vi.waitFor(() => expect(app.waitForConfiguration).toHaveBeenCalledOnce());
@@ -123,7 +124,8 @@ describe("external audio mutation FIFO", () => {
       refresh.resolve();
       await vi.waitFor(() => expect(retryDevices).toHaveBeenCalledOnce());
       expect(replied).not.toHaveBeenCalled();
-      expect(app.writeSettings).toHaveBeenCalledOnce();
+      expect(app.writeSettings).toHaveBeenCalledTimes(expectedWrites);
+      expect(app.persist).toHaveBeenCalledTimes(expectedWrites);
       // Another configuration arriving during the wait must also be observed.
       const beforeLatest = configuration.current;
       trackAudioConfiguration(configuration, latest.promise);
@@ -131,12 +133,13 @@ describe("external audio mutation FIFO", () => {
       await beforeLatest;
       await Promise.resolve();
       expect(replied).not.toHaveBeenCalled();
-      expect(app.writeSettings).toHaveBeenCalledOnce();
+      expect(app.writeSettings).toHaveBeenCalledTimes(expectedWrites);
+      expect(app.persist).toHaveBeenCalledTimes(expectedWrites);
       latest.resolve();
       await first;
       expect(replied).toHaveBeenCalledExactlyOnceWith({ ok: true, data: { bus: "micVirtual", value: 0.4, muted: true } });
       expect(await later).toEqual({ ok: true, data: { key: "micPassthrough", value: true } });
-      expect(app.writeSettings).toHaveBeenCalledTimes(2);
+      expect(app.writeSettings).toHaveBeenCalledTimes(expectedWrites + 1);
     } finally {
       refresh.resolve();
       retry.resolve();
@@ -144,6 +147,32 @@ describe("external audio mutation FIFO", () => {
       latest.resolve();
       await Promise.all([first, later]);
     }
+  });
+
+  it("acknowledges unchanged settings without writing, persisting, or reconfiguring", async () => {
+    const app = setup({ micVirtualVolume: 1, soundboardMonitorVolume: 0, soundboardMonitorMuted: true, micPassthrough: false });
+    const previous = app.getSettings();
+    expect(await app.queue.enqueue({ command: "volume.adjust", args: { bus: "micVirtual", delta: 0.05 } })).toEqual({ ok: true, data: { bus: "micVirtual", value: 1, muted: false } });
+    expect(await app.queue.enqueue({ command: "volume.set", args: { bus: "micVirtual", value: 1 } })).toEqual({ ok: true, data: { bus: "micVirtual", value: 1, muted: false } });
+    expect(await app.queue.enqueue({ command: "volume.mute", args: { bus: "soundboardMonitor", muted: true } })).toEqual({ ok: true, data: { bus: "soundboardMonitor", value: 0, muted: true } });
+    expect(await app.queue.enqueue({ command: "setting.set", args: { key: "micPassthrough", value: false } })).toEqual({ ok: true, data: { key: "micPassthrough", value: false } });
+    expect(app.getSettings()).toBe(previous);
+    expect(app.writeSettings).not.toHaveBeenCalled();
+    expect(app.persist).not.toHaveBeenCalled();
+    expect(app.waitForConfiguration).toHaveBeenCalledTimes(4);
+  });
+
+  it.each([{ value: 0, delta: -0.05 }, { value: 1, delta: 0.05 }])("still saves and configures an adjustment that unmutes at $value", async ({ value, delta }) => {
+    const app = setup({ micVirtualVolume: value, micVirtualMuted: true });
+    expect(await app.queue.enqueue({ command: "volume.adjust", args: { bus: "micVirtual", delta } })).toEqual({ ok: true, data: { bus: "micVirtual", value, muted: false } });
+    expect(app.writeSettings).toHaveBeenCalledOnce();
+    expect(app.persist).toHaveBeenCalledOnce();
+    expect(app.waitForConfiguration).toHaveBeenCalledOnce();
+    // The next clamped adjustment is now a true no-op.
+    await app.queue.enqueue({ command: "volume.adjust", args: { bus: "micVirtual", delta } });
+    expect(app.writeSettings).toHaveBeenCalledOnce();
+    expect(app.persist).toHaveBeenCalledOnce();
+    expect(app.waitForConfiguration).toHaveBeenCalledTimes(2);
   });
 
   it("applies one mutation at a time and waits for both persistence and mute configuration before replying", async () => {
@@ -195,13 +224,15 @@ describe("external audio mutation FIFO", () => {
     expect(app.getSettings().micVirtualMuted).toBe(true);
   });
 
-  it("skips a disconnected client's queued mutation without blocking later clients", async () => {
+  it.each([false, true])("skips a disconnected client's queued mutation without blocking later clients (unchanged: %s)", async (unchanged) => {
     const app = setup({ micVirtualVolume: 0.4, micPassthrough: false });
     const save = deferred<void>();
     app.persist.mockReturnValueOnce(save.promise);
     const first = app.queue.enqueue({ command: "volume.mute", args: { bus: "micVirtual", muted: true } });
     const cancellation = new AbortController();
-    const cancelled = app.queue.enqueue({ command: "volume.adjust", args: { bus: "micVirtual", delta: 0.2 } }, cancellation.signal);
+    const cancelled = app.queue.enqueue(unchanged
+      ? { command: "volume.mute", args: { bus: "micVirtual", muted: true } }
+      : { command: "volume.adjust", args: { bus: "micVirtual", delta: 0.2 } }, cancellation.signal);
     const later = app.queue.enqueue({ command: "setting.toggle", args: { key: "micPassthrough" } });
     await vi.waitFor(() => expect(app.persist).toHaveBeenCalledOnce());
     cancellation.abort();
@@ -215,11 +246,13 @@ describe("external audio mutation FIFO", () => {
     expect(app.getSettings().micVirtualMuted).toBe(true);
   });
 
-  it("rejects an already cancelled mutation before reading or writing settings", async () => {
-    const app = setup();
+  it.each([false, true])("rejects an already cancelled mutation before reading or writing settings (unchanged: %s)", async (unchanged) => {
+    const app = setup({ micPassthrough: false });
     const cancellation = new AbortController();
     cancellation.abort();
-    expect(await app.queue.enqueue({ command: "setting.toggle", args: { key: "micPassthrough" } }, cancellation.signal)).toEqual({ ok: false, code: "unavailable" });
+    expect(await app.queue.enqueue(unchanged
+      ? { command: "setting.set", args: { key: "micPassthrough", value: false } }
+      : { command: "setting.toggle", args: { key: "micPassthrough" } }, cancellation.signal)).toEqual({ ok: false, code: "unavailable" });
     expect(app.writeSettings).not.toHaveBeenCalled();
     expect(app.persist).not.toHaveBeenCalled();
     expect(app.waitForConfiguration).not.toHaveBeenCalled();
