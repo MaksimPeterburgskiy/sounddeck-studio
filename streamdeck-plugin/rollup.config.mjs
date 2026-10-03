@@ -4,18 +4,22 @@ import replace from "@rollup/plugin-replace";
 import typescript from "@rollup/plugin-typescript";
 import { readFileSync } from "node:fs";
 import { builtinModules } from "node:module";
+import { stampManifest } from "./scripts/version.mjs";
 
-const pkg = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8"));
+const app = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+const distribution = process.env.STREAMDECK_DISTRIBUTION ?? "github";
+if (!["github", "marketplace"].includes(distribution)) throw new Error("STREAMDECK_DISTRIBUTION must be github or marketplace.");
 const plugin = "com.sounddeck.studio.sdPlugin";
 const adaptedSdkModules = new Set();
 // Build-time only: the running plugin never reads its manifest.
 const manifestPath = new URL(`./${plugin}/manifest.json`, import.meta.url);
-const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-const [core, beta] = pkg.version.split("-beta.");
-const expectedVersion = `${core}.${beta ?? 99999}`;
-if (manifest.Version !== expectedVersion) {
-  throw new Error(`Manifest Version must be ${expectedVersion}; run pnpm run version:streamdeck.`);
+const committedManifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+// The committed version is a development placeholder, not a release invariant.
+if (typeof committedManifest.Version !== "string" || !/^\d+\.\d+\.\d+\.\d+$/.test(committedManifest.Version)) {
+  throw new Error("Committed manifest Version must have four numeric components (x.y.z.n).");
 }
+// Stamp the build metadata in memory so stable and beta builds stay tree-clean.
+const manifest = stampManifest(committedManifest, app.version);
 if (manifest.Nodejs.Debug !== undefined && !process.env.ROLLUP_WATCH) throw new Error("Committed manifest must not enable Node debugging.");
 
 export default {
@@ -23,7 +27,7 @@ export default {
   output: { file: `${plugin}/bin/plugin.js`, format: "es", sourcemap: !!process.env.ROLLUP_WATCH },
   external: (id) => id.startsWith("node:") || builtinModules.includes(id),
   plugins: [
-    replace({ preventAssignment: true, __PLUGIN_VERSION__: JSON.stringify(pkg.version) }),
+    replace({ preventAssignment: true, __PLUGIN_VERSION__: JSON.stringify(app.version), __PLUGIN_DISTRIBUTION__: JSON.stringify(distribution) }),
     {
       name: "sdk-v2-drm-safe-runtime",
       // SDK v2 otherwise reads manifest.json during registration and logs in

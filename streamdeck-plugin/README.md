@@ -132,11 +132,20 @@ settings or the inspector.
 
 The Rollup setup mirrors Elgato's CLI template. This package uses TypeScript 6
 because `@rollup/plugin-typescript` requires the JavaScript compiler API removed
-in TypeScript 7; the root app keeps its existing TypeScript version. Plugin and
-app package versions currently match; update both when versioning this plugin.
-Builds verify the numeric manifest version without changing it. After updating
-the plugin package version, run `pnpm run version:streamdeck` at the repository
-root to update the manifest deliberately.
+in TypeScript 7; the root app keeps its existing TypeScript version. Releases use
+only the root app package version. The committed manifest `Version` is a
+development placeholder; builds validate its four-component numeric format
+(`x.y.z.n`), without requiring it to match either package version. Builds embed
+the root app version in memory, and packing stamps a copy of the manifest under
+the ignored `dist/` staging directory. Stable versions map to `x.y.z.99999`, and
+betas to `x.y.z.n`; tracked files remain unchanged.
+
+Builds embed `__PLUGIN_DISTRIBUTION__`, defaulting to `"github"` for our packs.
+A Marketplace build must set `STREAMDECK_DISTRIBUTION=marketplace` when building
+or packing. The plugin reports this marker as optional `client.distribution` in
+its protocol-1 hello. App-managed updates require a connected `"github"` plugin;
+Marketplace clients and unknown provenance, including manifest-only detection,
+receive no update offer. No distribution marker is added to the manifest.
 
 SDK v2 reads the manifest during registration and normally logs to the plugin
 folder. Two build-time adaptations embed the manifest metadata and select a

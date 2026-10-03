@@ -580,15 +580,18 @@ function createExternalControlBridge({
         const hasToken = typeof message.token === "string" && message.token.length > 0;
         if (!fields(message, ["type", "protocol", "token", "client"])
           || !Number.isInteger(message.protocol) || (message.token !== undefined && (typeof message.token !== "string" || message.token.length > 256))
-          || !fields(message.client, ["name", "version"]) || !text(message.client.name, 128) || !text(message.client.version, 64)) {
-          if (hasToken) authFailure(address);
+          || !fields(message.client, ["name", "version", "distribution"]) || !text(message.client.name, 128) || !text(message.client.version, 64)
+          || (message.client.distribution !== undefined && !["github", "marketplace"].includes(message.client.distribution))) {
+          // Schema rejection is not a credential mismatch (for example, a newer
+          // client can send metadata that this server does not understand).
           return rejectSocket(ws, "invalid-message");
         }
         if (!authenticated(message.token)) {
           if (hasToken) authFailure(address);
           return rejectSocket(ws, "unauthorized");
         }
-        clients.set(ws, { name: message.client.name, version: message.client.version });
+        clients.set(ws, { name: message.client.name, version: message.client.version,
+          ...(message.client.distribution !== undefined ? { distribution: message.client.distribution } : {}) });
         send(ws, { type: "welcome", protocol: PROTOCOL_VERSION, app: { version: appVersion }, state: getSnapshot() });
         notify();
         return;

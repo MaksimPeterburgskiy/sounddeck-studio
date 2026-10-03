@@ -435,6 +435,24 @@ describe("external control authentication", () => {
     expect(await upgradeStatus({ Origin: "null" })).toBe(403);
   });
 
+  it.each([undefined, "github", "marketplace"])("accepts optional client distribution %s without changing protocol 1", async (distribution) => {
+    await create();
+    const connection = await client();
+    const metadata = { name: "SoundDeck Stream Deck plugin", version: "0.1.21", ...(distribution ? { distribution } : {}) };
+    connection.send(hello({ client: metadata }));
+    expect(await connection.next()).toMatchObject({ type: "welcome", protocol: 1 });
+    expect(bridge.getState().clients).toEqual([metadata]);
+  });
+
+  it.each([null, 1, {}, "", "other"])("rejects invalid client distribution %s", async (distribution) => {
+    await create();
+    const connection = await client();
+    connection.send(hello({ client: { name: "client", version: "1", distribution } }));
+    expect(await connection.next()).toMatchObject({ type: "error", code: "invalid-message" });
+    await connection.closed;
+    expect(bridge.getState().clients).toEqual([]);
+  });
+
   it.each(["wrong", undefined])("rejects a hello with token %s", async (token) => {
     await create();
     const connection = await client();
@@ -486,6 +504,29 @@ describe("external control authentication", () => {
     }
     expect((await request()).status).toBe(200);
     await session();
+  });
+
+  it("does not count invalid-message hellos with credentials toward the auth throttle", async () => {
+    await create();
+    // Stay one real credential mismatch below the throttle threshold.
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      expect((await request("/v1/state", { headers: { Authorization: "Bearer wrong" } })).status).toBe(401);
+    }
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      for (const token of [bridge.getState().token, "wrong"]) {
+        for (const invalid of [{ extra: true }, { client: { name: "client", version: "1", distribution: "other" } }]) {
+          const connection = await client();
+          connection.send(hello({ token, ...invalid }));
+          expect((await connection.next()).code).toBe("invalid-message");
+          await connection.closed;
+        }
+      }
+    }
+    expect((await request()).status).toBe(200);
+    await session();
+    // A fifth actual credential mismatch still triggers the existing throttle.
+    expect((await request("/v1/state", { headers: { Authorization: "Bearer wrong" } })).status).toBe(401);
+    expect((await request()).status).toBe(429);
   });
 
   it("rotates the token, disconnects authenticated clients, and rejects the previous token", async () => {

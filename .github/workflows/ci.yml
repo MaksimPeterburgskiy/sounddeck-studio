@@ -39,7 +39,7 @@ jobs:
       - name: Type-check, build, and validate Stream Deck plugin
         shell: bash
         run: |
-          pnpm run build:streamdeck
+          pnpm run pack:streamdeck
           pnpm --filter @sounddeck/streamdeck-plugin validate
           git diff --exit-code
           test -z "$(git ls-files --others --exclude-standard)"

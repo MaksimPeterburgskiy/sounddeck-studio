@@ -75,7 +75,7 @@ async function boot(storageError) {
     }
   }
   const app = Object.assign(new EventEmitter(), {
-    isPackaged: true, getPath: () => "/test/userData", getVersion: () => "1",
+    isPackaged: true, getPath: () => "/test/userData", getVersion: () => "0.1.22",
     requestSingleInstanceLock: () => true,
     whenReady: () => ({ then: (callback) => { startup = callback(); } })
   });
@@ -125,6 +125,17 @@ async function boot(storageError) {
 }
 
 describe("main-process external control lifecycle", () => {
+  it("accepts Stream Deck requests only from the trusted main renderer", async () => {
+    const app = await boot();
+    for (const channel of ["streamdeck:install", "streamdeck:status"]) {
+      expect(() => app.invoke(channel, { ...app.event, senderFrame: { url: app.event.senderFrame.url } })).toThrow("Untrusted IPC sender");
+    }
+    expect(await app.invoke("streamdeck:install")).toEqual({ ok: false, reason: "missing-file" });
+    expect(await app.invoke("streamdeck:status")).toMatchObject({ bundledVersion: "0.1.22.99999", updateAvailable: false });
+    await app.loaded();
+    await app.bridge.stop();
+  });
+
   it("waits for persisted settings before and during background startup", async () => {
     const app = await boot();
     const stored = deferred();

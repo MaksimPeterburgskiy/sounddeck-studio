@@ -20,6 +20,7 @@ const steps = [
   ["node", ["scripts/fetch-vbcable.mjs"]],
   ["node", ["scripts/make-installer-art.mjs"]],
   ["pnpm", ["run", "build"]],
+  ["pnpm", ["run", "pack:streamdeck"]],
   ["node", ["scripts/verify-vbcable.mjs"]],
   ["pnpm", ["exec", "electron-builder", "--win", "--publish", "never"]],
   ["node", ["scripts/verify-windows-package.mjs"]]

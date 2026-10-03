@@ -81,6 +81,26 @@ A new beta is published every night whenever `main` has changed, as a prerelease
 4. In Discord/OBS/your game, set the input device to `CABLE Output` on Windows or `BlackHole 2ch` on macOS.
 5. Keep **Monitor soundboard** pointed at your real headphones so you hear what you play.
 
+## Stream Deck & external control
+
+Control SoundDeck Studio from an Elgato Stream Deck or another app. External control is off by default: turn on **Settings -> External control -> Enable external control** to use it.
+
+Click **Install Stream Deck plugin** in Settings, then confirm in Stream Deck. You can also download the `.streamDeckPlugin` asset from the [releases page](https://github.com/MaksimPeterburgskiy/sounddeck-studio/releases) and open it directly. The plugin connects automatically to SoundDeck Studio on the same computer.
+
+Available actions:
+
+- Play sound (including hold-to-play) and Stop all
+- Switch to board and Cycle boards
+- Board slots with Next/Previous page
+- Toggle microphone, routing, or processing settings
+- Volume up/down/mute keys and volume dials for each audio bus
+
+For third-party tools and scripts, see the [External Control API](docs/control-api.md). Settings shows the port and token you need to connect.
+
+When a connected plugin reports that it came from our GitHub downloads and is older than the bundled plugin, Settings offers **Update plugin**. Marketplace installations and plugins with unknown provenance (including older plugins without the distribution marker or manifest-only detection) receive no app-managed update offers. Enable external control and connect the plugin so it can report its version and distribution. Updates open only when you click the button; dismissing a notice hides it for that bundled version. Stream Deck may ask you to confirm, or older versions may require removing the old plugin first.
+
+**Allow connections from other devices** opens access to your local network. Keep it off unless you need remote clients: the token and commands travel unencrypted. The Stream Deck plugin uses the local connection and does not need this toggle.
+
 ## Development
 
 Requirements:
