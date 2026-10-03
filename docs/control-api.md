@@ -76,7 +76,7 @@ Responses carry the same ID:
 {"type":"result","id":"c7","ok":false,"code":"not-found"}
 ```
 
-A successful `sound.play` or `sound.press` result confirms the sound's tap/retrigger action after the latest tracked audio route configuration, including device refresh and preferred-device retries, settles, not audio completion. If no output route is enabled for the sound, it returns `unavailable`. Disconnecting cancels that client’s plays that have not started; voices already started continue. Stops cancel earlier queued plays, while later plays remain queued. Other playback/board results acknowledge dispatch to the app. `sound.play` respects tap/retrigger behavior; `sound.press` additionally honors Hold trigger mode.
+A successful `sound.play` or `sound.press` result confirms the sound's tap/retrigger action after the latest tracked audio route configuration, including device refresh and preferred-device retries, settles, not audio completion. If no output route is enabled for the sound, it returns `unavailable`. Disconnecting cancels that client’s plays that have not started; tap voices already started continue, while held voices are released. Stops cancel earlier queued plays, while later plays remain queued. Other playback/board results acknowledge dispatch to the app. `sound.play` respects tap/retrigger behavior; `sound.press` additionally honors Hold trigger mode.
 
 Setting/volume mutations run in renderer receipt order, one at a time. Results include the values applied and saved by the renderer and wait for tracked audio configuration, including device refresh and preferred-device retries, to settle. Setting/volume commands, `sound.play`, and `sound.press` have a five-second receipt timeout: a late delivery returns `unavailable` without being applied. Once received, they have no completion timeout; renderer loss or reset fails pending requests. Disconnecting cancels that client’s queued mutations that have not been applied; an applied mutation finishes saving and configuring audio even if its client disconnects.
 
@@ -101,7 +101,7 @@ Commands that change app state return `busy` while a hotkey is being captured (e
 
 `sound.play` and `sound.press` resolve the sound ID first. If it is missing, an exact title match within the supplied board is used; the first matching sound in board order wins. This lets saved bindings survive a board re-import. If neither resolves, the result is `not-found`. `sound.stop` stops every voice for that ID; it does not use fallback lookup. Cycling wraps around in either direction.
 
-For a Hold sound, `sound.press` always starts a fresh voice, ignoring Retrigger while honoring Solo play. Its matching `sound.release` stops only that press's voice with the sound's fade-out; overlapping presses remain independent. A release received before decoding completes cancels the press and stops its voice as soon as it starts. Loops sustain while held. For a Tap sound, press behaves exactly like `sound.play`, and release has no playback effect. Unknown or already released press IDs succeed without doing anything.
+For a Hold sound, `sound.press` always starts a fresh voice, ignoring Retrigger while honoring Solo play. Its matching `sound.release` stops only that press's voice with the sound's fade-out; overlapping presses remain independent. A release received while queued, configuring routes, or decoding cancels the press before its voice starts. Loops sustain while held. For a Tap sound, press behaves exactly like `sound.play`, and release has no playback effect. Unknown or already released press IDs succeed without doing anything.
 
 WebSocket press IDs belong to their session: clients may use the same ID independently, but reusing an unreleased ID within a session returns `invalid-args`. Send release on the same connection; all its unreleased presses are released when it disconnects. Disabling or reconfiguring the listener, regenerating the token, and app shutdown also release outstanding presses.
 
@@ -149,14 +149,14 @@ Each playback entry represents a voice, so overlapping voices can repeat a sound
 
 ## HTTP
 
-Every endpoint requires `Authorization: Bearer <token>`. GET responses are the snapshot/library directly. POST responses are `{ok:true}`, `{ok:true,data}` for setting/volume changes, or `{ok:false,code}`. JSON bodies may be omitted for commands with no body arguments. Headers and bodies have a 10-second receive deadline; a fully received command has no socket inactivity timeout while playback preparation or an audio mutation is pending.
+Every endpoint requires `Authorization: Bearer <token>`. GET responses are the snapshot/library directly. POST responses are `{ok:true}`, `{ok:true,data}` for setting/volume changes and sound presses, or `{ok:false,code}`. A successful sound press returns `{ok:true,data:{pressId}}` with a server-generated ID. JSON bodies may be omitted for commands with no body arguments. Headers and bodies have a 10-second receive deadline; a fully received command has no socket inactivity timeout while playback preparation or an audio mutation is pending.
 
 | Method | Path | JSON body |
 | --- | --- | --- |
 | GET | `/v1/state` | — |
 | GET | `/v1/library` | — |
 | POST | `/v1/sounds/{id}/play` | Optional `{boardId,title}` fallback |
-| POST | `/v1/sounds/{id}/press` | Optional `{boardId,title}` fallback; returns `{pressId}` |
+| POST | `/v1/sounds/{id}/press` | Optional `{boardId,title}` fallback; returns `{ok:true,data:{pressId}}` |
 | POST | `/v1/presses/{pressId}/release` | `{}` |
 | POST | `/v1/sounds/{id}/stop` | `{}` |
 | POST | `/v1/stop-all` | `{}` |

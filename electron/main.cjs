@@ -6,7 +6,7 @@ const https = require("node:https");
 const crypto = require("node:crypto");
 const os = require("node:os");
 const { spawn } = require("node:child_process");
-const { createCorsairBridge, isCorsairSupportedPlatform, isGKeyAccelerator } = require("./corsair.cjs");
+const { createCorsairBridge, createCorsairPressTracker, isCorsairSupportedPlatform, isGKeyAccelerator } = require("./corsair.cjs");
 const { createExternalControlBridge, launcherPath } = require("./externalControl.cjs");
 const { createControlRenderer } = require("./controlRenderer.cjs");
 const { createLibrarySaveQueue } = require("./librarySaveQueue.cjs");
@@ -95,7 +95,6 @@ function handleTrustedIpc(channel, handler) {
 }
 
 const hotkeyPresses = new Map();
-const corsairPresses = new Map();
 
 function triggerHotkey(binding, pressToken) {
   if (!pressToken) {
@@ -114,36 +113,16 @@ function releaseHotkey(_binding, pressToken) {
   sendToMainWindow("hotkey-release", event);
 }
 
-function releaseCorsairPresses(keepBindings) {
-  for (const [key, pressToken] of corsairPresses) {
-    if (isSameHotkeyTarget(hotkeyPresses.get(pressToken), keepBindings?.get(key))) continue;
-    releaseHotkey(null, pressToken);
-    corsairPresses.delete(key);
-  }
-}
-
 const hotkeyEngine = createHotkeyEngine({ onTrigger: triggerHotkey, onRelease: releaseHotkey });
+const corsairPressTracker = createCorsairPressTracker({ onTrigger: triggerHotkey, onRelease: releaseHotkey, isSameTarget: isSameHotkeyTarget });
 
 const corsair = createCorsairBridge({
   onKey: (key, isPressed) => {
-    if (!isPressed) {
-      releaseHotkey(null, corsairPresses.get(key));
-      corsairPresses.delete(key);
-      return;
-    }
-    sendToMainWindow("corsair-gkey", key);
-    // While capturing, the pressed G-key is being recorded as a new bind;
-    // firing its existing binding here would play/stop/switch mid-capture.
-    if (hotkeyCaptureActive) return;
-    const binding = corsairBindings.get(key);
-    if (binding && !corsairPresses.has(key)) {
-      const pressToken = {};
-      corsairPresses.set(key, pressToken);
-      triggerHotkey(binding, pressToken);
-    }
+    if (isPressed) sendToMainWindow("corsair-gkey", key);
+    corsairPressTracker.onKey(key, isPressed);
   },
   onStateChange: (state) => {
-    if (state !== "connected") releaseCorsairPresses();
+    corsairPressTracker.onStateChange(state);
     sendToMainWindow("corsair-status", state);
   }
 });
@@ -154,6 +133,7 @@ const controlRenderer = createControlRenderer({ send: (message) => sendToMainWin
 function resetControlRenderer() {
   hotkeyCaptureActive = false;
   hotkeyEngine.setSuspended(false);
+  corsairPressTracker.setSuspended(false);
   controlRendererReady = false;
   controlRendererToken = null;
   controlRenderer.cancelPending();
@@ -187,7 +167,7 @@ const shutdownLifecycle = createShutdownLifecycle({
     hotkeyCaptureActive = false;
     resetControlRenderer();
     hotkeyEngine.stop();
-    releaseCorsairPresses();
+    corsairPressTracker.releaseAll();
     corsair.stop();
     void externalControl.stop();
     if (updateCheckTimer) {
@@ -937,7 +917,7 @@ function registerHotkeys(bindings) {
     }
     keyboardBindings.push(binding);
   }
-  releaseCorsairPresses(corsairBindings);
+  corsairPressTracker.register(corsairBindings);
   results.push(...hotkeyEngine.register(keyboardBindings));
   return results;
 }
@@ -1415,7 +1395,7 @@ handleTrustedIpc("hotkeys:register", async (_event, bindings) => registerHotkeys
 handleTrustedIpc("hotkeys:capture", (_event, active, token) => {
   if (!controlRendererToken || token !== controlRendererToken) return { ok: false };
   hotkeyCaptureActive = Boolean(active);
-  if (hotkeyCaptureActive) releaseCorsairPresses();
+  corsairPressTracker.setSuspended(hotkeyCaptureActive);
   hotkeyEngine.setSuspended(hotkeyCaptureActive);
   return { ok: true };
 });

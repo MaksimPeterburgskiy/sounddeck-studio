@@ -6,6 +6,7 @@ import { runInNewContext } from "node:vm";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import controlModule from "./externalControl.cjs";
+import corsairModule from "./corsair.cjs";
 import ffmpegArgs from "./ffmpegArgs.cjs";
 import mediaFiles from "./mediaFiles.cjs";
 import processTree from "./processTree.cjs";
@@ -90,7 +91,7 @@ async function boot(storageError) {
     ...helperModules,
     electron, "node:fs/promises": fileSystem,
     "./hotkeys.cjs": { createHotkeyEngine: () => ({ stop: () => {}, setSuspended: vi.fn() }) },
-    "./corsair.cjs": { createCorsairBridge: () => ({ start: () => {}, stop: () => {} }) },
+    "./corsair.cjs": { ...corsairModule, createCorsairBridge: () => ({ start: () => {}, stop: () => {} }) },
     "./externalControl.cjs": { ...controlModule, createExternalControlBridge: (options) => {
       onCommand = options.onCommand;
       bridge = controlModule.createExternalControlBridge({ ...options, fileSystem });
@@ -228,7 +229,7 @@ describe("main-process external control lifecycle", () => {
     const app = await boot();
     const command = { command: "board.cycle", args: { direction: 1 } };
     const audioCommand = { command: "volume.mute", args: { bus: "micVirtual" } };
-    for (const pending of [command, audioCommand, { command: "setting.toggle", args: { key: "micPassthrough" } }]) {
+    for (const pending of [command, audioCommand, { command: "sound.press", args: { soundId: "sound-a", pressId: "key" } }, { command: "setting.toggle", args: { key: "micPassthrough" } }]) {
       expect(app.onCommand(pending)).toEqual({ ok: false, code: "unavailable" });
     }
     expect(() => app.invoke("control:ready", { ...app.event, senderFrame: { url: app.event.senderFrame.url } })).toThrow("Untrusted IPC sender");
@@ -394,6 +395,7 @@ describe("main-process external control lifecycle", () => {
 
   it.each([
     [{ command: "sound.play", args: { soundId: "sound-a" } }, { ok: true }],
+    [{ command: "sound.press", args: { soundId: "sound-a", pressId: "held" } }, { ok: true }],
     [{ command: "setting.toggle", args: { key: "micPassthrough" } }, { ok: true, data: { key: "micPassthrough", value: true } }],
     [{ command: "volume.mute", args: { bus: "micVirtual" } }, { ok: true, data: { bus: "micVirtual", value: 0.6, muted: true } }]
   ])("isolates pending %j replies and readiness between documents", async (command, result) => {
@@ -426,12 +428,12 @@ describe("main-process external control lifecycle", () => {
     await app.bridge.stop();
   });
 
-  it.each([{ ok: true }, { ok: false, code: "unavailable" }, { ok: false, code: "internal-error" }])("waits for the renderer playback result %j", async (result) => {
+  it.each(["sound.play", "sound.press"].flatMap((command) => [{ ok: true }, { ok: false, code: "unavailable" }, { ok: false, code: "internal-error" }].map((result) => ({ command, result }))))("waits for the renderer $command result $result", async ({ command: name, result }) => {
     const app = await boot();
     await app.loaded();
     await app.invoke("control:getSettings");
     app.ready();
-    const command = { command: "sound.play", args: { soundId: "sound-a" } };
+    const command = { command: name, args: { soundId: "sound-a", ...(name === "sound.press" && { pressId: "key" }) } };
     const completed = vi.fn();
     const pending = app.onCommand(command).then(completed);
     const [channel, request] = app.window.webContents.send.mock.lastCall;
@@ -446,6 +448,19 @@ describe("main-process external control lifecycle", () => {
     await pending;
     expect(completed).toHaveBeenCalledExactlyOnceWith(result);
     expect(app.invoke("control:result", app.event, request.requestId, result)).toEqual({ ok: false });
+    await app.bridge.stop();
+  });
+
+  it("allows releases during hotkey capture while blocking new presses", async () => {
+    const app = await boot();
+    await app.loaded();
+    await app.invoke("control:getSettings");
+    app.ready();
+    app.invoke("hotkeys:capture", app.event, true);
+    expect(app.onCommand({ command: "sound.press", args: { soundId: "sound-a", pressId: "held" } })).toEqual({ ok: false, code: "busy" });
+    const release = { command: "sound.release", args: { pressId: "held" } };
+    expect(app.onCommand(release)).toEqual({ ok: true });
+    expect(app.window.webContents.send).toHaveBeenLastCalledWith("control-command", release);
     await app.bridge.stop();
   });
 

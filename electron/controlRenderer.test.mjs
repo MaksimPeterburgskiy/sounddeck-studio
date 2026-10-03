@@ -38,12 +38,12 @@ describe("renderer control acknowledgements", () => {
     expect(await playback).toEqual({ ok: false, code: "not-found" });
   });
 
-  it("times out receipt but keeps accepted commands pending through slow saves and routing", async () => {
+  it.each(["sound.play", "sound.press"])("times out receipt but keeps accepted %s pending through slow saves and routing", async (name) => {
     vi.useFakeTimers();
     const send = vi.fn();
     const bridge = createControlRenderer({ send });
     const completed = vi.fn();
-    const playback = bridge.dispatch({ command: "sound.play", args: { soundId: "sound-a" } }).then(completed);
+    const playback = bridge.dispatch({ command: name, args: { soundId: "sound-a", ...(name === "sound.press" && { pressId: "held" }) } }).then(completed);
     const setting = bridge.dispatch({ command: "setting.toggle", args: { key: "micPassthrough" } });
     const volumeCompleted = vi.fn();
     const volume = bridge.dispatch(command).then(volumeCompleted);
