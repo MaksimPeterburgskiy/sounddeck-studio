@@ -74,7 +74,7 @@ Responses carry the same ID:
 {"type":"result","id":"c7","ok":false,"code":"not-found"}
 ```
 
-A successful playback/board result acknowledges dispatch to the app, not audio completion. Commands respect the sound's existing tap/retrigger behavior. Trigger commands return `busy` while a hotkey is being captured and `unavailable` if the renderer is absent or still initializing, including during a reload; cached library/image queries still work.
+A successful `sound.play` result confirms the sound's tap/retrigger action after the latest audio route configuration settles, not audio completion. If no output route is enabled for the sound, it returns `unavailable`. Other playback/board results acknowledge dispatch to the app. Commands respect the sound's existing tap/retrigger behavior. Trigger commands return `busy` while a hotkey is being captured and `unavailable` if the renderer is absent or still initializing, including during a reload; cached library/image queries still work.
 
 | Command | Args | Result data |
 | --- | --- | --- |

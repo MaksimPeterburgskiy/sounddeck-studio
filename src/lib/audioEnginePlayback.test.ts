@@ -66,6 +66,33 @@ describe("AudioEngine output routing", () => {
     await engine.dispose();
   });
 
+  it("waits for virtual routing to be enabled after startup without dropping external plays", async () => {
+    const engine = new AudioEngine(playbackSettings, vi.fn());
+    await engine.configure(playbackSettings, "");
+    const sink = deferred<void>();
+    virtualContext().setSinkId.mockReturnValueOnce(sink.promise);
+    const configuration = engine.configure(dualRouteSettings, "cable-device");
+    const play = vi.fn(() => engine.play(makeSound({ outputTarget: "virtual", retriggerMode: "overlap" })));
+    const pending = [1, 2].map(() => waitForAudioConfiguration(() => configuration).then(play));
+    await waitForMockCalls(virtualContext().setSinkId, 1);
+    expect(play).not.toHaveBeenCalled();
+    expect(virtualContext().bufferSources).toHaveLength(0);
+    sink.resolve();
+    expect(await Promise.all(pending)).toEqual([true, true]);
+    expect(virtualContext().bufferSources).toHaveLength(2);
+    await engine.dispose();
+  });
+
+  it("reports playback failure if reconfiguration leaves no enabled route", async () => {
+    const engine = new AudioEngine(dualRouteSettings, vi.fn());
+    await engine.configure(dualRouteSettings, "cable-device");
+    const configuration = engine.configure({ ...playbackSettings, monitorToHeadphones: false }, "");
+    const started = await waitForAudioConfiguration(() => configuration).then(() => engine.play(makeSound({ outputTarget: "virtual" })));
+    expect(started).toBe(false);
+    expect(virtualContext().bufferSources).toHaveLength(0);
+    await engine.dispose();
+  });
+
   it("routes a monitor-target sound to the monitor context only", async () => {
     const engine = new AudioEngine(playbackSettings, vi.fn());
 

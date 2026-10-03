@@ -41,6 +41,7 @@ contextBridge.exposeInMainWorld("sounddeck", {
   setControlSettings: (patch) => ipcRenderer.invoke("control:setSettings", patch),
   regenerateControlToken: () => ipcRenderer.invoke("control:regenerateToken"),
   pushControlState: (state) => ipcRenderer.invoke("control:state", state),
+  completeControlPlayback: (requestId, result) => ipcRenderer.invoke("control:playbackResult", requestId, result),
   controlReady: () => ipcRenderer.invoke("control:ready"),
   onControlStatus: (callback) => {
     const listener = (_event, state) => callback(state);

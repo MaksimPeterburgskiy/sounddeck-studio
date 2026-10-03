@@ -13,6 +13,8 @@ export interface ControlLiveState {
   playback: ControlPlaybackVoice[];
 }
 
+export type ControlPlaybackResult = { ok: true } | { ok: false; code: "unavailable" | "not-found" | "internal-error" };
+
 export interface ControlLibrary {
   activeBoardId: string;
   boards: Array<{
@@ -99,5 +101,6 @@ export interface ControlStatus extends ControlSettings {
 }
 
 export type RendererControlCommand =
+  | { command: "sound.play"; requestId: string; args: ControlCommandArgs["sound.play"] }
   | { command: "sound.stop"; args: ControlCommandArgs["sound.stop"] }
   | { command: "board.cycle"; args: ControlCommandArgs["board.cycle"] };

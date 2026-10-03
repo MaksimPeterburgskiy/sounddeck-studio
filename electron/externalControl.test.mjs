@@ -5,7 +5,7 @@ import { mkdtemp, readFile, writeFile, chmod, stat, rm } from "node:fs/promises"
 import * as fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { WebSocket } from "ws";
+import { WebSocket, WebSocketServer } from "ws";
 import controlModule from "./externalControl.cjs";
 import { CONTROL_PROTOCOL_VERSION, CONTROL_DEFAULT_PORT } from "../src/lib/controlProtocol.ts";
 
@@ -467,6 +467,23 @@ describe("external control protocol and dispatch", () => {
     expect((await request("/v1/boards/missing/activate", { method: "POST" })).status).toBe(404);
   });
 
+  it("waits for playback results and reports unavailable routes over HTTP and WebSocket", async () => {
+    await create();
+    const connection = await session();
+    let finishPlayback;
+    const playback = new Promise((resolve) => { finishPlayback = resolve; });
+    onCommand.mockReturnValue(playback);
+    const received = vi.fn();
+    const httpResult = request("/v1/sounds/sound-new/play", { method: "POST" }).then(received);
+    connection.send({ type: "command", id: "route", command: "sound.play", args: { soundId: "sound-new" } });
+    await vi.waitFor(() => expect(onCommand).toHaveBeenCalledTimes(2));
+    expect(received).not.toHaveBeenCalled();
+    finishPlayback({ ok: false, code: "unavailable" });
+    await httpResult;
+    expect(received).toHaveBeenCalledExactlyOnceWith({ status: 503, body: { ok: false, code: "unavailable" } });
+    expect(await connection.next()).toEqual({ type: "result", id: "route", ok: false, code: "unavailable" });
+  });
+
   it("rejects unknown commands, paths, extra fields, wrong types and invalid direction without dispatch", async () => {
     await create();
     const connection = await session();
@@ -564,7 +581,7 @@ describe("external control protocol and dispatch", () => {
     expect(await connection.next()).toEqual({ type: "event", event: "board.changed", data: { activeBoardId: "board-b" } });
     expect(await connection.next()).toEqual({ type: "event", event: "playback.changed", data: playback });
     bridge.updateLiveState({ activeBoardId: "board-b", playback });
-    bridge.updateLibrary(library);
+    bridge.updateLibrary({ ...library, activeBoardId: "board-b" });
     connection.send({ type: "command", id: "no-duplicate", command: "library.get", args: {} });
     expect(await connection.next()).toMatchObject({ type: "result", id: "no-duplicate", data: { activeBoardId: "board-b" } });
     bridge.updateLibrary({ ...library, boards: [] });
@@ -573,5 +590,43 @@ describe("external control protocol and dispatch", () => {
     connection.ws.close();
     await connection.closed;
     await vi.waitFor(() => expect(onStateChange.mock.lastCall[0].clients).toEqual([]));
+  });
+
+  it.each(["add", "delete"])("publishes consistent library and board state when boards %s", async (change) => {
+    const snapshots = [];
+    await create({ createWebSocketServer: (options) => {
+      const server = new WebSocketServer(options);
+      server.on("connection", (ws) => {
+        const send = ws.send.bind(ws);
+        vi.spyOn(ws, "send").mockImplementation((message) => {
+          if (JSON.parse(message).type === "event") snapshots.push(bridge.getSnapshot());
+          send(message);
+        });
+      });
+      return server;
+    } });
+    const connection = await session();
+    const newBoard = { id: "board-c", name: "New", color: "#112233", sounds: [] };
+    const updated = change === "add"
+      ? { ...library, activeBoardId: "board-c", boards: [...library.boards, newBoard] }
+      : { ...library, activeBoardId: "board-b", boards: [library.boards[1]] };
+    bridge.updateLibrary(updated);
+    const libraryEvent = await connection.next();
+    expect(libraryEvent).toMatchObject({ event: "library.changed", data: { activeBoardId: updated.activeBoardId } });
+    expect(libraryEvent.data.boards.map((board) => board.id)).toEqual(updated.boards.map((board) => board.id));
+    expect(await connection.next()).toEqual({ type: "event", event: "board.changed", data: { activeBoardId: updated.activeBoardId } });
+    expect(snapshots).toHaveLength(2);
+    for (const snapshot of snapshots) {
+      expect(snapshot.activeBoardId).toBe(updated.activeBoardId);
+      expect(snapshot.library).toEqual(libraryEvent.data);
+    }
+    bridge.updateLiveState({ playback: [] });
+    bridge.updateLibrary(updated);
+    connection.send({ type: "command", id: "consistent", command: "library.get", args: {} });
+    expect(await connection.next()).toEqual({ type: "result", id: "consistent", ok: true, data: libraryEvent.data });
+    expect((await request()).body).toEqual(snapshots[0]);
+    const newcomer = await client();
+    newcomer.send(hello());
+    expect(await newcomer.next()).toMatchObject({ type: "welcome", state: snapshots[0] });
   });
 });
