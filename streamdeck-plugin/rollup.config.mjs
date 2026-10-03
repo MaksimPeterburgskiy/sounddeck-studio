@@ -28,7 +28,9 @@ export default {
       name: "sdk-v2-drm-safe-runtime",
       // SDK v2 otherwise reads manifest.json during registration and logs in
       // cwd()/logs. Embed metadata and redirect the existing rotating file target.
-      transform(source, id) {
+      transform(source, rawId) {
+        // Rollup reports Windows module ids with backslashes.
+        const id = rawId.replaceAll("\\", "/");
         if (id.endsWith("/@elgato/streamdeck/dist/plugin/manifest.js")) {
           adaptedSdkModules.add("manifest");
           return { code: `import { Version } from "./common/version.js";
