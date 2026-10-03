@@ -477,6 +477,13 @@ function createExternalControlBridge({
     return closeServer();
   }
 
+  function getSettings() {
+    return serial(async () => {
+      await initialize();
+      return getState();
+    });
+  }
+
   function setSettings(patch) {
     return serial(async () => {
       await initialize();
@@ -508,7 +515,7 @@ function createExternalControlBridge({
     });
   }
 
-  return { start, stop, getState, setSettings, regenerateToken, updateLibrary, updateLiveState, getSnapshot };
+  return { start, stop, getState, getSettings, setSettings, regenerateToken, updateLibrary, updateLiveState, getSnapshot };
 }
 
 module.exports = { createExternalControlBridge, launcherPath, PROTOCOL_VERSION, DEFAULT_PORT };

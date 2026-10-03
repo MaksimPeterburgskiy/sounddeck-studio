@@ -45,6 +45,7 @@ import {
 } from "lucide-react";
 import { AudioEngine } from "./lib/audioEngine";
 import { CONTROL_DEFAULT_PORT } from "./lib/controlProtocol";
+import { waitForAudioConfiguration } from "./lib/controlReadiness";
 import type { ControlPlaybackVoice, ControlSettingsPatch, ControlStatus } from "./lib/controlProtocol";
 import type { AudioDeviceStatus, MicrophoneProcessingStatus } from "./lib/audioEngine";
 import { findVirtualAudioCandidates, getDefaultDeviceLabel, isSelectableMediaDevice, makeMicrophoneConstraints, normalizeMonitorDeviceId, normalizeSelectableDeviceId } from "./lib/devices";
@@ -125,6 +126,7 @@ function App() {
   const [startupUpdateStatus, setStartupUpdateStatus] = useState<StartupUpdateStatus>("idle");
   const startupSettingsRequestTokenRef = useRef(0);
   const engineRef = useRef<AudioEngine | null>(null);
+  const audioConfigurationRef = useRef<Promise<void> | null>(null);
   const deviceStatusRef = useRef<AudioDeviceStatus>(defaultAudioDeviceStatus);
   const previousMicrophoneDeviceStatusRef = useRef<AudioDeviceStatus["microphone"] | null>(null);
   const previousMonitorDeviceStatusRef = useRef<AudioDeviceStatus["monitor"] | null>(null);
@@ -313,7 +315,7 @@ function App() {
         setDeviceStatus(status);
       }
     );
-    void engineRef.current.configure(engineSettings, library.settings.virtualOutputDeviceId);
+    audioConfigurationRef.current = engineRef.current.configure(engineSettings, library.settings.virtualOutputDeviceId);
   }, [library?.settings]);
 
   useEffect(() => {
@@ -583,10 +585,15 @@ function App() {
     }
   }), []);
 
-  // Both command subscriptions and the audio engine are installed before this
-  // effect runs with the initialized library.
+  // Command subscriptions are installed, but initial audio routing may still
+  // be pending when the library first becomes available.
   useEffect(() => {
-    if (hasLibrary) void window.sounddeck.controlReady().catch(() => undefined);
+    if (!hasLibrary) return;
+    let cancelled = false;
+    void waitForAudioConfiguration(() => audioConfigurationRef.current).then(() => {
+      if (!cancelled) return window.sounddeck.controlReady();
+    }).catch(() => undefined);
+    return () => { cancelled = true; };
   }, [hasLibrary]);
 
   function cycleBoard(direction: 1 | -1 = 1) {

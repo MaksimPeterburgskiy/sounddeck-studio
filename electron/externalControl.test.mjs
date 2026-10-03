@@ -543,6 +543,18 @@ describe("external control protocol and dispatch", () => {
     expect(await connection.next()).toMatchObject({ id: "recovered", ok: true });
   });
 
+  it("publishes cleared playback to existing clients, HTTP state and new sessions", async () => {
+    await create();
+    bridge.updateLiveState({ activeBoardId: "board-b", playback: [{ soundId: "sound-new", startedAt: 1, duration: 2, loop: true }] });
+    const connection = await session();
+    bridge.updateLiveState({ activeBoardId: bridge.getSnapshot().activeBoardId, playback: [] });
+    expect(await connection.next()).toEqual({ type: "event", event: "playback.changed", data: [] });
+    expect((await request()).body).toMatchObject({ activeBoardId: "board-b", playback: [] });
+    const newcomer = await client();
+    newcomer.send(hello());
+    expect(await newcomer.next()).toMatchObject({ type: "welcome", state: { activeBoardId: "board-b", playback: [] } });
+  });
+
   it("pushes library, active board and per-voice playback changes with no duplicate events", async () => {
     const onStateChange = vi.fn();
     await create({ onStateChange });

@@ -10,6 +10,12 @@ import controlModule from "./externalControl.cjs";
 const mainFile = fileURLToPath(new URL("./main.cjs", import.meta.url));
 const require = createRequire(mainFile);
 
+function deferred() {
+  let resolve;
+  const promise = new Promise((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
 async function boot(storageError) {
   const handlers = new Map();
   let window;
@@ -17,15 +23,20 @@ async function boot(storageError) {
   let bridge;
   let startup;
   let finishLoading;
+  const files = new Map();
   const fileSystem = {
-    readFile: async (file) => {
+    readFile: vi.fn(async (file) => {
       if (file.endsWith("app-settings.json")) return "{}";
       if (storageError) throw storageError;
+      if (files.has(file)) return files.get(file);
       throw Object.assign(new Error("Not found"), { code: "ENOENT" });
-    },
-    mkdir: async () => { if (storageError) throw storageError; },
-    access: async () => { throw storageError || new Error("Not found"); },
-    writeFile: async () => {}, chmod: async () => {}, rename: async () => {}, unlink: async () => {}
+    }),
+    mkdir: vi.fn(async () => { if (storageError) throw storageError; }),
+    access: vi.fn(async (file) => { if (!files.has(file)) throw storageError || new Error("Not found"); }),
+    writeFile: vi.fn(async (file, data) => { files.set(file, data); }),
+    chmod: async () => {},
+    rename: async (from, to) => { files.set(to, files.get(from)); files.delete(from); },
+    unlink: async (file) => { files.delete(file); }
   };
   class Window extends EventEmitter {
     constructor() {
@@ -68,17 +79,76 @@ async function boot(storageError) {
   });
   await vi.waitFor(() => expect(finishLoading).toBeTypeOf("function"));
   const event = { sender: window.webContents, senderFrame: window.webContents.mainFrame };
-  return { window, bridge, onCommand, event, invoke: (name, sender = event) => handlers.get(name)(sender),
+  return { window, bridge, onCommand, event, fileSystem, invoke: (name, sender = event) => handlers.get(name)(sender),
     loaded: async () => { finishLoading(); await startup; } };
 }
 
 describe("main-process external control lifecycle", () => {
+  it("waits for persisted settings before and during background startup", async () => {
+    const app = await boot();
+    const stored = deferred();
+    const readFile = app.fileSystem.readFile.getMockImplementation();
+    app.fileSystem.readFile.mockImplementation((file) => file.endsWith("external-control.json") ? stored.promise : readFile(file));
+    const received = vi.fn();
+    const early = app.invoke("control:getSettings").then(received);
+    await vi.waitFor(() => expect(app.fileSystem.readFile).toHaveBeenCalledWith("/test/userData/external-control.json", "utf8"));
+    await app.loaded();
+    const duringStartup = app.invoke("control:getSettings");
+    expect(received).not.toHaveBeenCalled();
+    const saved = { enabled: false, port: 43123, allowLan: true, token: "a".repeat(43) };
+    stored.resolve(JSON.stringify(saved));
+    await early;
+    expect(received).toHaveBeenCalledWith(expect.objectContaining(saved));
+    expect(await duringStartup).toMatchObject(saved);
+    expect(app.fileSystem.readFile.mock.calls.filter(([file]) => file.endsWith("external-control.json"))).toHaveLength(1);
+    await app.bridge.stop();
+  });
+
+  it("shares first-run library creation with concurrent renderer loads until the write finishes", async () => {
+    const app = await boot();
+    const written = deferred();
+    const writeFile = app.fileSystem.writeFile.getMockImplementation();
+    app.fileSystem.writeFile.mockImplementation(async (file, data) => {
+      if (file.endsWith("library.json")) {
+        await writeFile(file, "{");
+        await written.promise;
+      }
+      await writeFile(file, data);
+    });
+    await app.loaded();
+    await vi.waitFor(() => expect(app.fileSystem.writeFile.mock.calls.some(([file]) => file.endsWith("library.json"))).toBe(true));
+    const first = app.invoke("library:load");
+    const second = app.invoke("library:load");
+    await Promise.resolve();
+    expect(app.fileSystem.access.mock.calls.filter(([file]) => file.endsWith("library.json"))).toHaveLength(1);
+    expect(app.fileSystem.readFile.mock.calls.filter(([file]) => file.endsWith("library.json"))).toHaveLength(0);
+    written.resolve();
+    const libraries = await Promise.all([first, second]);
+    expect(libraries[0]).toMatchObject({ activeBoardId: "board-default", boards: [{ id: "board-default" }] });
+    expect(libraries[1]).toEqual(libraries[0]);
+    expect(app.fileSystem.writeFile.mock.calls.filter(([file]) => file.endsWith("library.json"))).toHaveLength(1);
+    await app.invoke("control:getSettings");
+    expect(app.bridge.getSnapshot().activeBoardId).toBe("board-default");
+    await app.bridge.stop();
+  });
+
+  it("allows library initialization to retry after a storage failure", async () => {
+    const app = await boot();
+    app.fileSystem.mkdir.mockRejectedValueOnce(Object.assign(new Error("Storage failure"), { code: "ENOSPC" }));
+    await expect(app.invoke("library:load")).rejects.toMatchObject({ code: "ENOSPC" });
+    expect(await app.invoke("library:load")).toMatchObject({ activeBoardId: "board-default" });
+    await app.loaded();
+    await app.invoke("control:getSettings");
+    await app.bridge.stop();
+  });
+
   it("requires trusted renderer readiness and clears it on reload, crash and destruction", async () => {
     const app = await boot();
     const command = { command: "board.cycle", args: { direction: 1 } };
     expect(app.onCommand(command)).toEqual({ ok: false, code: "unavailable" });
     expect(() => app.invoke("control:ready", { ...app.event, senderFrame: { url: app.event.senderFrame.url } })).toThrow("Untrusted IPC sender");
     await app.loaded();
+    await app.invoke("control:getSettings");
     expect(app.onCommand(command).code).toBe("unavailable");
     app.invoke("control:ready");
     for (const direction of [1, -1]) {
@@ -90,8 +160,13 @@ describe("main-process external control lifecycle", () => {
     app.window.webContents.emit("did-start-navigation", { isMainFrame: true, isSameDocument: true });
     expect(app.onCommand(command)).toEqual({ ok: true });
     for (const name of ["did-start-navigation", "render-process-gone", "destroyed"]) {
+      app.bridge.updateLiveState({ activeBoardId: "board-default", playback: [{ soundId: "sound-a", startedAt: 1, duration: 2, loop: true }] });
+      const updateLiveState = vi.spyOn(app.bridge, "updateLiveState");
       app.window.webContents.emit(name, { isMainFrame: true, isSameDocument: false });
       expect(app.onCommand(command).code).toBe("unavailable");
+      expect(updateLiveState).toHaveBeenLastCalledWith({ activeBoardId: "board-default", playback: [] });
+      expect(app.bridge.getSnapshot()).toMatchObject({ activeBoardId: "board-default", playback: [] });
+      updateLiveState.mockRestore();
       app.invoke("control:ready");
     }
     app.window.emit("closed");
@@ -104,7 +179,7 @@ describe("main-process external control lifecycle", () => {
     expect(app.window).toBeDefined();
     await app.loaded();
     await vi.waitFor(() => expect(app.bridge.getState()).toMatchObject({ listening: false, error: { code } }));
-    expect(app.invoke("control:getSettings").error.code).toBe(code);
+    expect((await app.invoke("control:getSettings")).error.code).toBe(code);
     await app.bridge.stop();
   });
 });
