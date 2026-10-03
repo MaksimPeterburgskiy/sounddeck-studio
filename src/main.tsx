@@ -46,6 +46,7 @@ import {
 import { AudioEngine } from "./lib/audioEngine";
 import { CONTROL_DEFAULT_PORT } from "./lib/controlProtocol";
 import { waitForAudioConfiguration } from "./lib/controlReadiness";
+import { createSoundPlayQueue } from "./lib/soundPlayQueue";
 import type { ControlPlaybackResult, ControlPlaybackVoice, ControlSettingsPatch, ControlStatus } from "./lib/controlProtocol";
 import type { AudioDeviceStatus, MicrophoneProcessingStatus } from "./lib/audioEngine";
 import { findVirtualAudioCandidates, getDefaultDeviceLabel, isSelectableMediaDevice, makeMicrophoneConstraints, normalizeMonitorDeviceId, normalizeSelectableDeviceId } from "./lib/devices";
@@ -127,6 +128,7 @@ function App() {
   const startupSettingsRequestTokenRef = useRef(0);
   const engineRef = useRef<AudioEngine | null>(null);
   const audioConfigurationRef = useRef<Promise<void> | null>(null);
+  const queueSoundPlay = useMemo(() => createSoundPlayQueue(), []);
   const deviceStatusRef = useRef<AudioDeviceStatus>(defaultAudioDeviceStatus);
   const previousMicrophoneDeviceStatusRef = useRef<AudioDeviceStatus["microphone"] | null>(null);
   const previousMonitorDeviceStatusRef = useRef<AudioDeviceStatus["monitor"] | null>(null);
@@ -530,7 +532,7 @@ function App() {
     void registerHotkeys(library);
   }, [library, draggingSoundId, registerHotkeys, corsairConnected]);
 
-  const triggerSound = useCallback(async (sound: SoundSlot, external = false): Promise<ControlPlaybackResult> => {
+  const triggerSound = useCallback((sound: SoundSlot, external = false): Promise<ControlPlaybackResult> => queueSoundPlay(sound.id, async () => {
     try {
       if (external) await waitForAudioConfiguration(() => audioConfigurationRef.current);
       if (sound.retriggerMode === "stop" && engineRef.current?.isPlaying(sound.id)) {
@@ -551,7 +553,7 @@ function App() {
       console.error(error);
       return { ok: false, code: "internal-error" };
     }
-  }, [activeBoard?.id]);
+  }), [activeBoard?.id, queueSoundPlay]);
 
   useEffect(() => {
     return window.sounddeck.onHotkeyTrigger((binding) => {

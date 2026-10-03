@@ -1,5 +1,11 @@
 const { contextBridge, ipcRenderer, webUtils } = require("electron");
 
+// Each preload belongs to one document. Retain its token so a late readiness
+// promise from an outgoing document cannot make the next document ready.
+const controlReadyToken = new Promise((resolve) => {
+  ipcRenderer.once("control-ready-token", (_event, token) => resolve(token));
+});
+
 contextBridge.exposeInMainWorld("sounddeck", {
   loadLibrary: () => ipcRenderer.invoke("library:load"),
   saveLibrary: (library) => ipcRenderer.invoke("library:save", library),
@@ -42,7 +48,7 @@ contextBridge.exposeInMainWorld("sounddeck", {
   regenerateControlToken: () => ipcRenderer.invoke("control:regenerateToken"),
   pushControlState: (state) => ipcRenderer.invoke("control:state", state),
   completeControlPlayback: (requestId, result) => ipcRenderer.invoke("control:playbackResult", requestId, result),
-  controlReady: () => ipcRenderer.invoke("control:ready"),
+  controlReady: () => controlReadyToken.then((token) => ipcRenderer.invoke("control:ready", token)),
   onControlStatus: (callback) => {
     const listener = (_event, state) => callback(state);
     ipcRenderer.on("control-status", listener);

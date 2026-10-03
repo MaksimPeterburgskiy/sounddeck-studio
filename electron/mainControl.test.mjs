@@ -48,7 +48,10 @@ async function boot(storageError) {
       });
     }
     isDestroyed() { return false; }
-    loadFile() { return new Promise((resolve) => { finishLoading = resolve; }); }
+    loadFile() {
+      this.webContents.emit("did-start-navigation", { isMainFrame: true, isSameDocument: false });
+      return new Promise((resolve) => { finishLoading = resolve; });
+    }
   }
   const app = Object.assign(new EventEmitter(), {
     isPackaged: true, getPath: () => "/test/userData", getVersion: () => "1",
@@ -80,7 +83,13 @@ async function boot(storageError) {
   await vi.waitFor(() => expect(finishLoading).toBeTypeOf("function"));
   const event = { sender: window.webContents, senderFrame: window.webContents.mainFrame };
   return { window, bridge, onCommand, event, fileSystem, invoke: (name, sender = event, ...args) => handlers.get(name)(sender, ...args),
-    loaded: async () => { finishLoading(); await startup; } };
+    ready: () => handlers.get("control:ready")(event, window.webContents.send.mock.calls.findLast(([channel]) => channel === "control-ready-token")?.[1]),
+    loaded: async () => {
+      window.webContents.emit("did-navigate");
+      window.webContents.emit("did-finish-load");
+      finishLoading();
+      await startup;
+    } };
 }
 
 describe("main-process external control lifecycle", () => {
@@ -150,7 +159,7 @@ describe("main-process external control lifecycle", () => {
     await app.loaded();
     await app.invoke("control:getSettings");
     expect(app.onCommand(command).code).toBe("unavailable");
-    app.invoke("control:ready");
+    app.ready();
     for (const direction of [1, -1]) {
       const cycle = { command: "board.cycle", args: { direction } };
       expect(app.onCommand(cycle)).toEqual({ ok: true });
@@ -167,10 +176,38 @@ describe("main-process external control lifecycle", () => {
       expect(updateLiveState).toHaveBeenLastCalledWith({ activeBoardId: "board-default", playback: [] });
       expect(app.bridge.getSnapshot()).toMatchObject({ activeBoardId: "board-default", playback: [] });
       updateLiveState.mockRestore();
-      app.invoke("control:ready");
+      app.window.webContents.emit("did-navigate");
+      app.window.webContents.emit("did-finish-load");
+      app.ready();
     }
     app.window.emit("closed");
     expect(app.onCommand(command).code).toBe("unavailable");
+    await app.bridge.stop();
+  });
+
+  it("rejects outgoing document readiness during navigation and after the next document loads", async () => {
+    const app = await boot();
+    const command = { command: "board.cycle", args: { direction: 1 } };
+    expect(app.invoke("control:ready")).toEqual({ ok: false });
+    await app.loaded();
+    await app.invoke("control:getSettings");
+    expect(app.ready()).toEqual({ ok: true });
+    const previousToken = app.window.webContents.send.mock.calls.findLast(([channel]) => channel === "control-ready-token")[1];
+    const readyFromOutgoingDocument = () => app.invoke("control:ready", app.event, previousToken);
+    app.window.webContents.emit("did-start-navigation", { isMainFrame: true, isSameDocument: false });
+    expect(readyFromOutgoingDocument()).toEqual({ ok: false });
+    expect(app.onCommand(command).code).toBe("unavailable");
+    app.window.webContents.send.mockClear();
+    // An outgoing document's late load event must not deliver a new token.
+    app.window.webContents.emit("did-finish-load");
+    expect(app.window.webContents.send).not.toHaveBeenCalled();
+    app.window.webContents.emit("did-navigate");
+    expect(readyFromOutgoingDocument()).toEqual({ ok: false });
+    app.window.webContents.emit("did-finish-load");
+    expect(readyFromOutgoingDocument()).toEqual({ ok: false });
+    expect(app.onCommand(command).code).toBe("unavailable");
+    expect(app.ready()).toEqual({ ok: true });
+    expect(app.onCommand(command)).toEqual({ ok: true });
     await app.bridge.stop();
   });
 
@@ -178,7 +215,7 @@ describe("main-process external control lifecycle", () => {
     const app = await boot();
     await app.loaded();
     await app.invoke("control:getSettings");
-    app.invoke("control:ready");
+    app.ready();
     const command = { command: "sound.play", args: { soundId: "sound-a" } };
     const completed = vi.fn();
     const pending = app.onCommand(command).then(completed);
@@ -201,7 +238,7 @@ describe("main-process external control lifecycle", () => {
     const app = await boot();
     await app.loaded();
     await app.invoke("control:getSettings");
-    app.invoke("control:ready");
+    app.ready();
     const pending = app.onCommand({ command: "sound.play", args: { soundId: "sound-a" } });
     const requestId = app.window.webContents.send.mock.lastCall[1].requestId;
     const target = name === "closed" ? app.window : app.window.webContents;

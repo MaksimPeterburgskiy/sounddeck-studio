@@ -61,6 +61,7 @@ if (!app.requestSingleInstanceLock()) {
 
 let mainWindow;
 let controlRendererReady = false;
+let controlRendererToken = null;
 const pendingControlPlayback = new Map();
 let tray;
 let isQuitting = false;
@@ -817,13 +818,21 @@ async function createWindow() {
   });
   mainWindow = window;
   controlRendererReady = false;
+  controlRendererToken = null;
   const clearControlRendererState = () => {
     controlRendererReady = false;
+    controlRendererToken = null;
     clearPendingControlPlayback();
     externalControl.updateLiveState({ activeBoardId: externalControl.getSnapshot().activeBoardId, playback: [] });
   };
   window.webContents.on("did-start-navigation", (details) => {
     if (details.isMainFrame && !details.isSameDocument) clearControlRendererState();
+  });
+  window.webContents.on("did-navigate", () => {
+    controlRendererToken = crypto.randomUUID();
+  });
+  window.webContents.on("did-finish-load", () => {
+    if (controlRendererToken) window.webContents.send("control-ready-token", controlRendererToken);
   });
   window.webContents.on("render-process-gone", clearControlRendererState);
   window.webContents.on("destroyed", clearControlRendererState);
@@ -1359,7 +1368,8 @@ handleTrustedIpc("corsair:status", async () => corsair.getState());
 handleTrustedIpc("control:getSettings", () => externalControl.getSettings());
 handleTrustedIpc("control:setSettings", (_event, patch) => externalControl.setSettings(patch));
 handleTrustedIpc("control:regenerateToken", () => externalControl.regenerateToken());
-handleTrustedIpc("control:ready", () => {
+handleTrustedIpc("control:ready", (_event, token) => {
+  if (!controlRendererToken || token !== controlRendererToken) return { ok: false };
   controlRendererReady = true;
   return { ok: true };
 });
