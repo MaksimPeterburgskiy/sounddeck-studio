@@ -83,6 +83,7 @@ async function boot(storageError) {
     app, BrowserWindow: Window, ipcMain: { handle: (name, handler) => handlers.set(name, handler) },
     Menu: { setApplicationMenu: () => {}, buildFromTemplate: () => [] },
     Tray: class extends EventEmitter { setToolTip() {} setContextMenu() {} destroy() {} },
+    shell: { openPath: vi.fn(async () => "") },
     nativeImage: { createFromPath: () => icon }
   };
   const overrides = {
@@ -158,16 +159,57 @@ describe("main-process external control lifecycle", () => {
     await vi.waitFor(() => expect(app.fileSystem.writeFile.mock.calls.some(([file]) => file.endsWith("library.json"))).toBe(true));
     const first = app.invoke("library:load");
     const second = app.invoke("library:load");
+    const reveal = app.invoke("library:reveal");
     await Promise.resolve();
     expect(app.fileSystem.access.mock.calls.filter(([file]) => file.endsWith("library.json"))).toHaveLength(1);
     expect(app.fileSystem.readFile.mock.calls.filter(([file]) => file.endsWith("library.json"))).toHaveLength(0);
     written.resolve();
     const libraries = await Promise.all([first, second]);
+    await reveal;
     expect(libraries[0]).toMatchObject({ activeBoardId: "board-default", boards: [{ id: "board-default" }] });
     expect(libraries[1]).toEqual(libraries[0]);
     expect(app.fileSystem.writeFile.mock.calls.filter(([file]) => file.endsWith("library.json"))).toHaveLength(1);
     await app.invoke("control:getSettings");
     expect(app.bridge.getSnapshot().activeBoardId).toBe("board-default");
+    await app.bridge.stop();
+  });
+
+  it("serializes startup and renderer loads behind coalesced saves without reading a partial write", async () => {
+    const app = await boot();
+    app.documentLoaded();
+    const initial = await app.invoke("library:load");
+    const writing = deferred();
+    const writeFile = app.fileSystem.writeFile.getMockImplementation();
+    app.fileSystem.writeFile.mockImplementation(async (file, data) => {
+      if (file.endsWith("library.json")) {
+        await writeFile(file, "{");
+        await writing.promise;
+      }
+      await writeFile(file, data);
+    });
+    const first = app.invoke("library:save", undefined, initial);
+    await vi.waitFor(() => expect(app.fileSystem.writeFile).toHaveBeenCalledTimes(2));
+    const intermediate = { ...initial, settings: { ...initial.settings, micVirtualVolume: 0.4 } };
+    const newBoard = { id: "board-new", name: "New", color: "#123456", sounds: [] };
+    const newest = { ...initial, activeBoardId: newBoard.id, boards: [...initial.boards, newBoard], settings: { ...initial.settings, micVirtualVolume: 0.9, micVirtualMuted: true } };
+    const pending = app.invoke("library:save", undefined, intermediate);
+    const coalesced = app.invoke("library:save", undefined, newest);
+    app.fileSystem.readFile.mockClear();
+    app.fileSystem.writeFile.mockClear();
+    await app.loaded();
+    const loaded = vi.fn();
+    const reload = app.invoke("library:load").then((library) => { loaded(library); return library; });
+    const ready = app.invoke("control:getSettings");
+    await vi.waitFor(() => expect(app.fileSystem.readFile).toHaveBeenCalledWith("/test/userData/external-control.json", "utf8"));
+    expect(app.fileSystem.readFile.mock.calls.filter(([file]) => file.endsWith("library.json"))).toHaveLength(0);
+    expect(loaded).not.toHaveBeenCalled();
+    writing.resolve();
+    expect(await Promise.all([first, pending, coalesced])).toEqual([{ ok: true }, { ok: true }, { ok: true }]);
+    await ready;
+    expect(await reload).toEqual(newest);
+    expect(app.fileSystem.writeFile.mock.calls.filter(([file]) => file.endsWith("library.json"))).toHaveLength(1);
+    expect(app.bridge.getSnapshot().volumes.micVirtual).toEqual({ value: 0.9, muted: true });
+    expect(app.bridge.getSnapshot()).toMatchObject({ activeBoardId: newBoard.id, library: { activeBoardId: newBoard.id, boards: expect.arrayContaining([newBoard]) } });
     await app.bridge.stop();
   });
 

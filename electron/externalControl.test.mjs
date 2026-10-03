@@ -1025,7 +1025,7 @@ describe("external control protocol and dispatch", () => {
     await vi.waitFor(() => expect(onStateChange.mock.lastCall[0].clients).toEqual([]));
   });
 
-  it.each(["add", "delete"])("publishes consistent library and board state when boards %s", async (change) => {
+  it.each(["add", "delete"])("publishes consistent library, board and audio state when boards %s", async (change) => {
     const snapshots = [];
     await create({ createWebSocketServer: (options) => {
       const server = new WebSocketServer(options);
@@ -1043,15 +1043,20 @@ describe("external control protocol and dispatch", () => {
     const updated = change === "add"
       ? { ...library, activeBoardId: "board-c", boards: [...library.boards, newBoard] }
       : { ...library, activeBoardId: "board-b", boards: [library.boards[1]] };
+    updated.settings = { ...audioSettings, micPassthrough: true, micVirtualVolume: 0.4, micVirtualMuted: true };
     bridge.updateLibrary(updated);
     const libraryEvent = await connection.next();
     expect(libraryEvent).toMatchObject({ event: "library.changed", data: { activeBoardId: updated.activeBoardId } });
     expect(libraryEvent.data.boards.map((board) => board.id)).toEqual(updated.boards.map((board) => board.id));
     expect(await connection.next()).toEqual({ type: "event", event: "board.changed", data: { activeBoardId: updated.activeBoardId } });
-    expect(snapshots).toHaveLength(2);
+    expect(await connection.next()).toEqual({ type: "event", event: "settings.changed", data: { ...snapshots[0].settings, micPassthrough: true } });
+    expect(await connection.next()).toEqual({ type: "event", event: "volumes.changed", data: snapshots[0].volumes });
+    expect(snapshots).toHaveLength(4);
     for (const snapshot of snapshots) {
       expect(snapshot.activeBoardId).toBe(updated.activeBoardId);
       expect(snapshot.library).toEqual(libraryEvent.data);
+      expect(snapshot.settings.micPassthrough).toBe(true);
+      expect(snapshot.volumes.micVirtual).toEqual({ value: 0.4, muted: true });
     }
     bridge.updateLiveState({ playback: [] });
     bridge.updateLibrary(updated);

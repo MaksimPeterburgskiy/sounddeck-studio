@@ -20,7 +20,9 @@ function createControlRenderer({ send, timeoutMs = 5000 }) {
         clearTimeout(timer);
         signal?.removeEventListener("abort", cancel);
       };
-      const timer = setTimeout(() => {
+      // Playback waits for the latest audio configuration, which can take
+      // longer than the settings acknowledgement timeout to open a device.
+      const timer = message.command === "sound.play" ? undefined : setTimeout(() => {
         cleanup();
         pending.delete(requestId);
         cancel();
@@ -42,15 +44,20 @@ function createControlRenderer({ send, timeoutMs = 5000 }) {
     const request = pending.get(requestId);
     if (!request) return false;
     const { command, args } = request.message;
-    const data = result?.data;
-    if (command === "sound.play" && (!result || (result.ok !== true && (result.ok !== false || !["unavailable", "not-found", "internal-error"].includes(result.code))))) {
-      throw new Error("Invalid control playback result");
+    let response;
+    if (command === "sound.play") {
+      if (!result || (result.ok !== true && (result.ok !== false || !["unavailable", "not-found", "internal-error"].includes(result.code)))) {
+        throw new Error("Invalid control playback result");
+      }
+      response = result.ok ? { ok: true } : { ok: false, code: result.code };
+    } else {
+      const data = result?.data;
+      const validData = command.startsWith("setting.")
+        ? data?.key === args.key && typeof data.value === "boolean"
+        : data?.bus === args.bus && Number.isFinite(data.value) && data.value >= 0 && data.value <= 1 && typeof data.muted === "boolean";
+      response = result?.ok === true && validData ? { ok: true, data }
+        : { ok: false, code: result?.ok === false && result.code === "unavailable" ? "unavailable" : "internal-error" };
     }
-    const validData = command === "sound.play" || (command.startsWith("setting.")
-      ? data?.key === args.key && typeof data.value === "boolean"
-      : data?.bus === args.bus && Number.isFinite(data.value) && data.value >= 0 && data.value <= 1 && typeof data.muted === "boolean");
-    const response = result?.ok === true && validData ? (command === "sound.play" ? { ok: true } : { ok: true, data })
-      : { ok: false, code: result?.ok === false && (result.code === "unavailable" || (command === "sound.play" && result.code === "not-found")) ? result.code : "internal-error" };
     request.cleanup();
     pending.delete(requestId);
     request.resolve(response);

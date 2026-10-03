@@ -58,11 +58,11 @@ contextBridge.exposeInMainWorld("sounddeck", {
     const listener = async (_event, { requestId, ...command }) => {
       let result;
       try {
-        result = await callback(command);
+        result = await callback({ ...command, requestId });
       } catch {
         result = { ok: false, code: "internal-error" };
       }
-      if (requestId) void controlReadyToken.then((token) => ipcRenderer.invoke("control:result", requestId, result, token)).catch(() => {});
+      if (requestId && command.command !== "sound.cancel" && command.command !== "control.cancel") void controlReadyToken.then((token) => ipcRenderer.invoke("control:result", requestId, result, token)).catch(() => {});
     };
     ipcRenderer.on("control-command", listener);
     return () => ipcRenderer.removeListener("control-command", listener);
