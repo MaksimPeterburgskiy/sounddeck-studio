@@ -29,7 +29,7 @@ export function slotBoard(library: ControlLibrary | undefined, settings: ActionS
 }
 
 /** Visible keys alone describe the current page/folder; SDK coordinates are per device.
- * Page state is local and shared by auto slots, including pinned boards.
+ * Page index is local to each device; each follow/pinned group has its own size.
  */
 export class BoardSlots {
   private readonly keys = new Map<string, VisibleSlotKey>();
@@ -90,15 +90,26 @@ export class BoardSlots {
     this.settleLayout(key.deviceId);
     this.notify();
   }
+  private groups(deviceId: string): Map<string, VisibleSlotKey[]> {
+    const groups = new Map<string, VisibleSlotKey[]>();
+    for (const key of autoSlots(this.keys.values(), deviceId)) {
+      // Follow keys stay separate from pins even when they resolve to the same board.
+      const binding = key.settings.boardId || "";
+      const group = groups.get(binding);
+      if (group) group.push(key);
+      else groups.set(binding, [key]);
+    }
+    return groups;
+  }
   page(deviceId: string) {
-    const keys = autoSlots(this.keys.values(), deviceId);
-    const size = keys.length;
-    // Mixed pinned/follow keys use the longest represented board, so paging
-    // can reach every board. Fixed keys cannot increase the page count.
-    const length = Math.max(0, ...keys.map((key) => slotBoard(this.library, key.settings)?.sounds.length ?? 0));
-    const count = size ? Math.max(1, Math.ceil(length / size)) : 1;
+    const groups = [...this.groups(deviceId).values()];
+    const size = groups.reduce((total, group) => total + group.length, 0);
+    // The device advances every group together, using enough pages to reach
+    // every represented board. Fixed keys cannot increase the page count.
+    const count = Math.max(1, ...groups.map((group) =>
+      Math.ceil((slotBoard(this.library, group[0].settings)?.sounds.length ?? 0) / group.length)));
     const index = Math.min(this.pages.get(deviceId) ?? 0, count - 1);
-    return { size, index, count, offset: index * size, label: `${index + 1} / ${count}`, previous: index > 0, next: index < count - 1 };
+    return { size, index, count, label: `${index + 1} / ${count}`, previous: index > 0, next: index < count - 1 };
   }
   move(deviceId: string, direction: 1 | -1): void {
     const page = this.page(deviceId);
@@ -119,10 +130,10 @@ export class BoardSlots {
     const settings = key.settings;
     let index: number;
     if (isAutoSlot(settings)) {
-      const auto = autoSlots(this.keys.values(), key.deviceId);
+      const auto = this.groups(key.deviceId).get(settings.boardId || "") ?? [];
       const position = auto.findIndex((item) => item.id === id);
       if (position < 0) return null;
-      index = this.page(key.deviceId).offset + position;
+      index = this.page(key.deviceId).index * auto.length + position;
     } else {
       const slot = fixedSlot(settings);
       if (!slot) return undefined;

@@ -10,19 +10,25 @@ its own press, so keys bound to the same Hold sound remain independent. Leaving
 the key's page releases it; disconnecting releases all presses on that session.
 
 Board slot defaults to **Auto (by position)** and **Follow active board**.
-Visible auto slots on each device are ordered by row, then column; other actions
-and fixed-slot keys do not consume positions. Choose a fixed slot (1–n) to ignore
+Visible auto slots on each device are grouped by board binding: Follow active
+board keys form one group, and keys pinned to the same board form another. Each
+group is ordered by row, then column; other actions and fixed-slot keys do not
+consume positions. Follow keys and pinned keys remain separate even when they
+represent the same board. Choose a fixed slot (1–n) to ignore
 paging, or pin a board to keep that key on one board. Auto slots on pinned boards
 still page with the other auto slots on their device. Empty slots are blank and
 do nothing; a missing board shows a warning.
 
 Next page and Previous page show the current page (for example, **2 / 4**) and
 are dimmed at the ends, where pressing does nothing. Each device keeps its own
-page, using the number of currently visible auto slots as its page size, including
-inside folders and on multi-page profiles. A mixed pinned/follow layout uses the
-largest represented board for its page count, so all sounds remain reachable.
+page index, including inside folders and on multi-page profiles. Each group uses
+its own visible auto-slot count as its page size and advances by that many sounds.
+The device uses the largest page count among its groups, so every represented
+board stays fully reachable; shorter groups show empty slots on later pages.
 Switching the active board resets every device to page 1; shrinking a board
 clamps the page to the last available page. Fixed slots never affect page counts.
+Board slot, Next page, and Previous page are unavailable in multi-actions because
+they depend on the visible device layout. Use Play sound for multi-actions.
 
 From the repository root:
 

@@ -126,6 +126,7 @@
     {
       "UUID": "com.sounddeck.studio.board-slot",
       "Name": "Board slot",
+      "SupportedInMultiActions": false,
       "Tooltip": "Play a board slot, following the active board or a pinned board.",
       "Icon": "imgs/board-slot",
       "Controllers": [
@@ -144,6 +145,7 @@
     {
       "UUID": "com.sounddeck.studio.page-next",
       "Name": "Next page",
+      "SupportedInMultiActions": false,
       "Tooltip": "Show the next page of board slots on this device.",
       "Icon": "imgs/page-next",
       "Controllers": [
@@ -161,6 +163,7 @@
     {
       "UUID": "com.sounddeck.studio.page-previous",
       "Name": "Previous page",
+      "SupportedInMultiActions": false,
       "Tooltip": "Show the previous page of board slots on this device.",
       "Icon": "imgs/page-previous",
       "Controllers": [
