@@ -6,6 +6,7 @@ import os from "node:os";
 import { createRequire } from "node:module";
 import { WebSocketServer } from "ws";
 import { Connection } from "./connection";
+import { SoundKeyPresses } from "./soundKeyPresses";
 import { parseDiscovery, type DiscoveryFile } from "./discovery";
 
 const { createExternalControlBridge } = createRequire(import.meta.url)("../../electron/externalControl.cjs");
@@ -47,6 +48,27 @@ async function realServer(options: { cooldownMs?: number } = {}) {
 }
 
 describe("shared connection", () => {
+  it("releases held keys on socket closure and sends no stale releases after reconnect", async () => {
+    const { bridge, connection, command } = await realServer();
+    const keys = new SoundKeyPresses(connection);
+    connection.start();
+    await waitFor(() => connection.status === "connected");
+    const session = connection.session;
+    await keys.press("a", { soundId: "sound-a" });
+    await keys.press("b", { soundId: "sound-a" });
+    const ids = command.mock.calls.map(([message]) => (message as unknown as { args: { pressId: string } }).args.pressId);
+    expect(ids[0]).not.toBe(ids[1]);
+    await bridge.regenerateToken();
+    await waitFor(() => connection.session !== null && connection.session !== session);
+    expect(command.mock.calls.slice(2).map(([message]) => message)).toEqual(ids.map((pressId) => ({ command: "sound.release", args: { pressId } })));
+    await keys.release("a");
+    await keys.release("b");
+    expect(command).toHaveBeenCalledTimes(4);
+    await keys.press("a", { soundId: "sound-a" });
+    await keys.release("a");
+    expect(command).toHaveBeenCalledTimes(6);
+  });
+
   it("authenticates with the real ephemeral server without Origin, models all events, and invalidates image cache", async () => {
     const { bridge, connection, upgrades, command } = await realServer();
     const changed = vi.fn();
@@ -89,11 +111,17 @@ describe("shared connection", () => {
     expect(connection.statusLabel).toBe("Re-pair");
     wrongToken = false;
     await waitFor(() => connection.status === "connected");
+    const oldSession = connection.session;
+    expect(oldSession).not.toBeNull();
     const oldToken = bridge.getState().token;
     await bridge.regenerateToken();
     await waitFor(() => connection.status === "auth-error");
     await waitFor(() => connection.status === "connected");
     expect(bridge.getState().token).not.toBe(oldToken);
+    expect(connection.session).not.toBeNull();
+    expect(connection.session).not.toBe(oldSession);
+    connection.stop();
+    expect(connection.session).toBeNull();
     expect(reads.mock.calls.length).toBeGreaterThanOrEqual(3);
   });
 

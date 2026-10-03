@@ -1,10 +1,19 @@
-import { action, type KeyDownEvent } from "@elgato/streamdeck";
+import streamDeck, { action, type KeyDownEvent, type KeyUpEvent, type WillDisappearEvent } from "@elgato/streamdeck";
+import type { Connection } from "../connection";
 import { resolveSound, currentSoundBinding } from "../resolveSound";
+import { SoundKeyPresses } from "../soundKeyPresses";
 import type { ActionSettings } from "../settings";
 import { LiveAction } from "./liveAction";
 
 @action({ UUID: "com.sounddeck.studio.play-sound" })
 export class PlaySound extends LiveAction {
+  private readonly presses: SoundKeyPresses;
+
+  constructor(connection: Connection) {
+    super(connection);
+    this.presses = new SoundKeyPresses(connection);
+  }
+
   protected override syncSettings(settings: ActionSettings): ActionSettings {
     return this.connection.snapshot ? currentSoundBinding(this.connection.snapshot.library, settings) : settings;
   }
@@ -23,13 +32,21 @@ export class PlaySound extends LiveAction {
   protected override async press(ev: KeyDownEvent<ActionSettings>): Promise<void> {
     const sound = this.connection.snapshot && resolveSound(this.connection.snapshot.library, ev.payload.settings);
     if (!sound) { await ev.action.showAlert(); return; }
-    await this.playOnKeyDown(ev, sound.id);
-  }
-  // This is the single tap trigger boundary. The later hold PR can add its
-  // press/release pair here and onKeyUp without changing rendering or binding.
-  private async playOnKeyDown(ev: KeyDownEvent<ActionSettings>, soundId: string): Promise<void> {
     // Fallback already resolved against the live library; saved titles may
     // exceed the protocol's limits and are unnecessary with the current id.
-    await this.command(ev, "sound.play", { soundId });
+    const result = await this.presses.press(ev.action.id, { soundId: sound.id });
+    await this.reportResult(ev.action, "sound.press", result);
+  }
+
+  override async onKeyUp(ev: KeyUpEvent<ActionSettings>): Promise<void> {
+    const result = await this.presses.release(ev.action.id);
+    await this.reportResult(ev.action, "sound.release", result);
+  }
+
+  override onWillDisappear(ev: WillDisappearEvent<ActionSettings>): void {
+    super.onWillDisappear(ev);
+    void this.presses.release(ev.action.id).then((result) => {
+      if (result && !result.ok) streamDeck.logger.warn(`SoundDeck command sound.release failed: ${result.code}`);
+    }).catch((error) => streamDeck.logger.error(error));
   }
 }
