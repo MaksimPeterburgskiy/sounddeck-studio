@@ -6,9 +6,29 @@ import { runInNewContext } from "node:vm";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import controlModule from "./externalControl.cjs";
+import ffmpegArgs from "./ffmpegArgs.cjs";
+import mediaFiles from "./mediaFiles.cjs";
+import processTree from "./processTree.cjs";
+import security from "./security.cjs";
+import shutdownLifecycle from "./shutdownLifecycle.cjs";
+import startupSettings from "./startupSettings.cjs";
+import updateChannel from "./updateChannel.cjs";
+import updateInstallLifecycle from "./updateInstallLifecycle.cjs";
 
 const mainFile = fileURLToPath(new URL("./main.cjs", import.meta.url));
 const require = createRequire(mainFile);
+// Reuse Vitest's module instances instead of evaluating a second native CJS
+// copy, which gives V8 two incompatible coverage maps for each helper.
+const helperModules = {
+  "./ffmpegArgs.cjs": ffmpegArgs,
+  "./mediaFiles.cjs": mediaFiles,
+  "./processTree.cjs": processTree,
+  "./security.cjs": security,
+  "./shutdownLifecycle.cjs": shutdownLifecycle,
+  "./startupSettings.cjs": startupSettings,
+  "./updateChannel.cjs": updateChannel,
+  "./updateInstallLifecycle.cjs": updateInstallLifecycle
+};
 
 function deferred() {
   let resolve;
@@ -66,6 +86,7 @@ async function boot(storageError) {
     nativeImage: { createFromPath: () => icon }
   };
   const overrides = {
+    ...helperModules,
     electron, "node:fs/promises": fileSystem,
     "./hotkeys.cjs": { createHotkeyEngine: () => ({ setSuspended: vi.fn() }) },
     "./corsair.cjs": { createCorsairBridge: () => ({ start: () => {} }) },

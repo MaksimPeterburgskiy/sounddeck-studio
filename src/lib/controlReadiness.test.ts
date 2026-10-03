@@ -3,6 +3,19 @@ import { waitForAudioConfiguration } from "./controlReadiness";
 import { deferred } from "./testing/webAudioFakes";
 
 describe("external control audio readiness", () => {
+  it("waits for configuration that starts before an unconfigured wait settles", async () => {
+    let configuration: Promise<void> | null = null;
+    const ready = vi.fn();
+    const pending = waitForAudioConfiguration(() => configuration).then(ready);
+    const startup = deferred<void>();
+    configuration = startup.promise;
+    await Promise.resolve();
+    expect(ready).not.toHaveBeenCalled();
+    startup.resolve();
+    await pending;
+    expect(ready).toHaveBeenCalledOnce();
+  });
+
   it("waits for newer settings when the initial configuration is superseded", async () => {
     const initial = deferred<void>();
     const latest = deferred<void>();
