@@ -6,7 +6,7 @@ import { LiveAction } from "./liveAction";
 export class ToggleSetting extends LiveAction {
   protected override visual(settings: ActionSettings) {
     const key = settingKey(settings.key ?? "micPassthrough");
-    const enabled = key && this.connection.snapshot?.settings[key];
+    const enabled = key && this.connection.snapshot?.settings?.[key];
     return key ? { title: settingLabels[key], icon: enabled ? "toggle-on" as const : "toggle-off" as const, iconOn: !!enabled, active: !!enabled, state: enabled ? 1 as const : 0 as const }
       : { title: "Missing", warning: true, dimmed: true, state: 0 as const };
   }

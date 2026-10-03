@@ -28,7 +28,9 @@ export class VolumeDial extends LiveAction {
     const bus = volumeBus(settings);
     return { title: bus ? volumeBuses[bus].name : "Missing" };
   }
-  protected override feedback(settings: ActionSettings) { return volumeFeedback(this.connection, settings); }
+  protected override feedback(settings: ActionSettings, action: DialAction<ActionSettings>) {
+    return volumeFeedback(this.connection, settings, this.updateAppRequired(action) ? "Update app" : undefined);
+  }
   protected override async press(): Promise<void> {}
 
   override async onDialRotate(ev: DialRotateEvent<ActionSettings>): Promise<void> {

@@ -9,14 +9,16 @@ import { LiveAction } from "./liveAction";
 const MAX_REPEAT_TICKS = 8;
 type Repeat = {
   action: KeyAction<ActionSettings>; settings: ActionSettings; session: object;
-  bus: ControlVolumeBus; delta: number; initial: boolean; ticks: number; once: boolean;
+  bus: ControlVolumeBus; delta: number; ticks: number; once: boolean;
   timer?: ReturnType<typeof setTimeout>; interval?: ReturnType<typeof setInterval>;
 };
 
 @action({ UUID: "com.sounddeck.studio.volume" })
 export class Volume extends LiveAction {
   private readonly held = new Map<string, Repeat>();
-  // Cancellation removes unsent input, but cannot free an already-sent command.
+  // Initial presses survive repeat cancellation and retain their own adjustment.
+  private readonly presses = new Map<string, Repeat[]>();
+  // Cancellation cannot free an already-sent command.
   private readonly pending = new Set<string>();
 
   constructor(connection: Connection) {
@@ -24,6 +26,9 @@ export class Volume extends LiveAction {
     connection.subscribe(() => {
       for (const [id, repeat] of this.held) {
         if (connection.session !== repeat.session) this.stopRepeat(id);
+      }
+      if (connection.session) {
+        for (const id of this.presses.keys()) void this.drain(id);
       }
     });
   }
@@ -40,8 +45,11 @@ export class Volume extends LiveAction {
     if (!session) return;
     const repeat: Repeat = {
       action: ev.action, session, settings: ev.payload.settings, bus, delta,
-      initial: true, ticks: 0, once: !!ev.payload.isInMultiAction,
+      ticks: 0, once: !!ev.payload.isInMultiAction,
     };
+    const presses = this.presses.get(ev.action.id) ?? [];
+    presses.push(repeat);
+    this.presses.set(ev.action.id, presses);
     this.held.set(ev.action.id, repeat);
     if (!repeat.once) {
       const tick = () => {
@@ -62,7 +70,7 @@ export class Volume extends LiveAction {
   }
 
   private atLimit(repeat: Repeat): boolean {
-    const value = this.connection.snapshot?.volumes[repeat.bus]?.value;
+    const value = this.connection.snapshot?.volumes?.[repeat.bus]?.value;
     return value !== undefined && (repeat.delta > 0 ? value >= 1 : value <= 0);
   }
 
@@ -70,17 +78,22 @@ export class Volume extends LiveAction {
     if (this.pending.has(id)) return;
     this.pending.add(id);
     try {
-      let repeat: Repeat | undefined;
-      while ((repeat = this.held.get(id)) && this.connection.session === repeat.session) {
-        if (!repeat.initial && this.atLimit(repeat)) repeat.ticks = 0;
-        if (!repeat.initial && !repeat.ticks) break;
-        const ticks = repeat.initial ? 1 : repeat.ticks;
-        if (repeat.initial) repeat.initial = false;
-        else repeat.ticks = 0;
+      while (this.connection.session) {
+        const presses = this.presses.get(id);
+        const initial = presses?.shift();
+        if (!presses?.length) this.presses.delete(id);
+        const repeat = initial ?? this.held.get(id);
+        if (!repeat) break;
+        if (!initial && this.connection.session !== repeat.session) break;
+        if (!initial && this.atLimit(repeat)) repeat.ticks = 0;
+        if (!initial && !repeat.ticks) break;
+        const ticks = initial ? 1 : repeat.ticks;
+        if (!initial) repeat.ticks = 0;
+        const session = this.connection.session;
         try {
           const result = await this.connection.command("volume.adjust", { bus: repeat.bus, delta: repeat.delta * ticks });
           if ((!result.ok || repeat.once) && this.held.get(id) === repeat) this.stopRepeat(id);
-          await this.reportResult(repeat.action, "volume.adjust", result);
+          await this.reportResult(repeat.action, "volume.adjust", result, session);
         } catch (error) {
           if (this.held.get(id) === repeat) this.stopRepeat(id);
           streamDeck.logger.error(error);

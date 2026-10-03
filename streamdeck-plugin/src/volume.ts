@@ -24,7 +24,7 @@ export function volumeStep(settings: ActionSettings, fallback: number): number {
 
 export function volumeVisual(connection: Connection, settings: ActionSettings, muteKey = false) {
   const bus = volumeBus(settings);
-  const level = bus && connection.snapshot?.volumes[bus];
+  const level = bus && connection.snapshot?.volumes?.[bus];
   if (!bus || !level) return { title: "Missing", warning: true, dimmed: true, ...(muteKey && { state: 0 as const }) };
   const mode = settings.mode ?? "up";
   const icon: keyof typeof keyIcons = muteKey ? level.muted ? "speaker-muted" : "speaker" : mode === "down" ? "speaker-down" : "speaker-up";
@@ -36,15 +36,15 @@ export function volumeVisual(connection: Connection, settings: ActionSettings, m
   };
 }
 
-export function volumeFeedback(connection: Connection, settings: ActionSettings): FeedbackPayload {
+export function volumeFeedback(connection: Connection, settings: ActionSettings, statusLabel?: string): FeedbackPayload {
   const bus = volumeBus(settings);
-  const connected = connection.status === "connected";
-  const level = connected && bus ? connection.snapshot?.volumes[bus] : undefined;
+  const connected = connection.status === "connected" && !statusLabel;
+  const level = connected && bus ? connection.snapshot?.volumes?.[bus] : undefined;
   const muted = !!level?.muted;
   const color = !level || muted ? "#8fa5a4" : "#1db7a6";
   const icon = `<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24"><g color="${color}" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${keyIcons[muted ? "speaker-muted" : "speaker"]}</g></svg>`;
   return {
-    value: { value: !connected ? connection.statusLabel.replace(/\n/g, " ") : !level ? "Missing" : muted ? "Muted" : `${Math.round(level.value * 100)}%`, font: { size: level ? 24 : 12 } },
+    value: { value: !connected ? (statusLabel ?? connection.statusLabel).replace(/\n/g, " ") : !level ? "Missing" : muted ? "Muted" : `${Math.round(level.value * 100)}%`, font: { size: level ? 24 : 12 } },
     icon: `data:image/svg+xml;base64,${Buffer.from(icon).toString("base64")}`,
     indicator: { value: level ? level.value * 100 : 0, range: { min: 0, max: 100 }, bar_fill_c: color, enabled: true },
   };

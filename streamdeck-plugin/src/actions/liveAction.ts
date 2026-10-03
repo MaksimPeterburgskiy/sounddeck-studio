@@ -21,6 +21,7 @@ type VisibleKey = {
   rendering: boolean;
   dirty: boolean;
   feedback?: string;
+  updateAppSession?: object;
 };
 
 /** Keeps subscriptions, animation, and SDK writes scoped to visible keys and dials. */
@@ -45,7 +46,12 @@ export abstract class LiveAction extends SingletonAction<ActionSettings> {
 
   protected abstract visual(settings: ActionSettings, action: KeyAction<ActionSettings> | DialAction<ActionSettings>): Visual;
   protected abstract press(ev: KeyDownEvent<ActionSettings>): Promise<void>;
-  protected feedback(_settings: ActionSettings): FeedbackPayload | undefined { return undefined; }
+  protected feedback(_settings: ActionSettings, _action: DialAction<ActionSettings>): FeedbackPayload | undefined { return undefined; }
+
+  protected updateAppRequired(action: KeyAction<ActionSettings> | DialAction<ActionSettings>): boolean {
+    const session = this.connection.session;
+    return !!session && this.visible.get(action.id)?.updateAppSession === session;
+  }
 
   protected inspectorItems(_settings: ActionSettings, _library?: ControlLibrary): Record<string, Array<{ label: string; value: string }>> { return {}; }
 
@@ -84,12 +90,18 @@ export abstract class LiveAction extends SingletonAction<ActionSettings> {
   }
 
   protected async command<Name extends ControlCommandName>(ev: { action: KeyAction<ActionSettings> | DialAction<ActionSettings> }, name: Name, args: ControlCommandArgs[Name]): Promise<void> {
+    const session = this.connection.session;
     const result = await this.connection.command(name, args);
-    await this.reportResult(ev.action, name, result);
+    await this.reportResult(ev.action, name, result, session);
   }
 
-  protected async reportResult(action: KeyAction<ActionSettings> | DialAction<ActionSettings>, name: ControlCommandName, result: ControlResult | undefined): Promise<void> {
+  protected async reportResult(action: KeyAction<ActionSettings> | DialAction<ActionSettings>, name: ControlCommandName, result: ControlResult | undefined, session = this.connection.session): Promise<void> {
     if (result && !result.ok) {
+      const entry = this.visible.get(action.id);
+      if (result.code === "unknown-command" && entry && session && session === this.connection.session) {
+        entry.updateAppSession = session;
+        this.refresh();
+      }
       streamDeck.logger.warn(`SoundDeck command ${name} failed: ${result.code}`);
       await action.showAlert();
     }
@@ -98,9 +110,10 @@ export abstract class LiveAction extends SingletonAction<ActionSettings> {
   private view(settings: ActionSettings, action: KeyAction<ActionSettings>): Visual {
     const visual = this.visual(settings, action);
     if (visual.blank) return visual;
-    return this.connection.status === "connected" ? visual : {
+    const updateApp = this.updateAppRequired(action);
+    return this.connection.status === "connected" && !updateApp ? visual : {
       ...visual, badge: undefined, playing: undefined, playingRing: false, active: false, state: visual.state === undefined ? undefined : 0,
-      dimmed: true, warning: this.connection.status !== "offline", title: this.connection.statusLabel,
+      dimmed: true, warning: updateApp || this.connection.status !== "offline", title: updateApp ? "Update\napp" : this.connection.statusLabel,
     };
   }
   protected refresh(): void {
@@ -161,7 +174,7 @@ export abstract class LiveAction extends SingletonAction<ActionSettings> {
             if (this.visible.get(entry.action.id) !== entry) return;
             if (entry.dirty) continue;
           }
-          const feedback = this.feedback(entry.settings);
+          const feedback = this.feedback(entry.settings, entry.action);
           const serialized = JSON.stringify(feedback);
           if (feedback && entry.feedback !== serialized) {
             await entry.action.setFeedback(feedback);
