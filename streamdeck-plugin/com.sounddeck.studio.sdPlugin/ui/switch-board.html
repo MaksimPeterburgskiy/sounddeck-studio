@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>SoundDeck Studio</title>
+  <script src="https://sdpi-components.dev/releases/v4/sdpi-components.js"></script>
+  <link rel="stylesheet" href="inspector.css">
+</head>
+<body>
+  <sdpi-item label="Board">
+    <sdpi-select setting="boardId" datasource="boards" placeholder="Choose a board" loading="Loading boards…" hot-reload show-refresh></sdpi-select>
+  </sdpi-item>
+  <p id="status" role="status"></p>
+  <script src="inspector.js"></script>
+</body>
+</html>

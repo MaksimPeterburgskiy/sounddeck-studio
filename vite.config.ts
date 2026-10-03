@@ -10,7 +10,7 @@ export default defineConfig({
   },
   test: {
     environment: "node",
-    include: ["src/**/*.test.ts", "electron/**/*.test.mjs", "scripts/**/*.test.mjs"],
+    include: ["src/**/*.test.ts", "electron/**/*.test.mjs", "scripts/**/*.test.mjs", "streamdeck-plugin/src/**/*.test.ts"],
     coverage: {
       provider: "v8",
       // Coverage is scoped to the tested library and electron helper modules;
