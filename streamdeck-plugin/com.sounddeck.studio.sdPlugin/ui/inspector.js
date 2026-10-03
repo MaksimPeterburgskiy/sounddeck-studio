@@ -1,9 +1,10 @@
 /* Library summaries and status cross this bridge; never authentication tokens.
- * This controller is the sole owner of settings for all three inspectors.
+ * This controller is the sole owner of settings for all inspectors.
  * Pickers have no sdpi-components setting/label-setting attributes.
  */
 const client = SDPIComponents.streamDeckClient;
 const board = document.getElementById("board");
+const slot = document.getElementById("slot");
 const sound = document.getElementById("sound");
 const key = document.getElementById("key");
 let settings = {};
@@ -21,6 +22,7 @@ const applySettings = (value) => {
   latestRevision = Math.max(latestRevision, revisionOf(settings));
   receiving = true;
   if (board) board.value = settings.boardId || "";
+  if (slot) slot.value = String(settings.slot ?? "");
   if (sound) sound.value = settings.soundId || "";
   if (key) key.value = settings.key || "micPassthrough";
   receiving = false;
@@ -37,7 +39,7 @@ client.sendToPropertyInspector.subscribe(({ payload }) => {
   if (payload?.event === "status") document.getElementById("status").textContent = payload.label || "";
   if (payload?.event === "sounds") sounds = payload.items || [];
 });
-if (board || key) {
+if (board || slot || key) {
   // Sending is not acknowledgement. Keep the revision barrier after sends settle
   // and after the latest echo, so an older plugin snapshot can never roll us back.
   client.didReceiveSettings.subscribe(({ payload }) => {
@@ -51,6 +53,10 @@ if (board || key) {
     sounds = [];
     save(sound ? { ...settings, boardId: board.value, soundId: "", title: "" }
       : { ...settings, boardId: board.value });
+  });
+  slot?.addEventListener("valuechange", () => {
+    if (!initialized || receiving || slot.value === String(settings.slot ?? "")) return;
+    save({ ...settings, slot: slot.value });
   });
   sound?.addEventListener("valuechange", () => {
     if (!initialized || receiving || sound.value === settings.soundId) return;
