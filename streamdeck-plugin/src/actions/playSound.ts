@@ -28,7 +28,8 @@ export class PlaySound extends LiveAction {
   // This is the single tap trigger boundary. The later hold PR can add its
   // press/release pair here and onKeyUp without changing rendering or binding.
   private async playOnKeyDown(ev: KeyDownEvent<ActionSettings>, soundId: string): Promise<void> {
-    const { boardId, title } = ev.payload.settings;
-    await this.command(ev, "sound.play", { soundId, ...(boardId && { boardId }), ...(title && { title }) });
+    // Fallback already resolved against the live library; saved titles may
+    // exceed the protocol's limits and are unnecessary with the current id.
+    await this.command(ev, "sound.play", { soundId });
   }
 }

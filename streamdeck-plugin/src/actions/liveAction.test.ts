@@ -100,7 +100,21 @@ describe("live actions", () => {
     connection.emit(); await flush();
     expect(key.setSettings).toHaveBeenLastCalledWith({ ...saved, soundId: "imported" });
     await action.onKeyDown({ action: key, payload: { settings: saved } } as never);
-    expect(connection.command).toHaveBeenLastCalledWith("sound.play", { soundId: "imported", boardId: "new-board", title: "Airhorn" });
+    expect(connection.command).toHaveBeenLastCalledWith("sound.play", { soundId: "imported" });
     action.onWillDisappear({ action: key } as never);
+  });
+
+  it.each(["H".repeat(257), "Horn\nEffect"])("plays and re-imports sounds with titles outside the protocol limits (case %#)", async (title) => {
+    const connection = fakeConnection();
+    const action = new PlaySound(connection as unknown as Connection);
+    const key = fakeKey();
+    const settings = { soundId: "original", boardId: "board", title };
+    connection.snapshot.library.boards = [{ id: "board", sounds: [{ id: "original", title, hasImage: false }] }];
+    await action.onKeyDown({ action: key, payload: { settings } } as never);
+    expect(connection.command).toHaveBeenLastCalledWith("sound.play", { soundId: "original" });
+    connection.snapshot.library.boards[0].sounds[0].id = "imported";
+    await action.onKeyDown({ action: key, payload: { settings } } as never);
+    expect(connection.command).toHaveBeenLastCalledWith("sound.play", { soundId: "imported" });
+    expect(key.showAlert).not.toHaveBeenCalled();
   });
 });

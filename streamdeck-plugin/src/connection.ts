@@ -32,6 +32,7 @@ export class Connection {
   private running = false;
   private generation = 0;
   private socket: WebSocket | null = null;
+  private listenerUnavailable = false;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
   private handshakeTimer?: ReturnType<typeof setTimeout>;
   private readonly listeners = new Set<() => void>();
@@ -110,15 +111,18 @@ export class Connection {
     this.discovery = file?.state ?? null;
     const status = discoveryStatus(file);
     this.serverProtocol = file?.state?.protocol ?? CONTROL_PROTOCOL_VERSION;
-    if (status !== "offline" || !file?.state) {
+    this.listenerUnavailable = false;
+    if ((status !== "offline" && status !== "protocol-mismatch") || !file?.state) {
       this.setStatus(status);
       this.schedule(generation);
       return;
     }
     // Keep a useful authentication error visible while retrying the same token.
-    if (!(this.status === "auth-error" && previous?.token === file.state.token && previous.port === file.state.port)) {
-      this.setStatus("offline");
+    if (!(status === "offline" && this.status === "auth-error" && previous?.token === file.state.token && previous.port === file.state.port)) {
+      this.setStatus(status);
     }
+    // Persisted protocol metadata may predate an upgrade. Let the listener
+    // establish compatibility, or allow a press to launch it if it is stopped.
     // ws is a native client: no origin option or Origin header is supplied.
     // The discovery bind host is deliberately ignored, including LAN mode.
     const socket = new WebSocket(`ws://127.0.0.1:${file.state.port}/`, {
@@ -168,7 +172,11 @@ export class Connection {
         socket.terminate();
       });
     });
-    socket.on("error", () => { /* Close schedules the next discovery attempt. */ });
+    socket.on("error", (error) => {
+      if (!current()) return;
+      this.listenerUnavailable = (error as NodeJS.ErrnoException).code === "ECONNREFUSED";
+      // Close schedules the next discovery attempt.
+    });
     socket.on("close", () => {
       if (!current()) return;
       clearTimeout(this.handshakeTimer);
@@ -282,6 +290,7 @@ export class Connection {
     return request;
   }
   handleDisconnectedPress(): void {
-    if (this.status === "offline" && this.discovery?.appPath) this.launcher.attempt(this.discovery.appPath);
+    if ((this.status === "offline" || this.status === "protocol-mismatch" && this.listenerUnavailable)
+      && this.discovery?.appPath) this.launcher.attempt(this.discovery.appPath);
   }
 }

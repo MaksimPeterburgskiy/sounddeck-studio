@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import http from "node:http";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { createRequire } from "node:module";
+import { WebSocketServer } from "ws";
 import { Connection } from "./connection";
 import { parseDiscovery, type DiscoveryFile } from "./discovery";
 
@@ -128,7 +129,7 @@ describe("shared connection", () => {
     expect(read).toHaveBeenCalledTimes(1);
   });
 
-  it("classifies installation states, rereads using bounded exponential backoff, and launches only offline", async () => {
+  it("classifies missing and disabled installations and rereads using bounded exponential backoff without launching", async () => {
     vi.useFakeTimers();
     const base = { path: "state", state: parseDiscovery({ enabled: false, protocol: 1, host: "127.0.0.1", port: 41730, token: "token", allowLan: false, appVersion: "1", appPath: "app" })! };
     let file: DiscoveryFile | null = null;
@@ -144,17 +145,98 @@ describe("shared connection", () => {
     await vi.advanceTimersByTimeAsync(500);
     expect(connection.status).toBe("disabled");
     connection.handleDisconnectedPress();
-    file = { ...base, state: { ...base.state!, enabled: true, protocol: 2 } };
+    // A disabled installation still needs a protocol update, but cannot launch.
+    file = { ...base, state: { ...base.state!, protocol: 2 } };
     await vi.advanceTimersByTimeAsync(999);
     expect(read).toHaveBeenCalledTimes(2);
     await vi.advanceTimersByTimeAsync(1);
-    expect(connection.status).toBe("protocol-mismatch");
-    expect(connection.statusLabel).toBe("Update\nplugin");
+    expect(connection.status).toBe("disabled");
     connection.handleDisconnectedPress();
     expect(launch).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(2000 + 4000 + 8000 + 10_000 + 10_000);
     expect(read).toHaveBeenCalledTimes(8);
     // An enabled installation with nothing listening is exercised below with a real refused port.
+  });
+
+  it("launches on a press when stale protocol metadata has no listener, throttles presses, and refreshes after launch", async () => {
+    const { bridge, readDiscovery } = await realServer();
+    await bridge.stop();
+    const file = await readDiscovery();
+    await writeFile(path.join(file.path, "external-control.json"), JSON.stringify({ ...file.state!, protocol: 2, appVersion: "0.1.21" }));
+    const reads = vi.fn(readDiscovery);
+    const launch = vi.fn();
+    let now = 0;
+    const connection = new Connection("0.1.22", { discover: reads, launch, now: () => now, retryMinMs: 40, retryMaxMs: 80 });
+    resources.push(() => connection.stop());
+    connection.start();
+    await waitFor(() => reads.mock.calls.length >= 2 && connection.status === "protocol-mismatch");
+    expect(connection.statusLabel).toBe("Update\nplugin");
+    expect(launch).not.toHaveBeenCalled();
+    await waitFor(() => {
+      connection.handleDisconnectedPress();
+      return launch.mock.calls.length === 1;
+    });
+    expect(launch).toHaveBeenCalledWith("/Applications/SoundDeck Studio.app");
+    connection.handleDisconnectedPress();
+    now = 29_999;
+    connection.handleDisconnectedPress();
+    expect(launch).toHaveBeenCalledTimes(1);
+    expect((await connection.command("playback.stopAll", {})).ok).toBe(false);
+    now = 30_000;
+    await waitFor(() => {
+      connection.handleDisconnectedPress();
+      return launch.mock.calls.length === 2;
+    });
+    // A fresh process rewrites the discovery file with its current protocol.
+    const relaunched = createExternalControlBridge({ userData: file.path, appVersion: "0.1.22", appPath: file.state!.appPath });
+    resources.push(() => relaunched.stop());
+    await relaunched.start();
+    await waitFor(() => connection.status === "connected");
+    expect((await readDiscovery()).state?.protocol).toBe(1);
+    connection.handleDisconnectedPress();
+    expect(launch).toHaveBeenCalledTimes(2);
+  });
+
+  it("connects to a compatible listener even when the persisted protocol is stale", async () => {
+    const { readDiscovery } = await realServer();
+    const launch = vi.fn();
+    const connection = new Connection("0.1.22", {
+      discover: async () => {
+        const file = await readDiscovery();
+        return { ...file, state: { ...file.state!, protocol: 2 } };
+      },
+      launch, retryMinMs: 20, retryMaxMs: 50,
+    });
+    resources.push(() => connection.stop());
+    connection.start();
+    await waitFor(() => connection.status === "connected");
+    connection.handleDisconnectedPress();
+    expect(launch).not.toHaveBeenCalled();
+  });
+
+  it("does not launch or loop when a live listener confirms a protocol mismatch", async () => {
+    const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+    resources.push(() => new Promise<void>((resolve) => server.close(() => resolve())));
+    await new Promise<void>((resolve) => server.once("listening", resolve));
+    const hello = vi.fn();
+    server.on("connection", (socket) => socket.on("message", () => {
+      hello();
+      socket.send(JSON.stringify({ type: "error", code: "protocol-mismatch", protocol: 2 }));
+    }));
+    const launch = vi.fn();
+    const connection = new Connection("0.1.22", {
+      discover: async () => ({ path: "state", state: parseDiscovery({
+        enabled: true, protocol: 2, host: "127.0.0.1", port: (server.address() as { port: number }).port,
+        token: "token", allowLan: false, appVersion: "0.1.22", appPath: "/Applications/SoundDeck Studio.app",
+      }) }),
+      launch, retryMinMs: 20, retryMaxMs: 50,
+    });
+    resources.push(() => connection.stop());
+    connection.start();
+    await waitFor(() => hello.mock.calls.length >= 2 && connection.status === "protocol-mismatch");
+    connection.handleDisconnectedPress();
+    connection.handleDisconnectedPress();
+    expect(launch).not.toHaveBeenCalled();
   });
 
   it("drops offline presses, throttles launch, then reconnects when the real app listener starts again", async () => {
