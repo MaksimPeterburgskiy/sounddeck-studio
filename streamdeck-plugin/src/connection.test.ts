@@ -69,7 +69,7 @@ describe("shared connection", () => {
     expect(connection.peekImage("sound-a")).toBeUndefined();
     expect(await connection.getImage("sound-a")).toBe("data:image/png;base64,bmV3");
     expect((await connection.command("sound.play", { soundId: "sound-a" })).ok).toBe(true);
-    expect(command).toHaveBeenCalledWith({ command: "sound.play", args: { soundId: "sound-a" } });
+    expect(command).toHaveBeenCalledWith({ command: "sound.play", args: { soundId: "sound-a" } }, expect.any(AbortSignal));
     expect(changed).toHaveBeenCalled();
     unsubscribe();
   });
@@ -97,7 +97,7 @@ describe("shared connection", () => {
   });
 
   it("keeps HTTP upgrade authentication cooldowns classified as auth-error", async () => {
-    const { readDiscovery, upgrades } = await realServer({ cooldownMs: 700 });
+    const { readDiscovery, upgrades } = await realServer({ cooldownMs: 1500 });
     let wrongToken = true;
     const connection = new Connection("0.1.22", {
       discover: async () => {
@@ -108,12 +108,11 @@ describe("shared connection", () => {
     });
     resources.push(() => connection.stop());
     connection.start();
-    await waitFor(() => upgrades.length >= 6);
-    expect(connection.status).toBe("auth-error");
+    // Status is briefly "offline" between attempts, so wait for the classification rather than sampling it.
+    await waitFor(() => upgrades.length >= 6 && connection.status === "auth-error");
     wrongToken = false;
     const priorUpgrades = upgrades.length;
-    await waitFor(() => upgrades.length > priorUpgrades);
-    expect(connection.status).toBe("auth-error");
+    await waitFor(() => upgrades.length > priorUpgrades && connection.status === "auth-error");
     await waitFor(() => connection.status === "connected");
   });
 
