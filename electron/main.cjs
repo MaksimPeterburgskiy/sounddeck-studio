@@ -93,7 +93,10 @@ function handleTrustedIpc(channel, handler) {
 }
 
 function clearPendingControlPlayback() {
-  for (const resolve of pendingControlPlayback.values()) resolve({ ok: false, code: "unavailable" });
+  for (const [requestId, resolve] of pendingControlPlayback) {
+    sendToMainWindow("control-command", { command: "sound.cancel", requestId });
+    resolve({ ok: false, code: "unavailable" });
+  }
   pendingControlPlayback.clear();
 }
 
@@ -127,9 +130,13 @@ const externalControl = createExternalControlBridge({
       if (signal?.aborted) return { ok: false, code: "unavailable" };
       const requestId = crypto.randomUUID();
       return new Promise((resolve) => {
-        const cancel = () => sendToMainWindow("control-command", { command: "sound.cancel", requestId });
+        const cancel = () => {
+          sendToMainWindow("control-command", { command: "sound.cancel", requestId });
+          complete({ ok: false, code: "unavailable" });
+        };
         const complete = (result) => {
           signal?.removeEventListener("abort", cancel);
+          pendingControlPlayback.delete(requestId);
           resolve(result);
         };
         pendingControlPlayback.set(requestId, complete);

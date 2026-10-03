@@ -327,8 +327,8 @@ describe("main-process external control lifecycle", () => {
     const secondId = app.window.webContents.send.mock.lastCall[1].requestId;
     firstCancellation.abort();
     expect(app.window.webContents.send).toHaveBeenLastCalledWith("control-command", { command: "sound.cancel", requestId: firstId });
-    app.invoke("control:playbackResult", app.event, firstId, { ok: false, code: "unavailable" });
     expect(await first).toEqual({ ok: false, code: "unavailable" });
+    expect(app.invoke("control:playbackResult", app.event, firstId, { ok: true })).toEqual({ ok: false });
     app.invoke("control:playbackResult", app.event, secondId, { ok: true });
     expect(await second).toEqual({ ok: true });
     const sent = app.window.webContents.send.mock.calls.length;
@@ -371,6 +371,7 @@ describe("main-process external control lifecycle", () => {
     const requestId = app.window.webContents.send.mock.lastCall[1].requestId;
     const target = name === "closed" ? app.window : app.window.webContents;
     target.emit(name, { isMainFrame: true, isSameDocument: false });
+    expect(app.window.webContents.send).toHaveBeenCalledWith("control-command", { command: "sound.cancel", requestId });
     expect(await pending).toEqual({ ok: false, code: "unavailable" });
     if (name !== "closed") expect(app.invoke("control:playbackResult", app.event, requestId, { ok: true })).toEqual({ ok: false });
     await app.bridge.stop();
