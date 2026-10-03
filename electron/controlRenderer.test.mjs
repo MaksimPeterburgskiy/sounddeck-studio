@@ -12,8 +12,10 @@ describe("renderer control acknowledgements", () => {
     const volume = bridge.dispatch(command);
     const setting = bridge.dispatch({ command: "setting.toggle", args: { key: "micPassthrough" } });
     const playback = bridge.dispatch({ command: "sound.play", args: { soundId: "sound-a" } });
+    const requestIds = send.mock.calls.map(([message]) => message.requestId);
     bridge.receive(send.mock.calls[0][0].requestId);
     bridge.cancelPending();
+    expect(send.mock.calls.slice(3).map(([message]) => message)).toEqual(requestIds.map((requestId) => ({ command: "control.cancel", requestId })));
     expect(await volume).toEqual({ ok: false, code: "unavailable" });
     expect(await setting).toEqual({ ok: false, code: "unavailable" });
     expect(await playback).toEqual({ ok: false, code: "unavailable" });
@@ -68,15 +70,43 @@ describe("renderer control acknowledgements", () => {
     const requestId = send.mock.lastCall[0].requestId;
     const second = bridge.dispatch(command);
     const otherId = send.mock.lastCall[0].requestId;
+    bridge.receive(requestId);
     controller.abort();
     expect(send).toHaveBeenLastCalledWith({ command: "control.cancel", requestId });
-    bridge.complete(requestId, { ok: false, code: "unavailable" });
+    expect(bridge.receive(requestId)).toBe(false);
+    expect(bridge.complete(requestId, { ok: true })).toBe(false);
     bridge.complete(otherId, { ok: true, data: { bus: "micVirtual", value: 0.6, muted: false } });
     expect(await first).toEqual({ ok: false, code: "unavailable" });
     expect(await second).toEqual({ ok: true, data: { bus: "micVirtual", value: 0.6, muted: false } });
     const sent = send.mock.calls.length;
     expect(await bridge.dispatch(command, controller.signal)).toEqual({ ok: false, code: "unavailable" });
     expect(send).toHaveBeenCalledTimes(sent);
+  });
+
+  it("revokes a mutation before receipt synchronously so it cannot be accepted later", async () => {
+    const send = vi.fn();
+    const bridge = createControlRenderer({ send });
+    const controller = new AbortController();
+    const operation = bridge.dispatch(command, controller.signal);
+    const requestId = send.mock.lastCall[0].requestId;
+    controller.abort();
+    expect(send).toHaveBeenLastCalledWith({ command: "control.cancel", requestId });
+    expect(bridge.receive(requestId)).toBe(false);
+    expect(bridge.complete(requestId, { ok: true, data: { bus: "micVirtual", value: 0.6, muted: false } })).toBe(false);
+    expect(await operation).toEqual({ ok: false, code: "unavailable" });
+  });
+
+  it("settles revoked playback and teardown even if cancellation delivery fails", async () => {
+    const send = vi.fn();
+    const bridge = createControlRenderer({ send });
+    const controller = new AbortController();
+    const playback = bridge.dispatch({ command: "sound.play", args: { soundId: "sound-a" } }, controller.signal);
+    const mutation = bridge.dispatch(command);
+    send.mockImplementation(() => { throw new Error("Renderer gone"); });
+    controller.abort();
+    bridge.cancelPending();
+    expect(await playback).toEqual({ ok: false, code: "unavailable" });
+    expect(await mutation).toEqual({ ok: false, code: "unavailable" });
   });
 
   it("keeps an accepted mutation pending after disconnect until its applied result completes", async () => {

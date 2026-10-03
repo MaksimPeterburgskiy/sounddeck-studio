@@ -1,7 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAudioControlQueue } from "./audioControlQueue";
+import { beginAudioConfiguration, trackAudioConfiguration, waitForAudioConfiguration, watchAudioDeviceChanges } from "./controlReadiness";
 import { deferred, makeAudioSettings } from "./testing/webAudioFakes";
 import type { AudioSettings } from "../types";
+
+afterEach(() => vi.useRealTimers());
 
 function setup(initial: Partial<AudioSettings> = {}) {
   let settings = makeAudioSettings(initial);
@@ -13,6 +16,95 @@ function setup(initial: Partial<AudioSettings> = {}) {
 }
 
 describe("external audio mutation FIFO", () => {
+  it.each(["settings", "devicechange"])("waits for pending %s routing before acknowledging a saved mutation and advancing the FIFO", async (source) => {
+    vi.useFakeTimers();
+    let settings = makeAudioSettings({ micPassthrough: false });
+    const configuration = { current: null as Promise<void> | null };
+    const save = deferred<void>();
+    const routing = deferred<void>();
+    const persist = vi.fn(async () => {}).mockReturnValueOnce(save.promise);
+    const writeSettings = vi.fn((next: AudioSettings) => {
+      settings = next;
+      trackAudioConfiguration(configuration, Promise.resolve());
+    });
+    const queue = createAudioControlQueue({
+      getSettings: () => settings, writeSettings, persist,
+      waitForConfiguration: () => waitForAudioConfiguration(() => configuration.current)
+    });
+    const completed = vi.fn();
+    const first = queue.enqueue({ command: "setting.toggle", args: { key: "micPassthrough" } }).then(completed);
+    const later = queue.enqueue({ command: "volume.mute", args: { bus: "micVirtual" } });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(persist).toHaveBeenCalledOnce();
+    const devices = new EventTarget() as MediaDevices;
+    const retry = vi.fn(() => routing.promise);
+    const cleanup = watchAudioDeviceChanges(devices, configuration, retry);
+    let complete: ReturnType<typeof beginAudioConfiguration> | undefined;
+    if (source === "devicechange") devices.dispatchEvent(new Event("devicechange"));
+    else complete = beginAudioConfiguration(configuration);
+    save.resolve();
+    await vi.advanceTimersByTimeAsync(599);
+    expect(retry).not.toHaveBeenCalled();
+    expect(completed).not.toHaveBeenCalled();
+    expect(writeSettings).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(1);
+    if (complete) complete(routing.promise);
+    else expect(retry).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(completed).not.toHaveBeenCalled();
+    expect(persist).toHaveBeenCalledOnce();
+    routing.resolve();
+    await first;
+    expect(completed).toHaveBeenCalledExactlyOnceWith({ ok: true, data: { key: "micPassthrough", value: true } });
+    expect(await later).toEqual({ ok: true, data: { bus: "micVirtual", value: 1, muted: true } });
+    expect(persist).toHaveBeenCalledTimes(2);
+    cleanup();
+  });
+
+  it("holds replies and later mutations until tracked device retries and overlapping configuration settle", async () => {
+    const app = setup({ micVirtualVolume: 0.4, micPassthrough: false });
+    const refresh = deferred<void>();
+    const retry = deferred<void>();
+    const configured = deferred<void>();
+    const latest = deferred<void>();
+    const configuration: { current: Promise<void> | null } = { current: null };
+    const retryDevices = vi.fn(() => retry.promise);
+    trackAudioConfiguration(configuration, refresh.promise.then(retryDevices));
+    // A settings write must retain an already pending device refresh/retry.
+    trackAudioConfiguration(configuration, configured.promise);
+    app.waitForConfiguration.mockImplementation(() => waitForAudioConfiguration(() => configuration.current));
+    const replied = vi.fn();
+    const first = app.queue.enqueue({ command: "volume.mute", args: { bus: "micVirtual" } }).then(replied);
+    const later = app.queue.enqueue({ command: "setting.toggle", args: { key: "micPassthrough" } });
+    try {
+      await vi.waitFor(() => expect(app.waitForConfiguration).toHaveBeenCalledOnce());
+      configured.resolve();
+      refresh.resolve();
+      await vi.waitFor(() => expect(retryDevices).toHaveBeenCalledOnce());
+      expect(replied).not.toHaveBeenCalled();
+      expect(app.writeSettings).toHaveBeenCalledOnce();
+      // Another configuration arriving during the wait must also be observed.
+      const beforeLatest = configuration.current;
+      trackAudioConfiguration(configuration, latest.promise);
+      retry.resolve();
+      await beforeLatest;
+      await Promise.resolve();
+      expect(replied).not.toHaveBeenCalled();
+      expect(app.writeSettings).toHaveBeenCalledOnce();
+      latest.resolve();
+      await first;
+      expect(replied).toHaveBeenCalledExactlyOnceWith({ ok: true, data: { bus: "micVirtual", value: 0.4, muted: true } });
+      expect(await later).toEqual({ ok: true, data: { key: "micPassthrough", value: true } });
+      expect(app.writeSettings).toHaveBeenCalledTimes(2);
+    } finally {
+      refresh.resolve();
+      retry.resolve();
+      configured.resolve();
+      latest.resolve();
+      await Promise.all([first, later]);
+    }
+  });
+
   it("applies one mutation at a time and waits for both persistence and mute configuration before replying", async () => {
     const app = setup({ micVirtualVolume: 0.4 });
     const save = deferred<void>();

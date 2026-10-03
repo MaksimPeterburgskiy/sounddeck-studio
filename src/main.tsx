@@ -351,9 +351,8 @@ function App() {
     );
     const work = engineRef.current.configure(engineSettings, settings.virtualOutputDeviceId);
     for (const complete of pendingAudioSettingsRef.current.splice(0)) complete(work);
-    trackAudioConfiguration(audioConfigurationRef, work);
-    // Keep the rejection observable to control commands while a save is pending.
-    void audioConfigurationRef.current.catch(() => undefined);
+    // Retain overlapping device retries and keep failures observable to commands.
+    void trackAudioConfiguration(audioConfigurationRef, work).catch(() => undefined);
   }
 
   useLayoutEffect(() => {
