@@ -109,7 +109,7 @@ describe("main-process external control lifecycle", () => {
     app.fileSystem.readFile.mockImplementation((file) => file.endsWith("external-control.json") ? stored.promise : readFile(file));
     const received = vi.fn();
     const early = app.invoke("control:getSettings").then(received);
-    await vi.waitFor(() => expect(app.fileSystem.readFile).toHaveBeenCalledWith("/test/userData/external-control.json", "utf8"));
+    await vi.waitFor(() => expect(app.fileSystem.readFile).toHaveBeenCalledWith(path.join("/test/userData", "external-control.json"), "utf8"));
     await app.loaded();
     const duringStartup = app.invoke("control:getSettings");
     expect(received).not.toHaveBeenCalled();
