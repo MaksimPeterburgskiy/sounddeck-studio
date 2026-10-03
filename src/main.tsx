@@ -39,15 +39,17 @@ import {
   Trash2,
   Upload,
   Volume2,
+  VolumeX,
   Wand2,
   Waves,
   X
 } from "lucide-react";
+import { applyAudioControlCommand } from "./lib/controlSettings";
 import { AudioEngine } from "./lib/audioEngine";
 import { CONTROL_DEFAULT_PORT } from "./lib/controlProtocol";
 import { beginAudioConfiguration, trackAudioConfiguration, waitForAudioConfiguration, watchAudioDeviceChanges } from "./lib/controlReadiness";
 import { createSoundPlayQueue } from "./lib/soundPlayQueue";
-import type { ControlPlaybackResult, ControlPlaybackVoice, ControlSettingsPatch, ControlStatus } from "./lib/controlProtocol";
+import type { ControlPlaybackResult, ControlPlaybackVoice, ControlSettingsPatch, ControlStatus, RendererControlResult } from "./lib/controlProtocol";
 import type { AudioDeviceStatus, MicrophoneProcessingStatus } from "./lib/audioEngine";
 import { findVirtualAudioCandidates, getDefaultDeviceLabel, isSelectableMediaDevice, makeMicrophoneConstraints, normalizeMonitorDeviceId, normalizeSelectableDeviceId } from "./lib/devices";
 import type { VirtualAudioCandidate } from "./lib/devices";
@@ -90,6 +92,8 @@ function getActiveMonitorLabel(devices: MediaDeviceInfo[], activeDeviceId: strin
 
 function App() {
   const [library, setLibrary] = useState<SoundLibrary | null>(null);
+  const libraryRef = useRef<SoundLibrary | null>(null);
+  const controlRepliesRef = useRef<Array<{ result: RendererControlResult; resolve: (result: RendererControlResult) => void }>>([]);
   const [view, setView] = useState<View>("board");
   const [selectedSoundId, setSelectedSoundId] = useState<string>("");
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
@@ -249,15 +253,21 @@ function App() {
   }, []);
 
   useEffect(() => {
-    window.sounddeck.loadLibrary().then((loaded) => setLibrary(normalizeLibrary(loaded)));
+    window.sounddeck.loadLibrary().then((loaded) => {
+      libraryRef.current = normalizeLibrary(loaded);
+      setLibrary(libraryRef.current);
+    });
   }, []);
 
   useEffect(() => {
-    // Hold persistence while a pad drag is live: the order mutates many times
-    // per drag, and saving each transient step risks an out-of-order write
-    // landing last. The final drop/cancel state saves once when the drag ends.
-    if (!library || draggingSoundId) return;
-    void window.sounddeck.saveLibrary(library);
+    // Coalesce drag updates, but persist API changes before acknowledging them.
+    if (!library || library !== libraryRef.current || (draggingSoundId && !controlRepliesRef.current.length)) return;
+    const replies = controlRepliesRef.current.splice(0);
+    void window.sounddeck.saveLibrary(library).then(() => {
+      for (const reply of replies) reply.resolve(reply.result);
+    }).catch(() => {
+      for (const reply of replies) reply.resolve({ ok: false, code: "internal-error" });
+    });
   }, [library, draggingSoundId]);
 
   const virtualAudioCandidates = useMemo(() => findVirtualAudioCandidates(devices, platform), [devices, platform]);
@@ -597,16 +607,21 @@ function App() {
       return;
     }
     const { command, args } = request;
+    if (request.command === "setting.set" || request.command === "setting.toggle" || request.command === "volume.set" || request.command === "volume.adjust" || request.command === "volume.mute") {
+      const current = libraryRef.current;
+      if (!current) return { ok: false, code: "unavailable" };
+      const applied = applyAudioControlCommand(current.settings, request);
+      return new Promise<RendererControlResult>((resolve) => {
+        controlRepliesRef.current.push({ result: { ok: true, data: applied.data }, resolve });
+        updateLibrary((latest) => ({ ...latest, settings: applied.settings }));
+      });
+    }
     if (command === "sound.play") {
-      const sound = library?.boards.flatMap((board) => board.sounds).find((candidate) => candidate.id === args.soundId);
+      const sound = libraryRef.current?.boards.flatMap((board) => board.sounds).find((candidate) => candidate.id === args.soundId);
       const cancellation = new AbortController();
       controlRequests.current.set(request.requestId, cancellation);
       const result = sound ? triggerSound(sound, true, cancellation.signal) : Promise.resolve<ControlPlaybackResult>({ ok: false, code: "not-found" });
-      void result.then((result) => {
-        controlRequests.current.delete(request.requestId);
-        return window.sounddeck.completeControlPlayback(request.requestId, result);
-      }).catch(() => undefined);
-      return;
+      return result.finally(() => controlRequests.current.delete(request.requestId));
     }
     if (command === "sound.stop") {
       stopSound(args.soundId);
@@ -638,7 +653,11 @@ function App() {
   }
 
   function updateLibrary(updater: (current: SoundLibrary) => SoundLibrary) {
-    setLibrary((current) => current ? updater(current) : current);
+    const current = libraryRef.current;
+    if (!current) return;
+    const next = updater(current);
+    libraryRef.current = next;
+    setLibrary(next);
   }
 
   function updateBoard(boardId: string, patch: Partial<SoundBoard>) {
@@ -1704,9 +1723,14 @@ function Playhead({ engine, soundId, duration, active }: { engine: AudioEngine |
   return <div className="playhead" ref={lineRef} />;
 }
 
-function VolumeControl({ label, value, disabled, onChange }: { label: string; value: number; disabled?: boolean; onChange: (value: number) => void }) {
+function VolumeControl({ label, value, muted, disabled, onChange, onToggleMute }: { label: string; value: number; muted?: boolean; disabled?: boolean; onChange: (value: number) => void; onToggleMute?: () => void }) {
   return (
-    <div className="volumeRow">
+    <div className={`volumeRow${onToggleMute ? " volumeRowWithMute" : ""}`}>
+      {onToggleMute && (
+        <button type="button" className="settingsButton" aria-label={`${muted ? "Unmute" : "Mute"} ${label}`} title={`${muted ? "Unmute" : "Mute"} ${label}`} aria-pressed={muted} disabled={disabled} onClick={onToggleMute}>
+          {muted ? <VolumeX size={16} /> : <Volume2 size={16} />}
+        </button>
+      )}
       <input type="range" aria-label={label} min="0" max="1" step="0.01" disabled={disabled} value={value} onChange={(event) => onChange(Number(event.target.value))} />
       <input
         type="number"
@@ -2735,13 +2759,13 @@ function DevicePanel({ library, inputDevices, outputDevices, defaultInputLabel, 
           <Switch label="Microphone to virtual mic" checked={settings.micPassthrough} onChange={(micPassthrough) => onChange({ micPassthrough })} />
         </SettingsRow>
         <SettingsRow icon={<Volume2 size={16} />} title="Mic volume" description="How loud your voice is in the virtual mic." disabled={!settings.micPassthrough}>
-          <VolumeControl label="Mic volume (virtual mic)" value={settings.micVirtualVolume} disabled={!settings.micPassthrough} onChange={(micVirtualVolume) => onChange({ micVirtualVolume })} />
+          <VolumeControl label="Mic volume (virtual mic)" value={settings.micVirtualVolume} muted={settings.micVirtualMuted} onToggleMute={() => onChange({ micVirtualMuted: !settings.micVirtualMuted })} disabled={!settings.micPassthrough} onChange={(micVirtualVolume) => onChange({ micVirtualVolume, micVirtualMuted: false })} />
         </SettingsRow>
         <SettingsRow icon={<AudioLines size={16} />} title="Soundboard to virtual mic" description="Play sounds through the virtual mic.">
           <Switch label="Soundboard to virtual mic" checked={settings.soundboardToVirtualMic} onChange={(soundboardToVirtualMic) => onChange({ soundboardToVirtualMic })} />
         </SettingsRow>
         <SettingsRow icon={<Volume2 size={16} />} title="Soundboard volume" description="How loud sounds are in the virtual mic." disabled={!settings.soundboardToVirtualMic}>
-          <VolumeControl label="Soundboard volume (virtual mic)" value={settings.soundboardVirtualVolume} disabled={!settings.soundboardToVirtualMic} onChange={(soundboardVirtualVolume) => onChange({ soundboardVirtualVolume })} />
+          <VolumeControl label="Soundboard volume (virtual mic)" value={settings.soundboardVirtualVolume} muted={settings.soundboardVirtualMuted} onToggleMute={() => onChange({ soundboardVirtualMuted: !settings.soundboardVirtualMuted })} disabled={!settings.soundboardToVirtualMic} onChange={(soundboardVirtualVolume) => onChange({ soundboardVirtualVolume, soundboardVirtualMuted: false })} />
         </SettingsRow>
       </SettingsCard>
 
@@ -2830,13 +2854,13 @@ function DevicePanel({ library, inputDevices, outputDevices, defaultInputLabel, 
           <Switch label="Monitor soundboard" checked={settings.monitorToHeadphones} onChange={(monitorToHeadphones) => onChange({ monitorToHeadphones })} />
         </SettingsRow>
         <SettingsRow icon={<Volume2 size={16} />} title="Soundboard volume" description="How loud sounds are in your headphones." disabled={!settings.monitorToHeadphones}>
-          <VolumeControl label="Soundboard volume (monitoring)" value={settings.soundboardMonitorVolume} disabled={!settings.monitorToHeadphones} onChange={(soundboardMonitorVolume) => onChange({ soundboardMonitorVolume })} />
+          <VolumeControl label="Soundboard volume (monitoring)" value={settings.soundboardMonitorVolume} muted={settings.soundboardMonitorMuted} onToggleMute={() => onChange({ soundboardMonitorMuted: !settings.soundboardMonitorMuted })} disabled={!settings.monitorToHeadphones} onChange={(soundboardMonitorVolume) => onChange({ soundboardMonitorVolume, soundboardMonitorMuted: false })} />
         </SettingsRow>
         <SettingsRow icon={<Ear size={16} />} title="Monitor microphone" description="Hear your own voice in your headphones.">
           <Switch label="Monitor microphone" checked={settings.monitorMicToHeadphones} onChange={(monitorMicToHeadphones) => onChange({ monitorMicToHeadphones })} />
         </SettingsRow>
         <SettingsRow icon={<Volume2 size={16} />} title="Mic volume" description="How loud your voice is in your headphones." disabled={!settings.monitorMicToHeadphones}>
-          <VolumeControl label="Mic volume (monitoring)" value={settings.micMonitorVolume} disabled={!settings.monitorMicToHeadphones} onChange={(micMonitorVolume) => onChange({ micMonitorVolume })} />
+          <VolumeControl label="Mic volume (monitoring)" value={settings.micMonitorVolume} muted={settings.micMonitorMuted} onToggleMute={() => onChange({ micMonitorMuted: !settings.micMonitorMuted })} disabled={!settings.monitorMicToHeadphones} onChange={(micMonitorVolume) => onChange({ micMonitorVolume, micMonitorMuted: false })} />
         </SettingsRow>
       </SettingsCard>
     </div>

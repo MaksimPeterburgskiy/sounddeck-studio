@@ -26,6 +26,10 @@ export function installDevBridge() {
           micMonitorVolume: 1,
           soundboardVirtualVolume: 1,
           soundboardMonitorVolume: 1,
+          micVirtualMuted: false,
+          micMonitorMuted: false,
+          soundboardVirtualMuted: false,
+          soundboardMonitorMuted: false,
           monitorDeviceId: "",
           monitorDeviceLabel: "",
           virtualOutputDeviceId: "",
@@ -148,9 +152,6 @@ export function installDevBridge() {
       return this.setControlSettings({});
     },
     async pushControlState() {
-      return { ok: true };
-    },
-    async completeControlPlayback() {
       return { ok: true };
     },
     async controlReady() {

@@ -47,7 +47,7 @@ contextBridge.exposeInMainWorld("sounddeck", {
   setControlSettings: (patch) => ipcRenderer.invoke("control:setSettings", patch),
   regenerateControlToken: () => ipcRenderer.invoke("control:regenerateToken"),
   pushControlState: (state) => controlReadyToken.then((token) => ipcRenderer.invoke("control:state", state, token)),
-  completeControlPlayback: (requestId, result) => controlReadyToken.then((token) => ipcRenderer.invoke("control:playbackResult", requestId, result, token)),
+
   controlReady: () => controlReadyToken.then((token) => ipcRenderer.invoke("control:ready", token)),
   onControlStatus: (callback) => {
     const listener = (_event, state) => callback(state);
@@ -55,7 +55,15 @@ contextBridge.exposeInMainWorld("sounddeck", {
     return () => ipcRenderer.removeListener("control-status", listener);
   },
   onControlCommand: (callback) => {
-    const listener = (_event, command) => callback(command);
+    const listener = async (_event, { requestId, ...command }) => {
+      let result;
+      try {
+        result = await callback(command);
+      } catch {
+        result = { ok: false, code: "internal-error" };
+      }
+      if (requestId) void controlReadyToken.then((token) => ipcRenderer.invoke("control:result", requestId, result, token)).catch(() => {});
+    };
     ipcRenderer.on("control-command", listener);
     return () => ipcRenderer.removeListener("control-command", listener);
   },
