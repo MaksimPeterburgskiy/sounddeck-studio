@@ -435,6 +435,24 @@ describe("external control authentication", () => {
     expect(await upgradeStatus({ Origin: "null" })).toBe(403);
   });
 
+  it.each([undefined, "github", "marketplace"])("accepts optional client distribution %s without changing protocol 1", async (distribution) => {
+    await create();
+    const connection = await client();
+    const metadata = { name: "SoundDeck Stream Deck plugin", version: "0.1.21", ...(distribution ? { distribution } : {}) };
+    connection.send(hello({ client: metadata }));
+    expect(await connection.next()).toMatchObject({ type: "welcome", protocol: 1 });
+    expect(bridge.getState().clients).toEqual([metadata]);
+  });
+
+  it.each([null, 1, {}, "", "other"])("rejects invalid client distribution %s", async (distribution) => {
+    await create();
+    const connection = await client();
+    connection.send(hello({ client: { name: "client", version: "1", distribution } }));
+    expect(await connection.next()).toMatchObject({ type: "error", code: "invalid-message" });
+    await connection.closed;
+    expect(bridge.getState().clients).toEqual([]);
+  });
+
   it.each(["wrong", undefined])("rejects a hello with token %s", async (token) => {
     await create();
     const connection = await client();

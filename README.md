@@ -97,7 +97,7 @@ Available actions:
 
 For third-party tools and scripts, see the [External Control API](docs/control-api.md). Settings shows the port and token you need to connect.
 
-When SoundDeck Studio bundles a newer plugin than the installed one, Settings offers **Update plugin**. Updates open only when you click the button; dismissing a notice hides it for that bundled version. Stream Deck may ask you to confirm, or older versions may require removing the old plugin first. If the installed version cannot be read, connect the plugin with external control enabled so it can report its version.
+When a connected plugin reports that it came from our GitHub downloads and is older than the bundled plugin, Settings offers **Update plugin**. Marketplace installations and plugins with unknown provenance (including older plugins without the distribution marker or manifest-only detection) receive no app-managed update offers. Enable external control and connect the plugin so it can report its version and distribution. Updates open only when you click the button; dismissing a notice hides it for that bundled version. Stream Deck may ask you to confirm, or older versions may require removing the old plugin first.
 
 **Allow connections from other devices** opens access to your local network. Keep it off unless you need remote clients: the token and commands travel unencrypted. The Stream Deck plugin uses the local connection and does not need this toggle.
 

@@ -51,6 +51,14 @@ Connect to `ws://127.0.0.1:41730/` and send a valid hello within **5 seconds**:
 
 `protocol` must be an integer. Client name (up to 128 characters) and version (up to 64 characters) are required and appear in Settings. Strings must not contain control characters.
 
+`client.distribution` is an optional additive field in protocol **1**, with allowed values `"github"` and `"marketplace"`. The Stream Deck plugin embeds this marker at build time and reports it alongside its app version:
+
+```json
+{"type":"hello","protocol":1,"token":"YOUR_TOKEN","client":{"name":"SoundDeck Stream Deck plugin","version":"0.1.22","distribution":"github"}}
+```
+
+The server retains the marker in its connected-client metadata. Older clients may omit it. SoundDeck Studio offers bundled plugin updates only for connected plugins reporting `"github"`; Marketplace clients and unknown provenance receive no app-managed update offers. A readable installed manifest can identify the version but does not establish provenance. Token authentication alone does not establish the installation source.
+
 The server replies:
 
 ```json

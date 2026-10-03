@@ -6,7 +6,7 @@ import os from "node:os";
 import { createRequire } from "node:module";
 import { WebSocketServer } from "ws";
 import type { ControlCommand, ControlHello } from "../../src/lib/controlProtocol";
-import { Connection } from "./connection";
+import { Connection, type ConnectionOptions } from "./connection";
 import { SoundKeyPresses } from "./soundKeyPresses";
 import { parseDiscovery, type DiscoveryFile } from "./discovery";
 
@@ -23,7 +23,7 @@ afterEach(async () => {
 async function waitFor(predicate: () => boolean) {
   await vi.waitFor(() => expect(predicate()).toBe(true), { timeout: 3000, interval: 10 });
 }
-async function realServer(options: { cooldownMs?: number } = {}) {
+async function realServer(options: { cooldownMs?: number } = {}, distribution?: ConnectionOptions["distribution"]) {
   const directory = await mkdtemp(path.join(os.tmpdir(), ".connection-test-"));
   resources.push(() => rm(directory, { recursive: true, force: true }));
   const upgrades: http.IncomingHttpHeaders[] = [];
@@ -43,7 +43,7 @@ async function realServer(options: { cooldownMs?: number } = {}) {
   bridge.updateLiveState({ activeBoardId: "board-a", playback: [] });
   await bridge.setSettings({ enabled: true });
   const readDiscovery = async (): Promise<DiscoveryFile> => ({ path: directory, state: parseDiscovery(JSON.parse(await readFile(path.join(directory, "external-control.json"), "utf8"))) });
-  const connection = new Connection("0.1.22", { discover: readDiscovery, retryMinMs: 20, retryMaxMs: 50 });
+  const connection = new Connection("0.1.22", { discover: readDiscovery, retryMinMs: 20, retryMaxMs: 50, distribution });
   resources.push(() => connection.stop());
   return { bridge, connection, readDiscovery, upgrades, command };
 }
@@ -102,6 +102,13 @@ describe("shared connection", () => {
     expect(press.command).toBe("sound.press");
     expect(commands.mock.calls[5][0]).toMatchObject({ command: "sound.release", args: { pressId: (press.args as { pressId: string }).pressId } });
     expect(commands).toHaveBeenCalledTimes(6);
+  });
+
+  it.each(["github", "marketplace"] as const)("reports the build distribution %s to the server", async (distribution) => {
+    const { bridge, connection } = await realServer({}, distribution);
+    connection.start();
+    await waitFor(() => connection.status === "connected");
+    expect(bridge.getState().clients).toEqual([{ name: "SoundDeck Stream Deck plugin", version: "0.1.22", distribution }]);
   });
 
   it("releases held keys on socket closure and sends no stale releases after reconnect", async () => {
