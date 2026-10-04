@@ -300,15 +300,25 @@ describe("external control library persistence", () => {
     const savedLibraries = new WeakSet<SoundLibrary>();
     const save = deferred<{ ok: boolean }>();
     const cancellation = new AbortController();
-    const saving = persistControlLibrary(snapshot, savedLibraries, () => save.promise, cancellation.signal);
+    const saveLibrary = vi.fn(async (_library: SoundLibrary) => ({ ok: true })).mockReturnValueOnce(save.promise);
+    // The normal persistence path retries the current snapshot without an edit.
+    const retry = vi.fn(() => {
+      if (!savedLibraries.has(snapshot)) void saveLibrary(snapshot);
+    });
+    const saving = persistControlLibrary(snapshot, savedLibraries, saveLibrary, cancellation.signal, retry);
     expect(savedLibraries.has(snapshot)).toBe(true);
     cancellation.abort("operation-timeout");
     await expect(saving).rejects.toThrow("Control operation cancelled");
     expect(savedLibraries.has(snapshot)).toBe(false);
+    expect(retry).toHaveBeenCalledOnce();
+    expect(saveLibrary).toHaveBeenCalledTimes(2);
+    expect(saveLibrary).toHaveBeenLastCalledWith(snapshot);
     if (outcome === "saved") save.resolve({ ok: true });
     else save.reject(new Error("disk full"));
     await Promise.resolve();
     expect(savedLibraries.has(snapshot)).toBe(false);
+    expect(retry).toHaveBeenCalledOnce();
+    expect(saveLibrary).toHaveBeenCalledTimes(2);
   });
 
   it.each(["reject", "not-ok"])("leaves an unsaved edit eligible for UI persistence after a same-value command's save fails (%s)", async (failure) => {
@@ -339,7 +349,9 @@ describe("external control library persistence", () => {
   it("keeps successfully saved snapshots excluded from UI persistence", async () => {
     const snapshot: SoundLibrary = { version: 1, activeBoardId: "", boards: [], settings: makeAudioSettings() };
     const savedLibraries = new WeakSet<SoundLibrary>();
-    await persistControlLibrary(snapshot, savedLibraries, async () => ({ ok: true }));
+    const retry = vi.fn();
+    await persistControlLibrary(snapshot, savedLibraries, async () => ({ ok: true }), undefined, retry);
+    expect(retry).not.toHaveBeenCalled();
     expect(savedLibraries.has(snapshot)).toBe(true);
   });
 });

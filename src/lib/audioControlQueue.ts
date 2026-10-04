@@ -71,7 +71,8 @@ export async function persistControlLibrary(
   snapshot: SoundLibrary,
   savedLibraries: WeakSet<SoundLibrary>,
   saveLibrary: (library: SoundLibrary) => Promise<{ ok: boolean }>,
-  cancellation?: AbortSignal
+  cancellation?: AbortSignal,
+  requestPersistence?: () => void
 ) {
   // Reserve the snapshot while saving so the UI persistence effect skips it.
   savedLibraries.add(snapshot);
@@ -82,6 +83,9 @@ export async function persistControlLibrary(
     // An unconfirmed (including timed-out) save must remain eligible for the
     // UI's normal persistence. Late completion cannot mark it saved again.
     savedLibraries.delete(snapshot);
+    // Releasing the reservation does not change React's library dependency.
+    // Retry once through normal UI persistence; its failures do not requeue.
+    if (cancellation?.reason === "operation-timeout") requestPersistence?.();
     throw error;
   }
 }

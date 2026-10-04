@@ -94,6 +94,7 @@ function App() {
   const [library, setLibrary] = useState<SoundLibrary | null>(null);
   const libraryRef = useRef<SoundLibrary | null>(null);
   const controlSavedLibrariesRef = useRef(new WeakSet<SoundLibrary>());
+  const [persistenceRevision, setPersistenceRevision] = useState(0);
   const [view, setView] = useState<View>("board");
   const [selectedSoundId, setSelectedSoundId] = useState<string>("");
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
@@ -138,7 +139,7 @@ function App() {
   const audioControlQueue = useMemo(() => createAudioControlQueue({
     getSettings: () => libraryRef.current?.settings ?? null,
     writeSettings: (settings) => updateLibrary((current) => ({ ...current, settings })),
-    persist: (cancellation) => persistControlLibrary(libraryRef.current!, controlSavedLibrariesRef.current, window.sounddeck.saveLibrary, cancellation),
+    persist: (cancellation) => persistControlLibrary(libraryRef.current!, controlSavedLibrariesRef.current, window.sounddeck.saveLibrary, cancellation, () => setPersistenceRevision((revision) => revision + 1)),
     waitForConfiguration: () => waitForAudioConfiguration(() => audioConfigurationRef.current)
   }), []);
   const queueSoundPlay = useMemo(() => createSoundPlayQueue(), []);
@@ -270,7 +271,7 @@ function App() {
     // External mutations own their save; UI edits and rollback snapshots use this path.
     if (!library || library !== libraryRef.current || draggingSoundId || controlSavedLibrariesRef.current.has(library)) return;
     void window.sounddeck.saveLibrary(library).catch(() => undefined);
-  }, [library, draggingSoundId]);
+  }, [library, draggingSoundId, persistenceRevision]);
 
   const virtualAudioCandidates = useMemo(() => findVirtualAudioCandidates(devices, platform), [devices, platform]);
   const recommendedVirtualAudio = useMemo(() => virtualAudioCandidates.find((candidate) => candidate.recommended) || null, [virtualAudioCandidates]);
