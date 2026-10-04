@@ -13,10 +13,9 @@ export interface ConnectionOptions {
   now?: () => number;
   retryMinMs?: number;
   retryMaxMs?: number;
-  commandTimeoutMs?: number;
   handshakeTimeoutMs?: number;
 }
-interface PendingCommand { resolve: (result: ControlResult) => void; timer: ReturnType<typeof setTimeout> }
+interface PendingCommand { resolve: (result: ControlResult) => void }
 
 /** One native, loopback session is shared by every visible action and inspector. */
 export class Connection {
@@ -34,6 +33,7 @@ export class Connection {
   private socket: WebSocket | null = null;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
   private handshakeTimer?: ReturnType<typeof setTimeout>;
+  private heartbeatTimer?: ReturnType<typeof setInterval>;
   private readonly listeners = new Set<() => void>();
   private readonly pending = new Map<string, PendingCommand>();
   private nextCommand = 0;
@@ -82,6 +82,7 @@ export class Connection {
     ++this.generation;
     clearTimeout(this.reconnectTimer);
     clearTimeout(this.handshakeTimer);
+    clearInterval(this.heartbeatTimer);
     this.reconnectTimer = undefined;
     const socket = this.socket;
     this.socket = null;
@@ -130,6 +131,8 @@ export class Connection {
     });
     this.socket = socket;
     const current = () => this.running && generation === this.generation && this.socket === socket;
+    let alive = true;
+    socket.on("pong", () => { alive = true; });
     socket.on("open", () => {
       if (!current()) return socket.terminate();
       const hello: ControlHello = {
@@ -139,6 +142,15 @@ export class Connection {
       socket.send(JSON.stringify(hello));
       this.handshakeTimer = setTimeout(() => socket.terminate(), this.options.handshakeTimeoutMs ?? 5000);
       this.handshakeTimer.unref?.();
+      // Bound unresponsive sessions without imposing a deadline on media
+      // decoding or accepted audio-routing operations.
+      this.heartbeatTimer = setInterval(() => {
+        if (!current()) return;
+        if (!alive) return socket.terminate();
+        alive = false;
+        socket.ping();
+      }, 30_000);
+      this.heartbeatTimer.unref?.();
     });
     socket.on("message", (data, binary) => {
       if (!current()) return;
@@ -180,6 +192,7 @@ export class Connection {
     socket.on("close", () => {
       if (!current()) return;
       clearTimeout(this.handshakeTimer);
+      clearInterval(this.heartbeatTimer);
       this.socket = null;
       this.failPending();
       this.invalidateImages();
@@ -211,7 +224,6 @@ export class Connection {
     } else if (message.type === "result") {
       const pending = this.pending.get(message.id);
       if (!pending) return;
-      clearTimeout(pending.timer);
       this.pending.delete(message.id);
       pending.resolve(message);
     } else if (message.type === "event" && this.status === "connected" && this.snapshot) {
@@ -242,17 +254,14 @@ export class Connection {
       return Promise.resolve({ type: "result", id, ok: false, code: "unavailable" });
     }
     return new Promise((resolve) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id);
-        resolve({ type: "result", id, ok: false, code: "unavailable" });
-      }, this.options.commandTimeoutMs ?? 5000);
-      timer.unref?.();
-      this.pending.set(id, { resolve, timer });
+      // Accepted playback and routing can take longer than five seconds. Only
+      // the server can report their outcome; a disconnect fails pending requests
+      // and cancels the session's work before the connection is retried.
+      this.pending.set(id, { resolve });
       this.socket!.send(JSON.stringify({ type: "command", id, command, args }), (error) => {
         if (!error) return;
         const pending = this.pending.get(id);
         if (!pending) return;
-        clearTimeout(pending.timer);
         this.pending.delete(id);
         pending.resolve({ type: "result", id, ok: false, code: "unavailable" });
       });
@@ -261,7 +270,6 @@ export class Connection {
 
   private failPending(): void {
     for (const [id, pending] of this.pending) {
-      clearTimeout(pending.timer);
       pending.resolve({ type: "result", id, ok: false, code: "unavailable" });
     }
     this.pending.clear();

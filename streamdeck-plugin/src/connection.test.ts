@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { createRequire } from "node:module";
-import { WebSocketServer } from "ws";
+import { WebSocketServer, type ServerOptions } from "ws";
 import { Connection } from "./connection";
 import { parseDiscovery, type DiscoveryFile } from "./discovery";
 
@@ -21,11 +21,11 @@ afterEach(async () => {
 async function waitFor(predicate: () => boolean) {
   await vi.waitFor(() => expect(predicate()).toBe(true), { timeout: 3000, interval: 10 });
 }
-async function realServer(options: { cooldownMs?: number } = {}) {
+async function realServer(options: { cooldownMs?: number; createWebSocketServer?: (options: ServerOptions) => WebSocketServer } = {}) {
   const directory = await mkdtemp(path.join(os.tmpdir(), ".connection-test-"));
   resources.push(() => rm(directory, { recursive: true, force: true }));
   const upgrades: http.IncomingHttpHeaders[] = [];
-  const command = vi.fn(() => ({ ok: true }));
+  const command = vi.fn(async (_command: unknown, _signal: AbortSignal) => ({ ok: true }));
   const bridge = createExternalControlBridge({
     userData: directory, appVersion: "0.1.22", appPath: "/Applications/SoundDeck Studio.app", defaultPort: 0,
     onCommand: command, ...options,
@@ -73,6 +73,68 @@ describe("shared connection", () => {
     expect(command).toHaveBeenCalledWith({ command: "sound.play", args: { soundId: "sound-a" } }, expect.any(AbortSignal));
     expect(changed).toHaveBeenCalled();
     unsubscribe();
+  });
+
+  it("waits for slow command results and settles pending work on disconnect before reconnecting", async () => {
+    const { bridge, connection, command } = await realServer();
+    connection.start();
+    await waitFor(() => connection.status === "connected");
+    let finish!: () => void;
+    const work = new Promise<void>((resolve) => { finish = resolve; });
+    command.mockImplementation(async (_command, signal) => {
+      await work;
+      return { ok: !signal.aborted };
+    });
+    vi.useFakeTimers();
+    const completed = vi.fn();
+    const play = connection.command("sound.play", { soundId: "sound-a" }).then(completed);
+    const routing = connection.command("setting.toggle", { key: "micPassthrough" }).then(completed);
+    await waitFor(() => command.mock.calls.length === 2);
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(completed).not.toHaveBeenCalled();
+    expect(command.mock.calls.every(([, signal]) => !signal.aborted)).toBe(true);
+    vi.useRealTimers();
+    finish();
+    await Promise.all([play, routing]);
+    expect(completed.mock.calls.map(([result]) => result)).toEqual([
+      { type: "result", id: "c1", ok: true },
+      { type: "result", id: "c2", ok: true },
+    ]);
+
+    command.mockImplementationOnce((_command, signal) => new Promise((resolve) => {
+      signal.addEventListener("abort", () => resolve({ ok: false }), { once: true });
+    }));
+    const disconnected = connection.command("sound.play", { soundId: "sound-a" });
+    await waitFor(() => command.mock.calls.length === 3);
+    await bridge.stop();
+    expect(await disconnected).toEqual({ type: "result", id: "c3", ok: false, code: "unavailable" });
+    expect(command.mock.calls[2][1].aborted).toBe(true);
+    await bridge.start();
+    await waitFor(() => connection.status === "connected");
+    expect((await connection.command("sound.play", { soundId: "sound-a" })).ok).toBe(true);
+    expect(command).toHaveBeenCalledTimes(4);
+  });
+
+  it("disconnects an unresponsive server, cancels pending commands, and reconnects", async () => {
+    const { connection, command } = await realServer({
+      createWebSocketServer: (options) => new WebSocketServer({ ...options, autoPong: false }),
+    });
+    // Keep network and reconnect timers real while advancing the heartbeat.
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    connection.start();
+    await waitFor(() => connection.status === "connected");
+    command.mockImplementationOnce((_command, signal) => new Promise((resolve) => {
+      signal.addEventListener("abort", () => resolve({ ok: false }), { once: true });
+    }));
+    const pending = connection.command("sound.play", { soundId: "sound-a" });
+    await waitFor(() => command.mock.calls.length === 1);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(await pending).toEqual({ type: "result", id: "c1", ok: false, code: "unavailable" });
+    await waitFor(() => command.mock.calls[0][1].aborted);
+    await waitFor(() => connection.status === "connected");
+    expect((await connection.command("sound.play", { soundId: "sound-a" })).ok).toBe(true);
+    expect(command).toHaveBeenCalledTimes(2);
   });
 
   it("shows auth-error for a wrong token, rereads discovery, and reconnects after token regeneration", async () => {
