@@ -81,6 +81,32 @@ describe("model helpers", () => {
     expect(retriggerModeLabel("stop")).toBe("Play / stop toggle");
   });
 
+  it("migrates missing mute flags and normalizes saved flags without changing volumes", () => {
+    const library = normalizeLibrary({
+      version: 1,
+      activeBoardId: "",
+      boards: [],
+      settings: {
+        micVirtualVolume: 0.25,
+        micMonitorVolume: 2,
+        soundboardVirtualVolume: -0.5,
+        micVirtualMuted: true,
+        micMonitorMuted: "true",
+        soundboardVirtualMuted: null,
+        soundboardMonitorMuted: false
+      } as unknown as SoundLibrary["settings"]
+    });
+    expect(library.settings.micVirtualVolume).toBe(0.25);
+    expect(library.settings.micMonitorVolume).toBe(1);
+    expect(library.settings.soundboardVirtualVolume).toBe(0);
+    expect(library.settings.micVirtualMuted).toBe(true);
+    expect(library.settings.micMonitorMuted).toBe(false);
+    expect(library.settings.soundboardVirtualMuted).toBe(false);
+    expect(library.settings.soundboardMonitorMuted).toBe(false);
+    const legacy = normalizeLibrary({ ...library, settings: {} as SoundLibrary["settings"] });
+    expect([legacy.settings.micVirtualMuted, legacy.settings.micMonitorMuted, legacy.settings.soundboardVirtualMuted, legacy.settings.soundboardMonitorMuted]).toEqual([false, false, false, false]);
+  });
+
   it("normalizes microphone processing settings", () => {
     const library = normalizeLibrary({
       version: 1,

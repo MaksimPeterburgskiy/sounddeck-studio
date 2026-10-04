@@ -54,10 +54,10 @@ Connect to `ws://127.0.0.1:41730/` and send a valid hello within **5 seconds**:
 The server replies:
 
 ```json
-{"type":"welcome","protocol":1,"app":{"version":"0.1.22"},"state":{"activeBoardId":"board-a","playback":[],"library":{"activeBoardId":"board-a","boards":[]}}}
+{"type":"welcome","protocol":1,"app":{"version":"0.1.22"},"state":{"activeBoardId":"board-a","playback":[],"library":{"activeBoardId":"board-a","boards":[]},"settings":{"micPassthrough":false,"soundboardToVirtualMic":false,"noiseSuppressionEnabled":false,"echoCancellationEnabled":false,"monitorToHeadphones":true},"volumes":{"micVirtual":{"value":1,"muted":false},"micMonitor":{"value":1,"muted":false},"soundboardVirtual":{"value":1,"muted":false},"soundboardMonitor":{"value":1,"muted":false}}}}
 ```
 
-A snapshot contains `activeBoardId`, `playback`, and `library`. Library data is:
+A snapshot contains `activeBoardId`, `playback`, `library`, `settings` (the five audio toggles), and `volumes` (each bus's stored level and mute state). Library data is:
 
 ```json
 {"activeBoardId":"board-a","boards":[{"id":"board-a","name":"Main","color":"#1db7a6","sounds":[{"id":"sound-a","title":"Airhorn","color":"#1db7a6","hasImage":true}]}]}
@@ -76,7 +76,11 @@ Responses carry the same ID:
 {"type":"result","id":"c7","ok":false,"code":"not-found"}
 ```
 
-A successful `sound.play` result confirms the sound's tap/retrigger action after the latest audio route configuration, including device refresh and preferred-device retries, settles, not audio completion. If no output route is enabled for the sound, it returns `unavailable`. Disconnecting cancels that client’s plays that have not started; voices already started continue. Stops cancel earlier queued plays, while later plays remain queued. Other playback/board results acknowledge dispatch to the app. Commands respect the sound's existing tap/retrigger behavior. Trigger commands return `busy` while a hotkey is being captured and `unavailable` if the renderer is absent or still initializing, including during a reload; cached library/image queries still work.
+A successful `sound.play` result confirms the sound's tap/retrigger action after the latest audio route configuration, including device refresh and preferred-device retries, settles, not audio completion. If no output route is enabled for the sound, it returns `unavailable`. Disconnecting cancels that client’s plays that have not started; voices already started continue. Stops cancel earlier queued plays, while later plays remain queued. Other playback/board results acknowledge dispatch to the app. Commands respect the sound's existing tap/retrigger behavior.
+
+Setting/volume mutations run in renderer receipt order, one at a time. Results include the values applied and saved by the renderer and wait for tracked audio configuration, including device refresh and preferred-device retries, to settle. Setting/volume commands and `sound.play` have a five-second receipt timeout: a late delivery returns `unavailable` without being applied. Once received, they have no completion timeout; renderer loss or reset fails pending requests. Disconnecting cancels that client’s queued mutations that have not been applied; an applied mutation finishes saving and configuring audio even if its client disconnects.
+
+Commands that change app state return `busy` while a hotkey is being captured and `unavailable` if the renderer is absent or still initializing, including during a reload; cached library/image queries still work.
 
 | Command | Args | Result data |
 | --- | --- | --- |
@@ -87,8 +91,31 @@ A successful `sound.play` result confirms the sound's tap/retrigger action after
 | `board.cycle` | Optional `direction`: `1` (default) or `-1` | — |
 | `library.get` | `{}` | Library summary in `data` |
 | `sound.image` | `soundId` | `data: {"image":"data:image/png;base64,..."}`; `image: null` if no custom image |
+| `setting.set` | `key`, `value`: boolean | `data: {key,value}` |
+| `setting.toggle` | `key` | `data: {key,value}` |
+| `volume.set` | `bus`, `value`: number from 0 to 1 | `data: {bus,value,muted}` |
+| `volume.adjust` | `bus`, `delta`: finite number | `data: {bus,value,muted}` |
+| `volume.mute` | `bus`, optional `muted`: boolean | `data: {bus,value,muted}` |
 
 `sound.play` resolves the sound ID first. If it is missing, an exact title match within the supplied board is used; the first matching sound in board order wins. This lets saved bindings survive a board re-import. If neither resolves, the result is `not-found`. `sound.stop` stops every voice for that ID; it does not use fallback lookup. Cycling wraps around in either direction.
+
+Setting keys are `micPassthrough`, `soundboardToVirtualMic`, `noiseSuppressionEnabled`, `echoCancellationEnabled`, and `monitorToHeadphones`. Volume buses map to the app's controls as follows:
+
+| Bus | App control |
+| --- | --- |
+| `micVirtual` | Microphone volume sent to the virtual mic |
+| `micMonitor` | Microphone volume sent to headphones |
+| `soundboardVirtual` | Soundboard volume sent to the virtual mic |
+| `soundboardMonitor` | Soundboard volume sent to headphones |
+
+`volume.adjust` adds `delta` to the stored level and clamps the result to 0–1; `volume.set` rejects values outside that range. Setting or adjusting a muted bus's volume unmutes it, including a zero delta. Mute preserves the stored level and applies zero gain; `volume.mute` toggles mute when `muted` is omitted. Changes persist and update the app UI and audio routing through the same settings path as in-app controls.
+
+```json
+{"type":"command","id":"c8","command":"setting.toggle","args":{"key":"micPassthrough"}}
+{"type":"result","id":"c8","ok":true,"data":{"key":"micPassthrough","value":true}}
+{"type":"command","id":"c9","command":"volume.adjust","args":{"bus":"soundboardVirtual","delta":-0.05}}
+{"type":"result","id":"c9","ok":true,"data":{"bus":"soundboardVirtual","value":0.95,"muted":false}}
+```
 
 Events go to every authenticated WebSocket client:
 
@@ -102,12 +129,16 @@ Events go to every authenticated WebSocket client:
 | `library.changed` | Full library summary; also sent when an image changes, so clients can invalidate image caches |
 | `board.changed` | `{activeBoardId}` |
 | `playback.changed` | Array of `{soundId, startedAt, duration, loop}`; an empty array means playback stopped |
+| `settings.changed` | Full object of the five audio toggle values, matching snapshot `settings` |
+| `volumes.changed` | Full object of the four buses, each `{value,muted}`, matching snapshot `volumes` |
+
+Audio settings and volume events are emitted whenever their values change through the API, app UI, or library load. Unchanged values do not emit duplicate events. Clients should use command correlation IDs independently of events; an event can arrive before the corresponding result.
 
 Each playback entry represents a voice, so overlapping voices can repeat a sound ID. `startedAt` is epoch milliseconds; `duration` is effective clip length in seconds, accounting for trim, playback rate and pitch. Clients can animate progress locally without polling. Live pitch changes adjust duration and the time origin to preserve progress. Loops repeat over this duration. Fade-out tails follow the app's existing stopped-state behavior.
 
 ## HTTP
 
-Every endpoint requires `Authorization: Bearer <token>`. GET responses are the snapshot/library directly. POST responses are `{ok:true}` or `{ok:false,code}`. JSON bodies may be omitted for commands with no body arguments. Headers and bodies have a 10-second receive deadline; a fully received command has no socket inactivity timeout while playback preparation is pending.
+Every endpoint requires `Authorization: Bearer <token>`. GET responses are the snapshot/library directly. POST responses are `{ok:true}`, `{ok:true,data}` for setting/volume changes, or `{ok:false,code}`. JSON bodies may be omitted for commands with no body arguments. Headers and bodies have a 10-second receive deadline; a fully received command has no socket inactivity timeout while playback preparation or an audio mutation is pending.
 
 | Method | Path | JSON body |
 | --- | --- | --- |
@@ -118,6 +149,10 @@ Every endpoint requires `Authorization: Bearer <token>`. GET responses are the s
 | POST | `/v1/stop-all` | `{}` |
 | POST | `/v1/boards/{id}/activate` | `{}` |
 | POST | `/v1/boards/cycle` | Optional `{direction:1}` or `{direction:-1}` |
+| POST | `/v1/settings/{key}` | Exactly one of `{value:true}`, `{value:false}`, or `{toggle:true}` |
+| POST | `/v1/volumes/{bus}` | Exactly one of `{value:number}`, `{delta:number}`, `{muted:true}`, `{muted:false}`, or `{toggleMute:true}` |
+
+Settings and volume bodies require exactly one field; empty bodies, extra fields, and combinations are rejected. `toggle` and `toggleMute` accept only `true`. All argument validation and result data are shared with WebSocket commands.
 
 ```sh
 TOKEN='paste-token-from-settings'
@@ -130,6 +165,18 @@ curl -X POST -H "Authorization: Bearer $TOKEN" "$BASE/v1/stop-all"
 curl -X POST -H "Authorization: Bearer $TOKEN" "$BASE/v1/boards/board-a/activate"
 curl -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d '{"direction":-1}' "$BASE/v1/boards/cycle"
+curl -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"value":true}' "$BASE/v1/settings/micPassthrough"
+curl -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"toggle":true}' "$BASE/v1/settings/monitorToHeadphones"
+curl -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"value":0.75}' "$BASE/v1/volumes/soundboardVirtual"
+curl -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"delta":-0.05}' "$BASE/v1/volumes/micMonitor"
+curl -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"muted":true}' "$BASE/v1/volumes/micVirtual"
+curl -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"toggleMute":true}' "$BASE/v1/volumes/soundboardMonitor"
 ```
 
 ## Errors and versioning

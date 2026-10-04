@@ -82,14 +82,15 @@ async function boot(storageError) {
   const electron = {
     app, BrowserWindow: Window, ipcMain: { handle: (name, handler) => handlers.set(name, handler) },
     Menu: { setApplicationMenu: () => {}, buildFromTemplate: () => [] },
-    Tray: class extends EventEmitter { setToolTip() {} setContextMenu() {} },
+    Tray: class extends EventEmitter { setToolTip() {} setContextMenu() {} destroy() {} },
+    shell: { openPath: vi.fn(async () => "") },
     nativeImage: { createFromPath: () => icon }
   };
   const overrides = {
     ...helperModules,
     electron, "node:fs/promises": fileSystem,
-    "./hotkeys.cjs": { createHotkeyEngine: () => ({ setSuspended: vi.fn() }) },
-    "./corsair.cjs": { createCorsairBridge: () => ({ start: () => {} }) },
+    "./hotkeys.cjs": { createHotkeyEngine: () => ({ stop: () => {}, setSuspended: vi.fn() }) },
+    "./corsair.cjs": { createCorsairBridge: () => ({ start: () => {}, stop: () => {} }) },
     "./externalControl.cjs": { ...controlModule, createExternalControlBridge: (options) => {
       onCommand = options.onCommand;
       bridge = controlModule.createExternalControlBridge({ ...options, fileSystem });
@@ -110,7 +111,7 @@ async function boot(storageError) {
   };
   return { window, bridge, onCommand, event, fileSystem, token, documentLoaded,
     invoke: (name, sender = event, ...args) => {
-      const arity = { "library:load": 0, "library:save": 1, "control:state": 1, "control:playbackResult": 2, "hotkeys:capture": 1 }[name];
+      const arity = { "library:load": 0, "library:save": 1, "control:state": 1, "control:result": 2, "control:received": 1, "hotkeys:capture": 1 }[name];
       if (arity !== undefined && args.length === arity) args.push(token());
       return handlers.get(name)(sender, ...args);
     },
@@ -158,11 +159,13 @@ describe("main-process external control lifecycle", () => {
     await vi.waitFor(() => expect(app.fileSystem.writeFile.mock.calls.some(([file]) => file.endsWith("library.json"))).toBe(true));
     const first = app.invoke("library:load");
     const second = app.invoke("library:load");
+    const reveal = app.invoke("library:reveal");
     await Promise.resolve();
     expect(app.fileSystem.access.mock.calls.filter(([file]) => file.endsWith("library.json"))).toHaveLength(1);
     expect(app.fileSystem.readFile.mock.calls.filter(([file]) => file.endsWith("library.json"))).toHaveLength(0);
     written.resolve();
     const libraries = await Promise.all([first, second]);
+    await reveal;
     expect(libraries[0]).toMatchObject({ activeBoardId: "board-default", boards: [{ id: "board-default" }] });
     expect(libraries[1]).toEqual(libraries[0]);
     expect(app.fileSystem.writeFile.mock.calls.filter(([file]) => file.endsWith("library.json"))).toHaveLength(1);
@@ -189,6 +192,45 @@ describe("main-process external control lifecycle", () => {
     await app.bridge.stop();
   });
 
+  it("serializes startup and renderer loads behind coalesced saves without reading a partial write", async () => {
+    const app = await boot();
+    app.documentLoaded();
+    const initial = await app.invoke("library:load");
+    const writing = deferred();
+    const writeFile = app.fileSystem.writeFile.getMockImplementation();
+    app.fileSystem.writeFile.mockImplementation(async (file, data) => {
+      if (file.endsWith("library.json")) {
+        await writeFile(file, "{");
+        await writing.promise;
+      }
+      await writeFile(file, data);
+    });
+    const first = app.invoke("library:save", undefined, initial);
+    await vi.waitFor(() => expect(app.fileSystem.writeFile).toHaveBeenCalledTimes(2));
+    const intermediate = { ...initial, settings: { ...initial.settings, micVirtualVolume: 0.4 } };
+    const newBoard = { id: "board-new", name: "New", color: "#123456", sounds: [] };
+    const newest = { ...initial, activeBoardId: newBoard.id, boards: [...initial.boards, newBoard], settings: { ...initial.settings, micVirtualVolume: 0.9, micVirtualMuted: true } };
+    const pending = app.invoke("library:save", undefined, intermediate);
+    const coalesced = app.invoke("library:save", undefined, newest);
+    app.fileSystem.readFile.mockClear();
+    app.fileSystem.writeFile.mockClear();
+    await app.loaded();
+    const loaded = vi.fn();
+    const reload = app.invoke("library:load").then((library) => { loaded(library); return library; });
+    const ready = app.invoke("control:getSettings");
+    await vi.waitFor(() => expect(app.fileSystem.readFile).toHaveBeenCalledWith(path.join("/test/userData", "external-control.json"), "utf8"));
+    expect(app.fileSystem.readFile.mock.calls.filter(([file]) => file.endsWith("library.json"))).toHaveLength(0);
+    expect(loaded).not.toHaveBeenCalled();
+    writing.resolve();
+    expect(await Promise.all([first, pending, coalesced])).toEqual([{ ok: true }, { ok: true }, { ok: true }]);
+    await ready;
+    expect(await reload).toEqual(newest);
+    expect(app.fileSystem.writeFile.mock.calls.filter(([file]) => file.endsWith("library.json"))).toHaveLength(1);
+    expect(app.bridge.getSnapshot().volumes.micVirtual).toEqual({ value: 0.9, muted: true });
+    expect(app.bridge.getSnapshot()).toMatchObject({ activeBoardId: newBoard.id, library: { activeBoardId: newBoard.id, boards: expect.arrayContaining([newBoard]) } });
+    await app.bridge.stop();
+  });
+
   it("allows library initialization to retry after a storage failure", async () => {
     const app = await boot();
     app.documentLoaded();
@@ -203,11 +245,16 @@ describe("main-process external control lifecycle", () => {
   it("requires trusted renderer readiness and clears it on reload, crash and destruction", async () => {
     const app = await boot();
     const command = { command: "board.cycle", args: { direction: 1 } };
-    expect(app.onCommand(command)).toEqual({ ok: false, code: "unavailable" });
+    const audioCommand = { command: "volume.mute", args: { bus: "micVirtual" } };
+    for (const pending of [command, audioCommand, { command: "setting.toggle", args: { key: "micPassthrough" } }]) {
+      expect(app.onCommand(pending)).toEqual({ ok: false, code: "unavailable" });
+    }
     expect(() => app.invoke("control:ready", { ...app.event, senderFrame: { url: app.event.senderFrame.url } })).toThrow("Untrusted IPC sender");
     await app.loaded();
     await app.invoke("control:getSettings");
+    app.invoke("control:state", undefined, { activeBoardId: "board-a", playback: [] });
     expect(app.onCommand(command).code).toBe("unavailable");
+    expect(app.onCommand(audioCommand).code).toBe("unavailable");
     app.ready();
     for (const direction of [1, -1]) {
       const cycle = { command: "board.cycle", args: { direction } };
@@ -219,14 +266,20 @@ describe("main-process external control lifecycle", () => {
     expect(app.onCommand(command)).toEqual({ ok: true });
     for (const name of ["did-start-navigation", "render-process-gone", "destroyed"]) {
       app.bridge.updateLiveState({ activeBoardId: "board-default", playback: [{ soundId: "sound-a", startedAt: 1, duration: 2, loop: true }] });
+      const pending = app.onCommand(audioCommand);
       app.window.webContents.emit(name, { isMainFrame: true, isSameDocument: false });
+      expect(await pending).toEqual({ ok: false, code: "unavailable" });
       expect(app.onCommand(command).code).toBe("unavailable");
       expect(app.bridge.getSnapshot()).toMatchObject({ activeBoardId: "board-default", playback: [] });
+      expect(app.invoke("control:state", undefined, { activeBoardId: "board-a", playback: [] })).toEqual({ ok: false });
+      expect(app.onCommand(audioCommand).code).toBe("unavailable");
       app.window.webContents.emit("did-navigate");
       app.window.webContents.emit("did-finish-load");
       app.ready();
     }
+    const pending = app.onCommand(audioCommand);
     app.window.emit("closed");
+    expect(await pending).toEqual({ ok: false, code: "unavailable" });
     expect(app.onCommand(command).code).toBe("unavailable");
     await app.bridge.stop();
   });
@@ -344,16 +397,50 @@ describe("main-process external control lifecycle", () => {
     const second = app.onCommand(play, secondCancellation.signal);
     const secondId = app.window.webContents.send.mock.lastCall[1].requestId;
     firstCancellation.abort();
-    expect(app.window.webContents.send).toHaveBeenLastCalledWith("control-command", { command: "sound.cancel", requestId: firstId });
+    expect(app.window.webContents.send).toHaveBeenLastCalledWith("control-command", { command: "control.cancel", requestId: firstId });
     expect(await first).toEqual({ ok: false, code: "unavailable" });
-    expect(app.invoke("control:playbackResult", app.event, firstId, { ok: true })).toEqual({ ok: false });
-    app.invoke("control:playbackResult", app.event, secondId, { ok: true });
+    expect(app.invoke("control:result", app.event, firstId, { ok: true })).toEqual({ ok: false });
+    app.invoke("control:result", app.event, secondId, { ok: true });
     expect(await second).toEqual({ ok: true });
     const sent = app.window.webContents.send.mock.calls.length;
     secondCancellation.abort();
     expect(app.window.webContents.send).toHaveBeenCalledTimes(sent);
     expect(await app.onCommand(play, firstCancellation.signal)).toEqual({ ok: false, code: "unavailable" });
     expect(app.window.webContents.send).toHaveBeenCalledTimes(sent);
+    await app.bridge.stop();
+  });
+
+  it.each([
+    [{ command: "sound.play", args: { soundId: "sound-a" } }, { ok: true }],
+    [{ command: "setting.toggle", args: { key: "micPassthrough" } }, { ok: true, data: { key: "micPassthrough", value: true } }],
+    [{ command: "volume.mute", args: { bus: "micVirtual" } }, { ok: true, data: { bus: "micVirtual", value: 0.6, muted: true } }]
+  ])("isolates pending %j replies and readiness between documents", async (command, result) => {
+    const app = await boot();
+    await app.loaded();
+    await app.invoke("control:getSettings");
+    app.ready();
+    const token = app.window.webContents.send.mock.calls.findLast(([channel]) => channel === "control-ready-token")[1];
+    const outgoing = app.onCommand(command);
+    const outgoingRequest = app.window.webContents.send.mock.lastCall[1];
+    app.window.webContents.emit("did-start-navigation", { isMainFrame: true, isSameDocument: false });
+    expect(await outgoing).toEqual({ ok: false, code: "unavailable" });
+    expect(app.invoke("control:ready", app.event, token)).toEqual({ ok: false });
+    expect(app.onCommand(command)).toEqual({ ok: false, code: "unavailable" });
+    app.window.webContents.emit("did-navigate");
+    app.window.webContents.emit("did-finish-load");
+    expect(app.invoke("control:ready", app.event, token)).toEqual({ ok: false });
+    expect(app.onCommand(command)).toEqual({ ok: false, code: "unavailable" });
+    expect(app.ready()).toEqual({ ok: true });
+    const current = app.onCommand(command);
+    const currentRequest = app.window.webContents.send.mock.lastCall[1];
+    expect(currentRequest.requestId).not.toBe(outgoingRequest.requestId);
+    expect(app.invoke("control:received", app.event, currentRequest.requestId, token)).toEqual({ ok: false });
+    expect(app.invoke("control:result", app.event, currentRequest.requestId, result, token)).toEqual({ ok: false });
+    expect(app.invoke("control:received", app.event, outgoingRequest.requestId)).toEqual({ ok: false });
+    expect(app.invoke("control:received", app.event, currentRequest.requestId)).toEqual({ ok: true });
+    expect(app.invoke("control:result", app.event, outgoingRequest.requestId, result)).toEqual({ ok: false });
+    expect(app.invoke("control:result", app.event, currentRequest.requestId, result)).toEqual({ ok: true });
+    expect(await current).toEqual(result);
     await app.bridge.stop();
   });
 
@@ -371,12 +458,12 @@ describe("main-process external control lifecycle", () => {
     expect(request.requestId).toBeTypeOf("string");
     await Promise.resolve();
     expect(completed).not.toHaveBeenCalled();
-    expect(() => app.invoke("control:playbackResult", { ...app.event, senderFrame: { url: app.event.senderFrame.url } }, request.requestId, result)).toThrow("Untrusted IPC sender");
-    expect(() => app.invoke("control:playbackResult", app.event, request.requestId, { ok: "yes" })).toThrow("Invalid control playback result");
-    expect(app.invoke("control:playbackResult", app.event, request.requestId, result)).toEqual({ ok: true });
+    expect(() => app.invoke("control:result", { ...app.event, senderFrame: { url: app.event.senderFrame.url } }, request.requestId, result)).toThrow("Untrusted IPC sender");
+    expect(() => app.invoke("control:result", app.event, request.requestId, { ok: "yes" })).toThrow("Invalid control playback result");
+    expect(app.invoke("control:result", app.event, request.requestId, result)).toEqual({ ok: true });
     await pending;
     expect(completed).toHaveBeenCalledExactlyOnceWith(result);
-    expect(app.invoke("control:playbackResult", app.event, request.requestId, result)).toEqual({ ok: false });
+    expect(app.invoke("control:result", app.event, request.requestId, result)).toEqual({ ok: false });
     await app.bridge.stop();
   });
 
@@ -389,9 +476,45 @@ describe("main-process external control lifecycle", () => {
     const requestId = app.window.webContents.send.mock.lastCall[1].requestId;
     const target = name === "closed" ? app.window : app.window.webContents;
     target.emit(name, { isMainFrame: true, isSameDocument: false });
-    expect(app.window.webContents.send).toHaveBeenCalledWith("control-command", { command: "sound.cancel", requestId });
+    expect(app.window.webContents.send).toHaveBeenCalledWith("control-command", { command: "control.cancel", requestId });
     expect(await pending).toEqual({ ok: false, code: "unavailable" });
-    if (name !== "closed") expect(app.invoke("control:playbackResult", app.event, requestId, { ok: true })).toEqual({ ok: false });
+    if (name !== "closed") expect(app.invoke("control:result", app.event, requestId, { ok: true })).toEqual({ ok: false });
+    await app.bridge.stop();
+  });
+
+  it("returns trusted renderer acknowledgements through the shared readiness gate", async () => {
+    const app = await boot();
+    await app.loaded();
+    app.ready();
+    const setting = app.onCommand({ command: "setting.toggle", args: { key: "micPassthrough" } });
+    const settingRequest = app.window.webContents.send.mock.lastCall[1];
+    const volume = app.onCommand({ command: "volume.mute", args: { bus: "micVirtual" } });
+    const volumeRequest = app.window.webContents.send.mock.lastCall[1];
+    const settingResult = { ok: true, data: { key: "micPassthrough", value: true } };
+    const volumeResult = { ok: true, data: { bus: "micVirtual", value: 0.6, muted: true } };
+    expect(() => app.invoke("control:received", { ...app.event, senderFrame: { url: app.event.senderFrame.url } }, volumeRequest.requestId)).toThrow("Untrusted IPC sender");
+    expect(app.invoke("control:received", undefined, volumeRequest.requestId)).toEqual({ ok: true });
+    expect(app.invoke("control:received", undefined, settingRequest.requestId)).toEqual({ ok: true });
+    expect(() => app.invoke("control:result", { ...app.event, senderFrame: { url: app.event.senderFrame.url } }, volumeRequest.requestId, volumeResult)).toThrow("Untrusted IPC sender");
+    app.invoke("control:result", undefined, volumeRequest.requestId, volumeResult);
+    app.invoke("control:result", undefined, settingRequest.requestId, settingResult);
+    expect(await volume).toEqual(volumeResult);
+    expect(await setting).toEqual(settingResult);
+    app.invoke("hotkeys:capture", undefined, true);
+    expect(app.onCommand({ command: "volume.mute", args: { bus: "micVirtual" } })).toEqual({ ok: false, code: "busy" });
+    expect(app.onCommand({ command: "board.cycle", args: {} })).toEqual({ ok: false, code: "busy" });
+    await app.bridge.stop();
+  });
+
+  it("cancels pending replies and clears readiness on shutdown", async () => {
+    const app = await boot();
+    await app.loaded();
+    app.ready();
+    const command = { command: "setting.toggle", args: { key: "micPassthrough" } };
+    const pending = app.onCommand(command);
+    app.window.emit("session-end");
+    expect(await pending).toEqual({ ok: false, code: "unavailable" });
+    expect(app.onCommand(command)).toEqual({ ok: false, code: "unavailable" });
     await app.bridge.stop();
   });
 

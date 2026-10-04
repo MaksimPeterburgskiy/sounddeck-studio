@@ -901,6 +901,8 @@ input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.2); }
 input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; }
 
 .volumeRow { display: grid; grid-template-columns: minmax(0, 1fr) 62px auto; align-items: center; gap: 8px; }
+.volumeRowWithMute { grid-template-columns: auto minmax(0, 1fr) 62px auto; }
+.volumeRowWithMute button[aria-pressed="true"] { color: var(--accent); }
 .volumeRow input[type="number"] {
   width: 62px;
   min-height: 32px;

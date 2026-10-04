@@ -10,6 +10,17 @@ const MAX_PAYLOAD = 64 * 1024;
 const MAX_CLIENTS = 64;
 const MAX_PENDING_COMMANDS = 32;
 const MAX_BUFFERED = 8 * 1024 * 1024;
+const SETTING_KEYS = ["micPassthrough", "soundboardToVirtualMic", "noiseSuppressionEnabled", "echoCancellationEnabled", "monitorToHeadphones"];
+const VOLUME_BUSES = ["micVirtual", "micMonitor", "soundboardVirtual", "soundboardMonitor"];
+
+function audioState(value) {
+  const settings = Object.fromEntries(SETTING_KEYS.map((key) => [key, typeof value?.[key] === "boolean" ? value[key] : key === "monitorToHeadphones"]));
+  const volumes = Object.fromEntries(VOLUME_BUSES.map((bus) => [bus, {
+    value: Number.isFinite(value?.[`${bus}Volume`]) ? Math.min(1, Math.max(0, value[`${bus}Volume`])) : 1,
+    muted: value?.[`${bus}Muted`] === true
+  }]));
+  return { settings, volumes };
+}
 
 function object(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -45,6 +56,16 @@ function validateCommand(command, args) {
       return fields(args, ["boardId"]) && id(args.boardId) ? null : "invalid-args";
     case "board.cycle":
       return fields(args, ["direction"]) && (args.direction === undefined || args.direction === 1 || args.direction === -1) ? null : "invalid-args";
+    case "setting.set":
+      return fields(args, ["key", "value"]) && SETTING_KEYS.includes(args.key) && typeof args.value === "boolean" ? null : "invalid-args";
+    case "setting.toggle":
+      return fields(args, ["key"]) && SETTING_KEYS.includes(args.key) ? null : "invalid-args";
+    case "volume.set":
+      return fields(args, ["bus", "value"]) && VOLUME_BUSES.includes(args.bus) && Number.isFinite(args.value) && args.value >= 0 && args.value <= 1 ? null : "invalid-args";
+    case "volume.adjust":
+      return fields(args, ["bus", "delta"]) && VOLUME_BUSES.includes(args.bus) && Number.isFinite(args.delta) ? null : "invalid-args";
+    case "volume.mute":
+      return fields(args, ["bus", "muted"]) && VOLUME_BUSES.includes(args.bus) && (args.muted === undefined || typeof args.muted === "boolean") ? null : "invalid-args";
     case "playback.stopAll":
     case "library.get":
       return fields(args, []) ? null : "invalid-args";
@@ -111,6 +132,7 @@ function createExternalControlBridge({
     updateLiveState({ playback: [] }, beginUpdate());
   }
   let live = { activeBoardId: "", playback: [] };
+  let audio = audioState();
   const images = new Map();
   const clients = new Map();
   const failures = new Map();
@@ -140,7 +162,7 @@ function createExternalControlBridge({
   }
 
   function getSnapshot() {
-    return { ...live, library: getLibrary() };
+    return { ...live, library: getLibrary(), ...audio };
   }
 
   function send(ws, message) {
@@ -182,6 +204,9 @@ function createExternalControlBridge({
     if (!currentUpdate(owner, appliedLibraryGeneration)) return false;
     const requestedBoardId = value?.activeBoardId ?? "";
     if (typeof requestedBoardId !== "string" || (requestedBoardId !== "" && !id(requestedBoardId))) throw new Error("Invalid active board");
+    const nextAudio = audioState(value?.settings);
+    const settingsChanged = JSON.stringify(audio.settings) !== JSON.stringify(nextAudio.settings);
+    const volumesChanged = JSON.stringify(audio.volumes) !== JSON.stringify(nextAudio.volumes);
     const boards = (Array.isArray(value?.boards) ? value.boards : []).map((board) => ({
       id: board.id, name: board.name, color: board.color,
       sounds: (Array.isArray(board.sounds) ? board.sounds : []).map((sound) => ({
@@ -209,8 +234,11 @@ function createExternalControlBridge({
     libraryPublished = true;
     library = { boards };
     live = { ...live, activeBoardId };
+    audio = nextAudio;
     if (changed || imageChanged) event("library.changed", getLibrary());
     if (boardChanged) event("board.changed", { activeBoardId });
+    if (settingsChanged) event("settings.changed", audio.settings);
+    if (volumesChanged) event("volumes.changed", audio.volumes);
     return true;
   }
 
@@ -369,6 +397,8 @@ function createExternalControlBridge({
     let allowedBody = [];
     const sound = url.match(/^\/v1\/sounds\/([^/]+)\/(play|stop)$/);
     const board = url.match(/^\/v1\/boards\/([^/]+)\/activate$/);
+    const setting = url.match(/^\/v1\/settings\/([^/]+)$/);
+    const volume = url.match(/^\/v1\/volumes\/([^/]+)$/);
     if (sound) {
       command = `sound.${sound[2]}`;
       routeArgs = { soundId: sound[1] };
@@ -379,6 +409,12 @@ function createExternalControlBridge({
     } else if (url === "/v1/boards/cycle") {
       command = "board.cycle";
       allowedBody = ["direction"];
+    } else if (setting) {
+      routeArgs = { key: setting[1] };
+      allowedBody = ["value", "toggle"];
+    } else if (volume) {
+      routeArgs = { bus: volume[1] };
+      allowedBody = ["value", "delta", "muted", "toggleMute"];
     } else if (url === "/v1/stop-all") command = "playback.stopAll";
     else return respond(res, 404, errorMessage("not-found"));
     const address = req.socket.remoteAddress;
@@ -390,6 +426,21 @@ function createExternalControlBridge({
     try {
       const body = await readBody(req);
       if (!fields(body, allowedBody)) return respond(res, 400, errorMessage("invalid-args"));
+      let args = { ...body, ...routeArgs };
+      if (setting || volume) {
+        if (Object.keys(body).length !== 1) return respond(res, 400, errorMessage("invalid-args"));
+        if (setting) {
+          if (Object.hasOwn(body, "toggle")) {
+            if (body.toggle !== true) return respond(res, 400, errorMessage("invalid-args"));
+            command = "setting.toggle";
+            args = routeArgs;
+          } else command = "setting.set";
+        } else if (Object.hasOwn(body, "toggleMute")) {
+          if (body.toggleMute !== true) return respond(res, 400, errorMessage("invalid-args"));
+          command = "volume.mute";
+          args = routeArgs;
+        } else command = Object.hasOwn(body, "value") ? "volume.set" : Object.hasOwn(body, "delta") ? "volume.adjust" : "volume.mute";
+      }
       // Recheck after body receipt: settings/token may change while a request streams.
       if (!settings.enabled || stopped) return respond(res, 503, errorMessage("disabled"));
       if (!authenticated(authorization.slice(7))) return respond(res, 401, errorMessage("unauthorized"));
@@ -403,7 +454,7 @@ function createExternalControlBridge({
       if (res.destroyed) cancellation.abort();
       let result;
       try {
-        result = await dispatch(command, { ...body, ...routeArgs }, cancellation.signal);
+        result = await dispatch(command, args, cancellation.signal);
       } finally {
         httpControllers.delete(cancellation);
         res.removeListener("close", disconnected);

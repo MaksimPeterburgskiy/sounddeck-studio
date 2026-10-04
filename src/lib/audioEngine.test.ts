@@ -28,6 +28,48 @@ describe("AudioEngine mic routing", () => {
     vi.restoreAllMocks();
   });
 
+  it("mutes microphone buses independently and restores their saved gains without reopening capture", async () => {
+    const getUserMedia = vi.fn().mockResolvedValue(fakeStream().stream);
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+    const initial = makeAudioSettings({ monitorMicToHeadphones: true, micMonitorVolume: 0.3, micVirtualVolume: 0.7, micVirtualMuted: true });
+    const engine = new AudioEngine(initial, vi.fn());
+    await engine.configure(initial, "cable-device");
+    const monitorContext = FakeAudioContext.instances[0];
+    const virtualContext = FakeAudioContext.instances[1];
+    const monitorGain = monitorContext.gains.find((gain) => gain === monitorContext.mediaSources[0].connect.mock.calls[0][0])!;
+    const virtualGain = virtualContext.gains.find((gain) => gain === virtualContext.mediaSources[0].connect.mock.calls[0][0])!;
+    expect(monitorGain.gain.value).toBe(0.3);
+    expect(virtualGain.gain.value).toBe(0);
+    await engine.configure({ ...initial, micMonitorMuted: true, micVirtualMuted: false }, "cable-device");
+    expect(monitorGain.gain.value).toBe(0);
+    expect(virtualGain.gain.value).toBe(0.7);
+    await engine.configure({ ...initial, micVirtualMuted: false }, "cable-device");
+    expect(monitorGain.gain.value).toBe(0.3);
+    expect(virtualGain.gain.value).toBe(0.7);
+    expect(getUserMedia).toHaveBeenCalledOnce();
+    await engine.dispose();
+  });
+
+  it("applies microphone and soundboard mute immediately while a sink switch is pending", async () => {
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia: vi.fn().mockResolvedValue(fakeStream().stream) } });
+    const initial = makeAudioSettings({ monitorMicToHeadphones: true, micVirtualVolume: 0.7, micMonitorVolume: 0.3 });
+    const engine = new AudioEngine(initial, vi.fn());
+    await engine.configure(initial, "cable-device");
+    const [monitor, virtual] = FakeAudioContext.instances;
+    const switching = deferred<void>();
+    monitor.setSinkId.mockReturnValueOnce(switching.promise);
+    const configuring = engine.configure({
+      ...initial, micVirtualMuted: true, micMonitorMuted: true,
+      soundboardVirtualMuted: true, soundboardMonitorMuted: true
+    }, "cable-device");
+    for (const context of [monitor, virtual]) {
+      expect(context.gains.every((gain) => gain.gain.value === 0)).toBe(true);
+    }
+    switching.resolve();
+    await configuring;
+    await engine.dispose();
+  });
+
   it("stops stale mic streams when overlapping reconfiguration resolves out of order", async () => {
     const firstOpen = deferred<MediaStream>();
     const secondOpen = deferred<MediaStream>();

@@ -22,6 +22,10 @@ const defaultSettings: SoundLibrary["settings"] = {
   micMonitorVolume: 1,
   soundboardVirtualVolume: 1,
   soundboardMonitorVolume: 1,
+  micVirtualMuted: false,
+  micMonitorMuted: false,
+  soundboardVirtualMuted: false,
+  soundboardMonitorMuted: false,
   monitorDeviceId: "",
   monitorDeviceLabel: "",
   virtualOutputDeviceId: "",
@@ -214,7 +218,8 @@ export function normalizeLibrary(library: SoundLibrary): SoundLibrary {
   delete currentSettings.micVolume;
   delete currentSettings.soundboardVolume;
   delete currentSettings.monitorVolume;
-  const volumeOr = (value: unknown, fallback: number) => typeof value === "number" && Number.isFinite(value) ? value : fallback;
+  // Bus volumes are 0–1; clamp hand-edited or legacy values so every consumer sees a valid level.
+  const volumeOr = (value: unknown, fallback: number) => typeof value === "number" && Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : fallback;
   const settings = {
     ...defaultSettings,
     ...currentSettings,
@@ -222,6 +227,10 @@ export function normalizeLibrary(library: SoundLibrary): SoundLibrary {
     micMonitorVolume: volumeOr(currentSettings.micMonitorVolume, defaultSettings.micMonitorVolume),
     soundboardVirtualVolume: volumeOr(currentSettings.soundboardVirtualVolume, defaultSettings.soundboardVirtualVolume),
     soundboardMonitorVolume: volumeOr(currentSettings.soundboardMonitorVolume, defaultSettings.soundboardMonitorVolume),
+    micVirtualMuted: boolOr(currentSettings.micVirtualMuted),
+    micMonitorMuted: boolOr(currentSettings.micMonitorMuted),
+    soundboardVirtualMuted: boolOr(currentSettings.soundboardVirtualMuted),
+    soundboardMonitorMuted: boolOr(currentSettings.soundboardMonitorMuted),
     echoCancellationEnabled: boolOr(currentSettings.echoCancellationEnabled, defaultSettings.echoCancellationEnabled),
     noiseSuppressionEnabled: boolOr(currentSettings.noiseSuppressionEnabled, defaultSettings.noiseSuppressionEnabled),
     noiseSuppressionAttenuationDb: Math.round(numberIn(currentSettings.noiseSuppressionAttenuationDb, defaultSettings.noiseSuppressionAttenuationDb, 6, 30))
