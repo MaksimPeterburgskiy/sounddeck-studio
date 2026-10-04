@@ -1579,6 +1579,16 @@ function SoundPad(props: {
     heldPointers.current.clear();
     releaseKeys();
   }, [sound.triggerMode]);
+  // Switching apps mid-hold can deliver the key up elsewhere without blurring the pad.
+  useEffect(() => {
+    const releaseHidden = () => { if (document.visibilityState === "hidden") releaseKeys(); };
+    window.addEventListener("blur", releaseKeys);
+    document.addEventListener("visibilitychange", releaseHidden);
+    return () => {
+      window.removeEventListener("blur", releaseKeys);
+      document.removeEventListener("visibilitychange", releaseHidden);
+    };
+  }, []);
 
   const clipDuration = Number.isFinite(sound.duration)
     ? Math.max(0, Math.min(sound.trimEndSec ?? sound.duration!, sound.duration!) - Math.max(0, sound.trimStartSec ?? 0))
