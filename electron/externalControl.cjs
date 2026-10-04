@@ -288,14 +288,19 @@ function createExternalControlBridge({
     if (command === "board.activate" && !library.boards.some((board) => board.id === args.boardId)) return { ok: false, code: "not-found" };
     // A minute accommodates large decodes while bounding hung renderer work.
     // Abort requests cancellation; only the renderer can acknowledge its outcome.
-    const deadline = setTimeout(() => cancellation.abort("operation-timeout"), operationTimeoutMs);
-    deadline.unref?.();
+    const deadline = new AbortController();
+    const deadlineTimer = setTimeout(() => {
+      cancellation.abort("operation-timeout");
+      // Disconnect may have consumed the request's one-shot abort already.
+      deadline.abort("operation-timeout");
+    }, operationTimeoutMs);
+    deadlineTimer.unref?.();
     try {
-      return await onCommand({ command, args }, cancellation.signal);
+      return await onCommand({ command, args }, cancellation.signal, deadline.signal);
     } catch {
       return { ok: false, code: "internal-error" };
     } finally {
-      clearTimeout(deadline);
+      clearTimeout(deadlineTimer);
     }
   }
 

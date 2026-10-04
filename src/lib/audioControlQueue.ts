@@ -7,7 +7,7 @@ export function createAudioControlQueue({ getSettings, writeSettings, persist, w
   getSettings: () => AudioSettings | null;
   // Writes must start audio configuration before returning.
   writeSettings: (settings: AudioSettings) => void;
-  persist: (cancellation?: AbortSignal) => Promise<unknown>;
+  persist: (deadlineSignal?: AbortSignal) => Promise<unknown>;
   waitForConfiguration: () => Promise<void>;
 }) {
   let tail = Promise.resolve();
@@ -17,10 +17,10 @@ export function createAudioControlQueue({ getSettings, writeSettings, persist, w
     for (const key of keys) versions.set(key, (versions.get(key) ?? 0) + 1);
   }
 
-  async function run(command: AudioControlCommand, cancellation?: AbortSignal): Promise<RendererControlResult> {
+  async function run(command: AudioControlCommand, cancellation?: AbortSignal, deadlineSignal?: AbortSignal): Promise<RendererControlResult> {
     // Disconnects cancel commands waiting in the FIFO. Once applied, a mutation
     // owns its persistence, configuration, and rollback until the deadline.
-    if (cancellation?.aborted) return { ok: false, code: "unavailable" };
+    if (cancellation?.aborted || deadlineSignal?.aborted) return { ok: false, code: "unavailable" };
     const previous = getSettings();
     if (!previous) return { ok: false, code: "unavailable" };
     const applied = applyAudioControlCommand(previous, command);
@@ -31,11 +31,11 @@ export function createAudioControlQueue({ getSettings, writeSettings, persist, w
     const ownedVersions = keys.map((key) => versions.get(key));
     writeSettings(applied.settings);
     try {
-      await waitForControlOperation(persist(cancellation), cancellation);
+      await waitForControlOperation(persist(deadlineSignal), deadlineSignal);
     } catch {
       // A timed-out filesystem write can still land. Preserve the mutation,
       // report its unconfirmed outcome, and release the FIFO without rollback.
-      if (cancellation?.reason === "operation-timeout") return { ok: false, code: "unavailable" };
+      if (deadlineSignal?.reason === "operation-timeout") return { ok: false, code: "unavailable" };
       const current = getSettings();
       if (current) {
         let restored = current;
@@ -47,20 +47,20 @@ export function createAudioControlQueue({ getSettings, writeSettings, persist, w
         }
         if (restored !== current) writeSettings(restored);
       }
-      await waitForControlOperation(waitForConfiguration(), cancellation).catch(() => undefined);
+      await waitForControlOperation(waitForConfiguration(), deadlineSignal).catch(() => undefined);
       return { ok: false, code: "internal-error" };
     }
     // Persistence commits the mutation. A deadline ends the configuration wait,
     // but must report the saved change as applied even if routing finishes later.
-    await waitForControlOperation(waitForConfiguration(), cancellation).catch(() => undefined);
+    await waitForControlOperation(waitForConfiguration(), deadlineSignal).catch(() => undefined);
     return { ok: true, data: applied.data };
   }
 
   return {
     // Call for every UI field write, including idempotent writes.
     recordWrites,
-    enqueue(command: AudioControlCommand, cancellation?: AbortSignal): Promise<RendererControlResult> {
-      const result = tail.then(() => run(command, cancellation)).catch((): RendererControlResult => ({ ok: false, code: "internal-error" }));
+    enqueue(command: AudioControlCommand, cancellation?: AbortSignal, deadlineSignal = cancellation): Promise<RendererControlResult> {
+      const result = tail.then(() => run(command, cancellation, deadlineSignal)).catch((): RendererControlResult => ({ ok: false, code: "internal-error" }));
       tail = result.then(() => undefined);
       return result;
     }

@@ -129,10 +129,10 @@ const externalControl = createExternalControlBridge({
   appVersion: app.getVersion(),
   appPath: launcherPath(process.execPath, process.platform, app.isPackaged, process.env),
   onStateChange: (state) => sendToMainWindow("control-status", state),
-  onCommand: ({ command, args }, signal) => {
+  onCommand: ({ command, args }, signal, deadlineSignal) => {
     if (hotkeyCaptureActive) return { ok: false, code: "busy" };
     if (!controlRendererReady || !mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return { ok: false, code: "unavailable" };
-    if (command === "sound.play" || command.startsWith("setting.") || command.startsWith("volume.")) return controlRenderer.dispatch({ command, args }, signal);
+    if (command === "sound.play" || command.startsWith("setting.") || command.startsWith("volume.")) return controlRenderer.dispatch({ command, args }, signal, deadlineSignal);
     const binding = { accelerator: "" };
     if (command === "playback.stopAll") binding.type = "stop-all";
     else if (command === "board.activate") Object.assign(binding, { type: "board", boardId: args.boardId });

@@ -384,6 +384,28 @@ describe("main-process external control lifecycle", () => {
     await app.bridge.stop();
   });
 
+  it("relays an accepted mutation's deadline after disconnect and cleans up both signals on completion", async () => {
+    const app = await boot();
+    await app.loaded();
+    await app.invoke("control:getSettings");
+    app.ready();
+    const cancellation = new AbortController();
+    const deadline = new AbortController();
+    const operation = app.onCommand({ command: "volume.set", args: { bus: "micVirtual", value: 0.6 } }, cancellation.signal, deadline.signal);
+    const requestId = app.window.webContents.send.mock.lastCall[1].requestId;
+    expect(app.invoke("control:received", app.event, requestId)).toEqual({ ok: true });
+    cancellation.abort();
+    expect(app.window.webContents.send).toHaveBeenLastCalledWith("control-command", { command: "control.cancel", requestId });
+    deadline.abort("operation-timeout");
+    expect(app.window.webContents.send).toHaveBeenLastCalledWith("control-command", { command: "control.cancel", requestId, reason: "operation-timeout" });
+    app.invoke("control:result", app.event, requestId, { ok: false, code: "unavailable" });
+    expect(await operation).toEqual({ ok: false, code: "unavailable" });
+    const sent = app.window.webContents.send.mock.calls.length;
+    app.window.webContents.emit("did-start-navigation", { isMainFrame: true, isSameDocument: false });
+    expect(app.window.webContents.send.mock.calls.slice(sent).some(([channel]) => channel === "control-command")).toBe(false);
+    await app.bridge.stop();
+  });
+
   it("relays disconnect cancellation by request id and removes listeners after completion", async () => {
     const app = await boot();
     await app.loaded();

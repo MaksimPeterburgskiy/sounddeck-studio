@@ -13,28 +13,35 @@ function createControlRenderer({ send, timeoutMs = 5000 }) {
     }
   }
 
-  function dispatch(message, signal) {
-    if (signal?.aborted) return Promise.resolve({ ok: false, code: "unavailable" });
+  function dispatch(message, signal, deadlineSignal) {
+    if (signal?.aborted || deadlineSignal?.aborted) return Promise.resolve({ ok: false, code: "unavailable" });
     return new Promise((resolve) => {
       const requestId = randomUUID();
-      const sendCancellation = () => {
-        try { send({ command: "control.cancel", requestId, ...(signal?.reason === "operation-timeout" ? { reason: "operation-timeout" } : {}) }); } catch {}
+      const sendCancellation = (reason = signal?.reason) => {
+        try { send({ command: "control.cancel", requestId, ...(reason === "operation-timeout" ? { reason: "operation-timeout" } : {}) }); } catch {}
       };
-      const cancel = () => {
+      const cancelRequest = (reason) => {
         const request = pending.get(requestId);
         if (!request) return;
         // A deadline must await renderer acknowledgement even for playback.
         // Disconnects retain their existing revocation behavior.
-        if (!request.received || (message.command === "sound.play" && signal?.reason !== "operation-timeout")) {
+        if (!request.received || (message.command === "sound.play" && reason !== "operation-timeout")) {
           cleanup();
           pending.delete(requestId);
           resolve({ ok: false, code: "unavailable" });
         }
-        sendCancellation();
+        sendCancellation(reason);
       };
+      const cancel = () => {
+        // A separate deadline listener owns timeout delivery when supplied.
+        if (deadlineSignal && signal?.reason === "operation-timeout") return;
+        cancelRequest(signal?.reason);
+      };
+      const cancelDeadline = () => cancelRequest("operation-timeout");
       const cleanup = () => {
         clearTimeout(timer);
         signal?.removeEventListener("abort", cancel);
+        deadlineSignal?.removeEventListener("abort", cancelDeadline);
       };
       // Only receipt is timed out. Accepted operations remain pending until
       // the renderer finishes saving and configuring audio.
@@ -46,6 +53,7 @@ function createControlRenderer({ send, timeoutMs = 5000 }) {
       }, timeoutMs);
       pending.set(requestId, { resolve, cleanup, timer, message, cancel: sendCancellation, received: false });
       signal?.addEventListener("abort", cancel, { once: true });
+      deadlineSignal?.addEventListener("abort", cancelDeadline, { once: true });
       try {
         send({ ...message, requestId });
       } catch {

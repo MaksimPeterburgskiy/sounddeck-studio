@@ -48,6 +48,7 @@ import { createAudioControlQueue, persistControlLibrary } from "./lib/audioContr
 import { AudioEngine } from "./lib/audioEngine";
 import { CONTROL_DEFAULT_PORT } from "./lib/controlProtocol";
 import { beginAudioConfiguration, trackAudioConfiguration, waitForAudioConfiguration, watchAudioDeviceChanges } from "./lib/controlReadiness";
+import { createControlCancellation } from "./lib/controlCancellation";
 import { createSoundPlayQueue } from "./lib/soundPlayQueue";
 import type { ControlPlaybackResult, ControlPlaybackVoice, ControlSettingsPatch, ControlStatus } from "./lib/controlProtocol";
 import type { AudioDeviceStatus, MicrophoneProcessingStatus } from "./lib/audioEngine";
@@ -134,12 +135,12 @@ function App() {
   const engineRef = useRef<AudioEngine | null>(null);
   const audioConfigurationRef = useRef<Promise<void> | null>(null);
   const pendingAudioSettingsRef = useRef<ReturnType<typeof beginAudioConfiguration>[]>([]);
-  const controlRequests = useRef(new Map<string, AbortController>());
+  const controlRequests = useRef(new Map<string, ReturnType<typeof createControlCancellation>>());
   const configuredSettingsRef = useRef<SoundLibrary["settings"] | null>(null);
   const audioControlQueue = useMemo(() => createAudioControlQueue({
     getSettings: () => libraryRef.current?.settings ?? null,
     writeSettings: (settings) => updateLibrary((current) => ({ ...current, settings })),
-    persist: (cancellation) => persistControlLibrary(libraryRef.current!, controlSavedLibrariesRef.current, window.sounddeck.saveLibrary, cancellation, () => setPersistenceRevision((revision) => revision + 1)),
+    persist: (deadlineSignal) => persistControlLibrary(libraryRef.current!, controlSavedLibrariesRef.current, window.sounddeck.saveLibrary, deadlineSignal, () => setPersistenceRevision((revision) => revision + 1)),
     waitForConfiguration: () => waitForAudioConfiguration(() => audioConfigurationRef.current)
   }), []);
   const queueSoundPlay = useMemo(() => createSoundPlayQueue(), []);
@@ -618,13 +619,13 @@ function App() {
     }
     const { command, args } = request;
     if (request.command === "setting.set" || request.command === "setting.toggle" || request.command === "volume.set" || request.command === "volume.adjust" || request.command === "volume.mute") {
-      const cancellation = new AbortController();
+      const cancellation = createControlCancellation();
       controlRequests.current.set(request.requestId, cancellation);
-      return audioControlQueue.enqueue(request, cancellation.signal).finally(() => controlRequests.current.delete(request.requestId));
+      return audioControlQueue.enqueue(request, cancellation.signal, cancellation.deadlineSignal).finally(() => controlRequests.current.delete(request.requestId));
     }
     if (command === "sound.play") {
       const sound = libraryRef.current?.boards.flatMap((board) => board.sounds).find((candidate) => candidate.id === args.soundId);
-      const cancellation = new AbortController();
+      const cancellation = createControlCancellation();
       controlRequests.current.set(request.requestId, cancellation);
       const result = sound ? triggerSound(sound, true, cancellation.signal) : Promise.resolve<ControlPlaybackResult>({ ok: false, code: "not-found" });
       return result.finally(() => controlRequests.current.delete(request.requestId));

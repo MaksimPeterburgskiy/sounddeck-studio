@@ -1,3 +1,18 @@
+// Request cancellation revokes queued work; an independent deadline can still
+// release an accepted mutation after the request signal has already aborted.
+export function createControlCancellation() {
+  const request = new AbortController();
+  const deadline = new AbortController();
+  return {
+    signal: request.signal,
+    deadlineSignal: deadline.signal,
+    abort(reason?: string) {
+      request.abort(reason);
+      if (reason === "operation-timeout") deadline.abort(reason);
+    }
+  };
+}
+
 // A deadline can stop waiting for preparation after cancellation has made its
 // eventual completion harmless. Disconnects keep existing completion semantics.
 export function waitForControlOperation<T>(work: Promise<T>, signal?: AbortSignal): Promise<T> {

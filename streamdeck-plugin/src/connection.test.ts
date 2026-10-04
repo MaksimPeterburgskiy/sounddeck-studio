@@ -70,7 +70,7 @@ describe("shared connection", () => {
     expect(connection.peekImage("sound-a")).toBeUndefined();
     expect(await connection.getImage("sound-a")).toBe("data:image/png;base64,bmV3");
     expect((await connection.command("sound.play", { soundId: "sound-a" })).ok).toBe(true);
-    expect(command).toHaveBeenCalledWith({ command: "sound.play", args: { soundId: "sound-a" } }, expect.any(AbortSignal));
+    expect(command).toHaveBeenCalledWith({ command: "sound.play", args: { soundId: "sound-a" } }, expect.any(AbortSignal), expect.any(AbortSignal));
     expect(changed).toHaveBeenCalled();
     unsubscribe();
   });
