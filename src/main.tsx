@@ -558,9 +558,9 @@ function App() {
     void registerHotkeys(library);
   }, [library, draggingSoundId, registerHotkeys, corsairConnected]);
 
-  const triggerSound = useCallback(async (sound: SoundSlot, pressId?: string, external = false, cancellation?: AbortSignal): Promise<ControlPlaybackResult> => {
+  const triggerSound = useCallback(async (sound: SoundSlot, pressId?: string, external = false, cancellation?: AbortSignal, deadlineSignal?: AbortSignal): Promise<ControlPlaybackResult> => {
     try {
-      const started = await soundTriggers.trigger(sound, pressId, external, cancellation);
+      const started = await soundTriggers.trigger(sound, pressId, external, cancellation, deadlineSignal);
       if (cancellation?.aborted) return { ok: false, code: "unavailable" };
       if (started === null) return { ok: true };
       if (!started) {
@@ -625,7 +625,7 @@ function App() {
       const sound = libraryRef.current?.boards.flatMap((board) => board.sounds).find((candidate) => candidate.id === args.soundId);
       const cancellation = createControlCancellation();
       controlRequests.current.set(request.requestId, cancellation);
-      const result = sound ? triggerSound(sound, command === "sound.press" ? args.pressId : undefined, true, cancellation.signal) : Promise.resolve<ControlPlaybackResult>({ ok: false, code: "not-found" });
+      const result = sound ? triggerSound(sound, command === "sound.press" ? args.pressId : undefined, true, cancellation.signal, cancellation.deadlineSignal) : Promise.resolve<ControlPlaybackResult>({ ok: false, code: "not-found" });
       return result.finally(() => controlRequests.current.delete(request.requestId));
     }
     if (command === "sound.release") {

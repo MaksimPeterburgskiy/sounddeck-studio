@@ -11,8 +11,10 @@ const controlCommandRequests = new Map();
 let controlCommandStarts = Promise.resolve();
 
 function cancelControlRequest(requestId, request, reason) {
-  if (!request || request.cancelled) return;
+  if (!request || (request.cancelled && (reason !== "operation-timeout" || request.deadlineCancelled))) return;
   request.cancelled = true;
+  // A disconnect/stop must not swallow the independent operation deadline.
+  if (reason === "operation-timeout") request.deadlineCancelled = true;
   if (request.started) {
     try { void Promise.resolve(request.callback({ command: "control.cancel", requestId, ...(reason === "operation-timeout" ? { reason } : {}) })).catch(() => {}); } catch {}
   }

@@ -23,9 +23,9 @@ function createControlRenderer({ send, timeoutMs = 5000 }) {
       const cancelRequest = (reason) => {
         const request = pending.get(requestId);
         if (!request) return;
-        // A deadline must await renderer acknowledgement even for playback.
-        // Disconnects retain their existing revocation behavior.
-        if (!request.received || (["sound.play", "sound.press"].includes(message.command) && reason !== "operation-timeout")) {
+        // Keep accepted work pending when it has an independent deadline, so
+        // disconnect cannot remove the timeout listener or server timer.
+        if (!request.received || (["sound.play", "sound.press"].includes(message.command) && !deadlineSignal && reason !== "operation-timeout")) {
           cleanup();
           pending.delete(requestId);
           resolve({ ok: false, code: "unavailable" });

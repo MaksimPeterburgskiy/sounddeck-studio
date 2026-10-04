@@ -16,7 +16,7 @@ export class SoundTriggers {
     private readonly getConfiguration: () => Promise<void> | null
   ) {}
 
-  trigger(sound: SoundSlot, pressId?: string, external = false, cancellation?: AbortSignal): Promise<string | boolean | null> {
+  trigger(sound: SoundSlot, pressId?: string, external = false, cancellation?: AbortSignal, deadlineSignal = cancellation): Promise<string | boolean | null> {
     const engine = this.getEngine();
     if (!engine) return Promise.resolve(false);
     const hold = sound.triggerMode === "hold" && pressId !== undefined;
@@ -32,7 +32,7 @@ export class SoundTriggers {
         fresh: hold,
         waitForRouting: external ? () => waitForAudioConfiguration(this.getConfiguration) : undefined
       });
-    }, signal, cancellation ?? signal);
+    }, signal, deadlineSignal ?? signal);
     return hold
       ? this.presses.press(pressId, (signal) => start(signal) as Promise<string | false>,
         (voiceId) => engine.stopVoice(sound.id, voiceId), sound.id, cancellation)
