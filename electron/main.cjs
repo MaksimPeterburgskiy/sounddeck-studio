@@ -50,7 +50,11 @@ if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
   app.on("second-instance", (_event, argv) => {
-    if (hasExternalLaunchArg(argv)) return;
+    if (hasExternalLaunchArg(argv)) {
+      const state = externalControl.getState();
+      if (!state.enabled || !state.listening || state.error) showMainWindow();
+      return;
+    }
     if (!hasStartupArg(argv)) {
       showMainWindow();
       return;

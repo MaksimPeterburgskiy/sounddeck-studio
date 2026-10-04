@@ -68,6 +68,9 @@ async function boot(storageError) {
       });
     }
     isDestroyed() { return false; }
+    isMinimized() { return false; }
+    show = vi.fn();
+    focus = vi.fn();
     loadFile() {
       this.webContents.emit("did-start-navigation", { isMainFrame: true, isSameDocument: false });
       return new Promise((resolve) => { finishLoading = resolve; });
@@ -110,7 +113,7 @@ async function boot(storageError) {
     window.webContents.emit("did-navigate");
     window.webContents.emit("did-finish-load");
   };
-  return { window, bridge, onCommand, event, fileSystem, token, documentLoaded,
+  return { window, application: app, bridge, onCommand, event, fileSystem, token, documentLoaded,
     invoke: (name, sender = event, ...args) => {
       const arity = { "library:load": 0, "library:save": 1, "control:state": 1, "control:result": 2, "control:received": 1, "hotkeys:capture": 1 }[name];
       if (arity !== undefined && args.length === arity) args.push(token());
@@ -125,6 +128,30 @@ async function boot(storageError) {
 }
 
 describe("main-process external control lifecycle", () => {
+  it("surfaces external relaunches when control is unavailable and keeps healthy relaunches hidden", async () => {
+    const app = await boot();
+    await app.loaded();
+    await app.invoke("control:getSettings");
+    const state = vi.spyOn(app.bridge, "getState");
+    for (const status of [
+      { enabled: true, listening: false, error: { code: "EADDRINUSE" } },
+      { enabled: false, listening: false, error: null },
+      { enabled: true, listening: false, error: null }
+    ]) {
+      state.mockReturnValue(status);
+      app.application.emit("second-instance", {}, ["/app", startupSettings.EXTERNAL_LAUNCH_ARG, startupSettings.STARTUP_ARG]);
+      expect(app.window.show).toHaveBeenCalledOnce();
+      expect(app.window.focus).toHaveBeenCalledOnce();
+      app.window.show.mockClear();
+      app.window.focus.mockClear();
+    }
+    state.mockReturnValue({ enabled: true, listening: true, error: null });
+    app.application.emit("second-instance", {}, ["/app", startupSettings.EXTERNAL_LAUNCH_ARG]);
+    expect(app.window.show).not.toHaveBeenCalled();
+    state.mockRestore();
+    await app.bridge.stop();
+  });
+
   it("waits for persisted settings before and during background startup", async () => {
     const app = await boot();
     const stored = deferred();
