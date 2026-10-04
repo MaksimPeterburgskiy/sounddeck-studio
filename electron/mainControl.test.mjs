@@ -89,6 +89,7 @@ async function boot(storageError) {
   const overrides = {
     ...helperModules,
     electron, "node:fs/promises": fileSystem,
+    "node:fs": { renameSync: (from, to) => { files.set(to, files.get(from)); files.delete(from); } },
     "./hotkeys.cjs": { createHotkeyEngine: () => ({ stop: () => {}, setSuspended: vi.fn() }) },
     "./corsair.cjs": { createCorsairBridge: () => ({ start: () => {}, stop: () => {} }) },
     "./externalControl.cjs": { ...controlModule, createExternalControlBridge: (options) => {
@@ -199,7 +200,7 @@ describe("main-process external control lifecycle", () => {
     const writing = deferred();
     const writeFile = app.fileSystem.writeFile.getMockImplementation();
     app.fileSystem.writeFile.mockImplementation(async (file, data) => {
-      if (file.endsWith("library.json")) {
+      if (file.includes("library.json.")) {
         await writeFile(file, "{");
         await writing.promise;
       }
@@ -225,7 +226,7 @@ describe("main-process external control lifecycle", () => {
     expect(await Promise.all([first, pending, coalesced])).toEqual([{ ok: true }, { ok: true }, { ok: true }]);
     await ready;
     expect(await reload).toEqual(newest);
-    expect(app.fileSystem.writeFile.mock.calls.filter(([file]) => file.endsWith("library.json"))).toHaveLength(1);
+    expect(app.fileSystem.writeFile.mock.calls.filter(([file]) => file.includes("library.json."))).toHaveLength(1);
     expect(app.bridge.getSnapshot().volumes.micVirtual).toEqual({ value: 0.9, muted: true });
     expect(app.bridge.getSnapshot()).toMatchObject({ activeBoardId: newBoard.id, library: { activeBoardId: newBoard.id, boards: expect.arrayContaining([newBoard]) } });
     await app.bridge.stop();

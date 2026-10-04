@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
+import * as fs from "node:fs/promises";
+import path from "node:path";
+import os from "node:os";
 import queueModule from "./librarySaveQueue.cjs";
 
-const { createLibrarySaveQueue } = queueModule;
+const { createLibrarySaveQueue, createAtomicLibrarySave } = queueModule;
 
 function deferred() {
   let resolve;
@@ -11,6 +14,36 @@ function deferred() {
 }
 
 describe("library save queue", () => {
+  it("releases a hung write for the newest retry and prevents a late stale write from replacing it", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "sounddeck-save-"));
+    const file = path.join(directory, "library.json");
+    const stalled = deferred();
+    const finished = deferred();
+    const writeFile = vi.fn().mockImplementationOnce(async (temporary, data) => {
+      await stalled.promise;
+      // Simulate an OS write that ignores cancellation and finishes late.
+      await fs.writeFile(temporary, data);
+    }).mockImplementation(fs.writeFile);
+    const atomicSave = createAtomicLibrarySave(file, { fileSystem: { ...fs, writeFile } });
+    const queue = createLibrarySaveQueue({ load: () => fs.readFile(file, "utf8"), timeoutMs: 100,
+      save: (library, signal) => atomicSave(library, signal).finally(() => { if (library.volume === 0.3) finished.resolve(); }) });
+    try {
+      const first = queue.save({ volume: 0.3 });
+      const failure = expect(first).rejects.toThrow("Library save timed out");
+      await vi.waitFor(() => expect(writeFile).toHaveBeenCalledOnce());
+      await failure;
+      expect(await queue.save({ volume: 0.9 })).toEqual({ ok: true });
+      expect(JSON.parse(await queue.load())).toEqual({ volume: 0.9 });
+      stalled.resolve();
+      await finished.promise;
+      expect(JSON.parse(await queue.load())).toEqual({ volume: 0.9 });
+      await vi.waitFor(async () => expect(await fs.readdir(directory)).toEqual(["library.json"]));
+    } finally {
+      stalled.resolve();
+      await fs.rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("loads the newest pending volume on reload and preserves it on the remounted renderer's first save", async () => {
     const writing = deferred();
     let persisted = { settings: { micVirtualVolume: 0.3 } };
@@ -60,7 +93,7 @@ describe("library save queue", () => {
     await first;
     await Promise.resolve();
     expect(save).toHaveBeenCalledTimes(2);
-    expect(save).toHaveBeenLastCalledWith({ settings: { micVirtualVolume: 1, micPassthrough: true } });
+    expect(save).toHaveBeenLastCalledWith({ settings: { micVirtualVolume: 1, micPassthrough: true } }, expect.any(AbortSignal));
     expect(settled).not.toHaveBeenCalled();
     newestWrite.resolve({ ok: true });
     await Promise.all(waiters);

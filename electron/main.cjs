@@ -1,6 +1,7 @@
 const { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, dialog, shell, systemPreferences } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs/promises");
+const { renameSync } = require("node:fs");
 const http = require("node:http");
 const https = require("node:https");
 const crypto = require("node:crypto");
@@ -9,7 +10,7 @@ const { spawn } = require("node:child_process");
 const { createCorsairBridge, isCorsairSupportedPlatform, isGKeyAccelerator } = require("./corsair.cjs");
 const { createExternalControlBridge, launcherPath } = require("./externalControl.cjs");
 const { createControlRenderer } = require("./controlRenderer.cjs");
-const { createLibrarySaveQueue } = require("./librarySaveQueue.cjs");
+const { createLibrarySaveQueue, createAtomicLibrarySave } = require("./librarySaveQueue.cjs");
 const { createHotkeyEngine } = require("./hotkeys.cjs");
 const { buildCropArgs } = require("./ffmpegArgs.cjs");
 const {
@@ -1114,11 +1115,7 @@ const librarySaveQueue = createLibrarySaveQueue({
     await ensureLibrary();
     return readJson(libraryFile());
   },
-  save: async (library) => {
-    await ensureLibrary();
-    await fs.writeFile(libraryFile(), JSON.stringify(library, null, 2));
-    return { ok: true };
-  }
+  save: createAtomicLibrarySave(libraryFile(), { fileSystem: fs, replace: renameSync })
 });
 
 handleTrustedIpc("library:load", (_event, token) => {
