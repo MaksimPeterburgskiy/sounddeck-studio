@@ -1,5 +1,6 @@
 export const CONTROL_PROTOCOL_VERSION = 1;
 export const CONTROL_DEFAULT_PORT = 41730;
+export const CONTROL_MAX_TITLE_LENGTH = 256;
 
 export type ControlSettingKey = "micPassthrough" | "soundboardToVirtualMic" | "noiseSuppressionEnabled" | "echoCancellationEnabled" | "monitorToHeadphones";
 export type ControlVolumeBus = "micVirtual" | "micMonitor" | "soundboardVirtual" | "soundboardMonitor";
@@ -24,6 +25,8 @@ export type ControlPlaybackResult = { ok: true } | { ok: false; code: "unavailab
 
 export interface ControlLibrary {
   activeBoardId: string;
+  // Metadata was omitted to keep the snapshot inside the frame budget.
+  incomplete?: boolean;
   boards: Array<{
     id: string;
     name: string;
@@ -123,7 +126,7 @@ export interface ControlStatus extends ControlSettings {
 
 type RendererMutationCommandName = "sound.play" | "setting.set" | "setting.toggle" | "volume.set" | "volume.adjust" | "volume.mute";
 export type RendererControlCommand =
-  | { command: "control.cancel"; requestId: string }
+  | { command: "control.cancel"; requestId: string; reason?: "operation-timeout" }
   | {
     [Name in RendererMutationCommandName]: { command: Name; requestId: string; args: ControlCommandArgs[Name] }
   }[RendererMutationCommandName]

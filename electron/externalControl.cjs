@@ -10,6 +10,14 @@ const MAX_PAYLOAD = 64 * 1024;
 const MAX_CLIENTS = 64;
 const MAX_PENDING_COMMANDS = 32;
 const MAX_BUFFERED = 8 * 1024 * 1024;
+// Bound encoded image data, leaving ample envelope headroom below the plugin's
+// 16 MiB receive limit. Imported artwork is preserved in the app's library.
+const MAX_IMAGE_DATA_BYTES = 8 * 1024 * 1024;
+// Budget the published summary by size rather than count, so ordinary libraries
+// are never cut while hostile titles can't approach the plugin's 16 MiB frames.
+const MAX_SUMMARY_BYTES = 8 * 1024 * 1024;
+const MAX_SUMMARY_TITLE_LENGTH = 256;
+const MAX_SUMMARY_COLOR_LENGTH = 32;
 const SETTING_KEYS = ["micPassthrough", "soundboardToVirtualMic", "noiseSuppressionEnabled", "echoCancellationEnabled", "monitorToHeadphones"];
 const VOLUME_BUSES = ["micVirtual", "micMonitor", "soundboardVirtual", "soundboardMonitor"];
 
@@ -74,7 +82,12 @@ function validateCommand(command, args) {
   }
 }
 
-function launcherPath(execPath, platform = process.platform, packaged = false) {
+function launcherPath(execPath, platform = process.platform, packaged = false, env = process.env) {
+  // Portable Electron runs from a temporary extraction that disappears on exit.
+  const portable = env.PORTABLE_EXECUTABLE_FILE;
+  if (platform === "win32" && typeof portable === "string"
+    && path.win32.isAbsolute(portable) && /^(?:[a-z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+[\\/])/i.test(portable) && /\.exe$/i.test(portable)
+    && !/[\x00-\x1f\x7f]/.test(portable)) return portable;
   if (packaged && platform === "darwin") {
     const bundle = execPath.match(/^(.+\.app)\/Contents\/MacOS\/[^/]+$/);
     if (bundle) return bundle[1];
@@ -93,7 +106,8 @@ function createExternalControlBridge({
   now = Date.now,
   defaultPort = DEFAULT_PORT,
   helloTimeoutMs = 5000,
-  cooldownMs = 30000
+  cooldownMs = 30000,
+  operationTimeoutMs = 60000
 }) {
   const stateFile = path.join(userData, "external-control.json");
   let settings = { enabled: false, port: defaultPort, token: "", allowLan: false };
@@ -158,7 +172,7 @@ function createExternalControlBridge({
   }
 
   function getLibrary() {
-    return { boards: library.boards, activeBoardId: live.activeBoardId };
+    return { ...library, activeBoardId: live.activeBoardId };
   }
 
   function getSnapshot() {
@@ -207,22 +221,38 @@ function createExternalControlBridge({
     const nextAudio = audioState(value?.settings);
     const settingsChanged = JSON.stringify(audio.settings) !== JSON.stringify(nextAudio.settings);
     const volumesChanged = JSON.stringify(audio.volumes) !== JSON.stringify(nextAudio.volumes);
-    const boards = (Array.isArray(value?.boards) ? value.boards : []).map((board) => ({
-      id: board.id, name: board.name, color: board.color,
-      sounds: (Array.isArray(board.sounds) ? board.sounds : []).map((sound) => ({
-        id: sound.id, title: sound.title, color: sound.color, hasImage: Boolean(sound.image)
-      }))
-    }));
+    const boards = [];
+    // Reserve the envelope and the longest valid active ID, including the
+    // completeness marker, before accounting for metadata entries.
+    let summaryBytes = Buffer.byteLength(JSON.stringify({ boards: [], activeBoardId: "x".repeat(128), incomplete: true }));
+    let incomplete = false;
+    const fits = (entry) => {
+      summaryBytes += Buffer.byteLength(JSON.stringify(entry)) + 1;
+      if (summaryBytes > MAX_SUMMARY_BYTES) incomplete = true;
+      return !incomplete;
+    };
     images.clear();
-    for (const board of value?.boards || []) {
-      for (const sound of board.sounds || []) {
+    summarize: for (const board of Array.isArray(value?.boards) ? value.boards : []) {
+      if (!id(board?.id)) continue;
+      const sounds = [];
+      const summary = { id: board.id, name: typeof board.name === "string" ? board.name.slice(0, MAX_SUMMARY_TITLE_LENGTH) : "",
+        color: typeof board.color === "string" ? board.color.slice(0, MAX_SUMMARY_COLOR_LENGTH) : "", sounds };
+      if (!fits(summary)) break;
+      boards.push(summary);
+      for (const sound of Array.isArray(board.sounds) ? board.sounds : []) {
+        if (!id(sound?.id)) continue;
+        const entry = { id: sound.id, title: typeof sound.title === "string" ? sound.title.slice(0, MAX_SUMMARY_TITLE_LENGTH) : "",
+          color: typeof sound.color === "string" ? sound.color.slice(0, MAX_SUMMARY_COLOR_LENGTH) : "", hasImage: Boolean(sound.image) };
+        if (!fits(entry)) break summarize;
+        sounds.push(entry);
         if (typeof sound.image === "string" && /^data:image\/[a-zA-Z0-9.+-]+;base64,/.test(sound.image)) images.set(sound.id, sound.image);
       }
     }
-    const changed = JSON.stringify(library.boards) !== JSON.stringify(boards);
+    const changed = (library.incomplete === true) !== incomplete || JSON.stringify(library.boards) !== JSON.stringify(boards);
     const updatesBoard = currentUpdate(owner, appliedBoardGeneration);
     const activeBoardId = updatesBoard
-      ? boards.find((board) => board.id === requestedBoardId)?.id || boards[0]?.id || ""
+      // Budgeting controls metadata, not the desktop's selected board.
+      ? (Array.isArray(value?.boards) ? value.boards : []).find((board) => board?.id === requestedBoardId)?.id || boards[0]?.id || ""
       : live.activeBoardId;
     const boardChanged = live.activeBoardId !== activeBoardId;
     // Images are fetched separately, but replacing one must invalidate client caches.
@@ -232,7 +262,7 @@ function createExternalControlBridge({
     appliedLibraryGeneration = owner.generation;
     if (updatesBoard) appliedBoardGeneration = owner.generation;
     libraryPublished = true;
-    library = { boards };
+    library = { boards, ...(incomplete ? { incomplete: true } : {}) };
     live = { ...live, activeBoardId };
     audio = nextAudio;
     if (changed || imageChanged) event("library.changed", getLibrary());
@@ -242,7 +272,7 @@ function createExternalControlBridge({
     return true;
   }
 
-  async function dispatch(command, args, signal) {
+  async function dispatch(command, args, cancellation) {
     const invalid = validateCommand(command, args);
     if (invalid) return { ok: false, code: invalid };
     if (!settings.enabled || stopped) return { ok: false, code: "disabled" };
@@ -250,18 +280,36 @@ function createExternalControlBridge({
     if (command === "library.get") return { ok: true, data: getLibrary() };
     if (command.startsWith("sound.")) {
       let sound = sounds.find((candidate) => candidate.id === args.soundId);
-      if (!sound && command === "sound.play" && args.boardId && args.title) {
-        sound = library.boards.find((board) => board.id === args.boardId)?.sounds.find((candidate) => candidate.title === args.title);
+      if (!sound && !library.incomplete && command === "sound.play" && args.boardId && args.title) {
+        const matches = library.boards.find((board) => board.id === args.boardId)?.sounds.filter((candidate) => candidate.title === args.title) || [];
+        // At the truncation boundary distinct original titles may collide.
+        // Preserve first-duplicate lookup for shorter, untruncated titles.
+        sound = args.title.length === MAX_SUMMARY_TITLE_LENGTH && matches.length > 1 ? undefined : matches[0];
       }
       if (!sound) return { ok: false, code: "not-found" };
-      if (command === "sound.image") return { ok: true, data: { image: images.get(sound.id) || null } };
+      if (command === "sound.image") {
+        const data = { image: images.get(sound.id) || null };
+        if (Buffer.byteLength(JSON.stringify(data)) > MAX_IMAGE_DATA_BYTES) return { ok: false, code: "payload-too-large" };
+        return { ok: true, data };
+      }
       args = { soundId: sound.id };
     }
     if (command === "board.activate" && !library.boards.some((board) => board.id === args.boardId)) return { ok: false, code: "not-found" };
+    // A minute accommodates large decodes while bounding hung renderer work.
+    // Abort requests cancellation; only the renderer can acknowledge its outcome.
+    const deadline = new AbortController();
+    const deadlineTimer = setTimeout(() => {
+      cancellation.abort("operation-timeout");
+      // Disconnect may have consumed the request's one-shot abort already.
+      deadline.abort("operation-timeout");
+    }, operationTimeoutMs);
+    deadlineTimer.unref?.();
     try {
-      return await onCommand({ command, args }, signal);
+      return await onCommand({ command, args }, cancellation.signal, deadline.signal);
     } catch {
       return { ok: false, code: "internal-error" };
+    } finally {
+      clearTimeout(deadlineTimer);
     }
   }
 
@@ -454,7 +502,7 @@ function createExternalControlBridge({
       if (res.destroyed) cancellation.abort();
       let result;
       try {
-        result = await dispatch(command, args, cancellation.signal);
+        result = await dispatch(command, args, cancellation);
       } finally {
         httpControllers.delete(cancellation);
         res.removeListener("close", disconnected);
@@ -533,7 +581,7 @@ function createExternalControlBridge({
       const cancellation = new AbortController();
       pendingCommands.add(cancellation);
       try {
-        const result = await dispatch(message.command, message.args, cancellation.signal);
+        const result = await dispatch(message.command, message.args, cancellation);
         send(ws, { type: "result", id: message.id, ...result });
       } finally {
         pendingCommands.delete(cancellation);
@@ -678,4 +726,4 @@ function createExternalControlBridge({
   return { start, stop, getState, getSettings, setSettings, regenerateToken, beginUpdate, setDocument, updateLibrary, updateLiveState, getSnapshot };
 }
 
-module.exports = { createExternalControlBridge, launcherPath, PROTOCOL_VERSION, DEFAULT_PORT };
+module.exports = { createExternalControlBridge, launcherPath, PROTOCOL_VERSION, DEFAULT_PORT, MAX_IMAGE_DATA_BYTES };

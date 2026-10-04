@@ -1,0 +1,127 @@
+{
+  "$schema": "https://schemas.elgato.com/streamdeck/plugins/manifest.json",
+  "UUID": "com.sounddeck.studio",
+  "Name": "SoundDeck Studio",
+  "Category": "SoundDeck Studio",
+  "Author": "Maksim Peterburgskiy",
+  "Description": "Control SoundDeck Studio sounds, boards, and audio settings.",
+  "Version": "0.1.22.99999",
+  "SDKVersion": 3,
+  "Software": {
+    "MinimumVersion": "7.1"
+  },
+  "Nodejs": {
+    "Version": "24"
+  },
+  "OS": [
+    {
+      "Platform": "mac",
+      "MinimumVersion": "13"
+    },
+    {
+      "Platform": "windows",
+      "MinimumVersion": "10"
+    }
+  ],
+  "CodePath": "bin/plugin.js",
+  "Icon": "imgs/plugin",
+  "CategoryIcon": "imgs/category",
+  "Actions": [
+    {
+      "UUID": "com.sounddeck.studio.play-sound",
+      "Name": "Play sound",
+      "Tooltip": "Play a configured sound.",
+      "Icon": "imgs/play-sound",
+      "Controllers": [
+        "Keypad"
+      ],
+      "UserTitleEnabled": true,
+      "States": [
+        {
+          "Image": "imgs/play-sound-key",
+          "TitleAlignment": "bottom",
+          "FontSize": 13
+        }
+      ],
+      "PropertyInspectorPath": "ui/play-sound.html"
+    },
+    {
+      "UUID": "com.sounddeck.studio.stop-all",
+      "Name": "Stop all",
+      "Tooltip": "Stop every playing sound.",
+      "Icon": "imgs/stop-all",
+      "Controllers": [
+        "Keypad"
+      ],
+      "UserTitleEnabled": true,
+      "States": [
+        {
+          "Image": "imgs/stop-all-key",
+          "TitleAlignment": "bottom",
+          "FontSize": 13
+        }
+      ]
+    },
+    {
+      "UUID": "com.sounddeck.studio.switch-board",
+      "Name": "Switch to board",
+      "Tooltip": "Activate a configured board.",
+      "Icon": "imgs/switch-board",
+      "Controllers": [
+        "Keypad"
+      ],
+      "UserTitleEnabled": true,
+      "States": [
+        {
+          "Image": "imgs/switch-board-key",
+          "TitleAlignment": "bottom",
+          "FontSize": 13
+        }
+      ],
+      "PropertyInspectorPath": "ui/switch-board.html"
+    },
+    {
+      "UUID": "com.sounddeck.studio.cycle-boards",
+      "Name": "Cycle boards",
+      "Tooltip": "Activate the next board.",
+      "Icon": "imgs/cycle-boards",
+      "Controllers": [
+        "Keypad"
+      ],
+      "UserTitleEnabled": true,
+      "States": [
+        {
+          "Image": "imgs/cycle-boards-key",
+          "TitleAlignment": "bottom",
+          "FontSize": 13
+        }
+      ]
+    },
+    {
+      "UUID": "com.sounddeck.studio.toggle-setting",
+      "Name": "Toggle setting",
+      "Tooltip": "Toggle an audio routing setting.",
+      "Icon": "imgs/toggle-setting",
+      "Controllers": [
+        "Keypad"
+      ],
+      "UserTitleEnabled": true,
+      "States": [
+        {
+          "Image": "imgs/toggle-setting-key",
+          "TitleAlignment": "bottom",
+          "FontSize": 13,
+          "Name": "Off"
+        },
+        {
+          "Image": "imgs/toggle-setting-on-key",
+          "TitleAlignment": "bottom",
+          "FontSize": 13,
+          "Name": "On"
+        }
+      ],
+      "PropertyInspectorPath": "ui/toggle-setting.html",
+      "DisableAutomaticStates": true
+    }
+  ]
+}

@@ -1,16 +1,17 @@
 import { defineConfig } from "vitest/config";
+import { streamDeckTestTransform } from "./streamdeck-plugin/testTransform.mjs";
 import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   base: "./",
-  plugins: [react()],
+  plugins: [react(), streamDeckTestTransform()],
   server: {
     port: 5173,
     strictPort: true
   },
   test: {
     environment: "node",
-    include: ["src/**/*.test.ts", "electron/**/*.test.mjs", "scripts/**/*.test.mjs"],
+    include: ["src/**/*.test.ts", "electron/**/*.test.mjs", "scripts/**/*.test.mjs", "streamdeck-plugin/src/**/*.test.ts"],
     coverage: {
       provider: "v8",
       // Coverage is scoped to the tested library and electron helper modules;

@@ -78,7 +78,9 @@ Responses carry the same ID:
 
 A successful `sound.play` result confirms the sound's tap/retrigger action after the latest audio route configuration, including device refresh and preferred-device retries, settles, not audio completion. If no output route is enabled for the sound, it returns `unavailable`. Disconnecting cancels that client’s plays that have not started; voices already started continue. Stops cancel earlier queued plays, while later plays remain queued. Other playback/board results acknowledge dispatch to the app. Commands respect the sound's existing tap/retrigger behavior.
 
-Setting/volume mutations run in renderer receipt order, one at a time. Results include the values applied and saved by the renderer and wait for tracked audio configuration, including device refresh and preferred-device retries, to settle. Setting/volume commands and `sound.play` have a five-second receipt timeout: a late delivery returns `unavailable` without being applied. Once received, they have no completion timeout; renderer loss or reset fails pending requests. Disconnecting cancels that client’s queued mutations that have not been applied; an applied mutation finishes saving and configuring audio even if its client disconnects.
+Setting/volume mutations run in renderer receipt order, one at a time. Results include the values applied and saved by the renderer and wait for tracked audio configuration, including device refresh and preferred-device retries, to settle. Setting/volume commands and `sound.play` have a five-second receipt timeout: a late delivery returns `unavailable` without being applied. App commands also have a 60-second operation deadline measured from dispatch, including time spent queued. At the deadline the app requests cancellation and waits for the renderer's acknowledgement of the outcome; renderer loss or reset fails pending requests.
+
+Playback cancelled before it starts returns `unavailable` and never starts later, even if decoding or routing eventually finishes. A queued setting/volume mutation cancelled before application also returns `unavailable`. If an applied mutation's save is still unconfirmed at the deadline, the result is `unavailable`: the app preserves the in-memory change and retries through normal UI persistence. If saving succeeded but audio configuration is still pending, the result is successful with the applied values; routing may finish later. Disconnecting cancels that client’s queued mutations that have not been applied; an applied mutation continues saving and configuring audio until completion or its original deadline, even if its client disconnects.
 
 Commands that change app state return `busy` while a hotkey is being captured and `unavailable` if the renderer is absent or still initializing, including during a reload; cached library/image queries still work.
 
@@ -90,14 +92,16 @@ Commands that change app state return `busy` while a hotkey is being captured an
 | `board.activate` | `boardId` | — |
 | `board.cycle` | Optional `direction`: `1` (default) or `-1` | — |
 | `library.get` | `{}` | Library summary in `data` |
-| `sound.image` | `soundId` | `data: {"image":"data:image/png;base64,..."}`; `image: null` if no custom image |
+| `sound.image` | `soundId` | `data: {"image":"data:image/png;base64,..."}`; `image: null` if no custom image; `payload-too-large` if encoded data exceeds 8 MiB |
 | `setting.set` | `key`, `value`: boolean | `data: {key,value}` |
 | `setting.toggle` | `key` | `data: {key,value}` |
 | `volume.set` | `bus`, `value`: number from 0 to 1 | `data: {bus,value,muted}` |
 | `volume.adjust` | `bus`, `delta`: finite number | `data: {bus,value,muted}` |
 | `volume.mute` | `bus`, optional `muted`: boolean | `data: {bus,value,muted}` |
 
-`sound.play` resolves the sound ID first. If it is missing, an exact title match within the supplied board is used; the first matching sound in board order wins. This lets saved bindings survive a board re-import. If neither resolves, the result is `not-found`. `sound.stop` stops every voice for that ID; it does not use fallback lookup. Cycling wraps around in either direction.
+Board names and sound titles in library summaries are limited to 256 UTF-16 code units, colors to 32, and IDs to the protocol's 128-character format. A summary is also capped at 8 MiB of JSON, in library order, so it always fits a client frame; ordinary libraries never reach that cap. Capped summaries include `incomplete: true`. Clients must preserve missing stable bindings and avoid title fallback while that marker is present; the server also disables fallback for incomplete summaries. The app retains the full library.
+
+`sound.play` resolves the sound ID first. If it is missing, an exact title match within the supplied board is used; the first matching sound in board order wins for titles shorter than 256 code units. At the 256-code-unit truncation boundary, multiple matches return `not-found` to avoid playing a different sound with the same prefix. This lets saved bindings survive a board re-import. If neither resolves, the result is `not-found`. `sound.stop` stops every voice for that ID; it does not use fallback lookup. Cycling wraps around in either direction.
 
 Setting keys are `micPassthrough`, `soundboardToVirtualMic`, `noiseSuppressionEnabled`, `echoCancellationEnabled`, and `monitorToHeadphones`. Volume buses map to the app's controls as follows:
 
@@ -138,7 +142,7 @@ Each playback entry represents a voice, so overlapping voices can repeat a sound
 
 ## HTTP
 
-Every endpoint requires `Authorization: Bearer <token>`. GET responses are the snapshot/library directly. POST responses are `{ok:true}`, `{ok:true,data}` for setting/volume changes, or `{ok:false,code}`. JSON bodies may be omitted for commands with no body arguments. Headers and bodies have a 10-second receive deadline; a fully received command has no socket inactivity timeout while playback preparation or an audio mutation is pending.
+Every endpoint requires `Authorization: Bearer <token>`. GET responses are the snapshot/library directly. POST responses are `{ok:true}`, `{ok:true,data}` for setting/volume changes, or `{ok:false,code}`. JSON bodies may be omitted for commands with no body arguments. Headers and bodies have a 10-second receive deadline; a fully received command has no socket inactivity timeout while playback preparation or an audio mutation is pending, but the same 60-second operation deadline and outcome semantics described above apply. A deadline result of `unavailable` uses HTTP 503.
 
 | Method | Path | JSON body |
 | --- | --- | --- |
@@ -194,7 +198,7 @@ Session/HTTP errors use `{type:"error",code,message,protocol:1}`; WebSocket comm
 | `invalid-args` | Invalid command arguments or HTTP JSON / 400 |
 | `unknown-command` | Command not recognized |
 | `not-found` | Sound, board or endpoint missing / 404 |
-| `payload-too-large` | Body exceeds 64 KiB / 413; oversized WS frames close with code 1009 |
+| `payload-too-large` | Body exceeds 64 KiB / 413; oversized incoming WS frames close with code 1009; `sound.image` data exceeds 8 MiB (session stays open) |
 | `busy` | Hotkey capture active, session capacity reached, or pending command limit reached / 503 |
 | `unavailable` | Renderer unavailable or still initializing / 503 |
 | `internal-error` | Command could not be dispatched / 500 |

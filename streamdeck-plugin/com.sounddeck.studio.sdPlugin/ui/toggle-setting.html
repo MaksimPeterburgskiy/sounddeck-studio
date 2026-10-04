@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>SoundDeck Studio</title>
+  <script src="sdpi-components.js"></script>
+  <link rel="stylesheet" href="inspector.css">
+</head>
+<body>
+  <sdpi-item label="Setting">
+    <sdpi-select id="key" default="micPassthrough">
+      <option value="micPassthrough">Mic passthrough</option>
+      <option value="soundboardToVirtualMic">Sounds to virtual mic</option>
+      <option value="noiseSuppressionEnabled">Noise suppression</option>
+      <option value="echoCancellationEnabled">Echo cancellation</option>
+      <option value="monitorToHeadphones">Monitor to headphones</option>
+    </sdpi-select>
+  </sdpi-item>
+  <p id="status" role="status"></p>
+  <script src="inspector.js"></script>
+</body>
+</html>

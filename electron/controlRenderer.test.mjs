@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createSoundPlayQueue } from "../src/lib/soundPlayQueue.ts";
+import { createControlCancellation } from "../src/lib/controlCancellation.ts";
+import { deferred } from "../src/lib/testing/webAudioFakes.ts";
 import rendererModule from "./controlRenderer.cjs";
 
 const { createControlRenderer } = rendererModule;
@@ -6,6 +9,66 @@ const command = { command: "volume.adjust", args: { bus: "micVirtual", delta: 0.
 afterEach(() => vi.useRealTimers());
 
 describe("renderer control acknowledgements", () => {
+  it.each(["sound", "all"])("acknowledges a stalled play at its deadline after stopping %s and releases later plays", async (stop) => {
+    vi.useFakeTimers();
+    const queue = createSoundPlayQueue();
+    const serverCancellation = createControlCancellation();
+    const rendererCancellation = createControlCancellation();
+    const preparation = deferred();
+    const started = deferred();
+    const start = vi.fn();
+    let preparingSignal;
+    const completed = vi.fn();
+    const bridge = createControlRenderer({ send: (message) => {
+      if (message.command === "control.cancel") {
+        rendererCancellation.abort(message.reason);
+        return;
+      }
+      // Deliver after dispatch has registered the request, as Electron IPC does.
+      queueMicrotask(() => {
+        bridge.receive(message.requestId);
+        void queue("sound-a", async (signal) => {
+          preparingSignal = signal;
+          started.resolve();
+          await preparation.promise;
+          if (!signal.aborted) start();
+          return { ok: !signal.aborted };
+        }, rendererCancellation.signal, rendererCancellation.deadlineSignal)
+          .catch(() => ({ ok: false, code: "unavailable" }))
+          .then((result) => bridge.complete(message.requestId, result));
+      });
+    } });
+    const deadline = setTimeout(() => serverCancellation.abort("operation-timeout"), 60_000);
+    const result = bridge.dispatch({ command: "sound.play", args: { soundId: "sound-a" } },
+      serverCancellation.signal, serverCancellation.deadlineSignal).then(completed);
+    try {
+      await started.promise;
+      await vi.advanceTimersByTimeAsync(1000);
+      if (stop === "sound") queue.cancel("sound-a");
+      else queue.cancelAll();
+      expect(preparingSignal.aborted).toBe(true);
+      expect(preparingSignal.reason).not.toBe("operation-timeout");
+      expect(rendererCancellation.signal.aborted).toBe(false);
+      const later = vi.fn(async () => "local play");
+      const localPlay = queue("sound-a", later);
+      await vi.advanceTimersByTimeAsync(58_999);
+      expect(completed).not.toHaveBeenCalled();
+      expect(later).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(completed).toHaveBeenCalledExactlyOnceWith({ ok: false, code: "unavailable" });
+      await result;
+      expect(await localPlay).toBe("local play");
+      preparation.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(start).not.toHaveBeenCalled();
+      expect(completed).toHaveBeenCalledOnce();
+    } finally {
+      clearTimeout(deadline);
+      preparation.resolve();
+      bridge.cancelPending();
+    }
+  });
+
   it("cancels in-flight commands and ignores their late replies", async () => {
     const send = vi.fn();
     const bridge = createControlRenderer({ send });

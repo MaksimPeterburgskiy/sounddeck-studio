@@ -1,6 +1,7 @@
 const { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, dialog, shell, systemPreferences } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs/promises");
+const { renameSync } = require("node:fs");
 const http = require("node:http");
 const https = require("node:https");
 const crypto = require("node:crypto");
@@ -9,7 +10,7 @@ const { spawn } = require("node:child_process");
 const { createCorsairBridge, isCorsairSupportedPlatform, isGKeyAccelerator } = require("./corsair.cjs");
 const { createExternalControlBridge, launcherPath } = require("./externalControl.cjs");
 const { createControlRenderer } = require("./controlRenderer.cjs");
-const { createLibrarySaveQueue } = require("./librarySaveQueue.cjs");
+const { createLibrarySaveQueue, createAtomicLibrarySave } = require("./librarySaveQueue.cjs");
 const { createHotkeyEngine } = require("./hotkeys.cjs");
 const { buildCropArgs } = require("./ffmpegArgs.cjs");
 const {
@@ -22,7 +23,7 @@ const { createMacTrayTemplateImage, MAC_TRAY_ICON_FILENAME } = require("./trayIc
 const { createShutdownLifecycle, registerWindowShutdown } = require("./shutdownLifecycle.cjs");
 const { createUpdateInstallLifecycle } = require("./updateInstallLifecycle.cjs");
 const { installedChannel, isStalePayload, normalizeChannelPreference, resolveUpdaterFlags } = require("./updateChannel.cjs");
-const { getWindowsStartupState, hasStartupArg, startupLoginItemOptions, STARTUP_ARG, WINDOWS_STARTUP_NAME } = require("./startupSettings.cjs");
+const { getWindowsStartupState, hasStartupArg, hasExternalLaunchArg, shouldStartHidden, startupLoginItemOptions, STARTUP_ARG, WINDOWS_STARTUP_NAME } = require("./startupSettings.cjs");
 const {
   sanitizeName,
   inferMime,
@@ -49,6 +50,11 @@ if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
   app.on("second-instance", (_event, argv) => {
+    if (hasExternalLaunchArg(argv)) {
+      const state = externalControl.getState();
+      if (!state.enabled || !state.listening || state.error) showMainWindow();
+      return;
+    }
     if (!hasStartupArg(argv)) {
       showMainWindow();
       return;
@@ -126,12 +132,12 @@ function resetControlRenderer() {
 const externalControl = createExternalControlBridge({
   userData: app.getPath("userData"),
   appVersion: app.getVersion(),
-  appPath: launcherPath(process.execPath, process.platform, app.isPackaged),
+  appPath: launcherPath(process.execPath, process.platform, app.isPackaged, process.env),
   onStateChange: (state) => sendToMainWindow("control-status", state),
-  onCommand: ({ command, args }, signal) => {
+  onCommand: ({ command, args }, signal, deadlineSignal) => {
     if (hotkeyCaptureActive) return { ok: false, code: "busy" };
     if (!controlRendererReady || !mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return { ok: false, code: "unavailable" };
-    if (command === "sound.play" || command.startsWith("setting.") || command.startsWith("volume.")) return controlRenderer.dispatch({ command, args }, signal);
+    if (command === "sound.play" || command.startsWith("setting.") || command.startsWith("volume.")) return controlRenderer.dispatch({ command, args }, signal, deadlineSignal);
     const binding = { accelerator: "" };
     if (command === "playback.stopAll") binding.type = "stop-all";
     else if (command === "board.activate") Object.assign(binding, { type: "board", boardId: args.boardId });
@@ -804,7 +810,7 @@ async function createWindow() {
   Menu.setApplicationMenu(null);
   const startupSettings = await getStartupSettings();
   if (shutdownLifecycle.isShuttingDown()) return;
-  const startHidden = Boolean(startupSettings.enabled && startupSettings.wasOpenedAtLogin && startupSettings.hideOnStartup && !pendingShowMainWindow);
+  const startHidden = shouldStartHidden(startupSettings, pendingShowMainWindow);
   const window = new BrowserWindow({
     width: 1360,
     height: 860,
@@ -1113,11 +1119,7 @@ const librarySaveQueue = createLibrarySaveQueue({
     await ensureLibrary();
     return readJson(libraryFile());
   },
-  save: async (library) => {
-    await ensureLibrary();
-    await fs.writeFile(libraryFile(), JSON.stringify(library, null, 2));
-    return { ok: true };
-  }
+  save: createAtomicLibrarySave(libraryFile(), { fileSystem: fs, replace: renameSync })
 });
 
 handleTrustedIpc("library:load", (_event, token) => {

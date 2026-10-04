@@ -254,6 +254,31 @@ describe("AudioEngine output routing", () => {
     await engine.dispose();
   });
 
+  it("acknowledges a decode deadline before preparation settles and never starts that cancelled voice", async () => {
+    const engine = new AudioEngine(playbackSettings, vi.fn());
+    const queue = createSoundPlayQueue();
+    const decoded = deferred<void>();
+    const decode = decodeContext().decodeAudioData.getMockImplementation()!;
+    decodeContext().decodeAudioData.mockImplementationOnce(async () => {
+      await decoded.promise;
+      return decode();
+    });
+    const controller = new AbortController();
+    const sound = makeSound({ retriggerMode: "restart" });
+    const expired = queue(sound.id, (signal) => engine.play(sound, signal), controller.signal);
+    await waitForMockCalls(decodeContext().decodeAudioData, 1);
+    controller.abort("operation-timeout");
+    await expect(expired).rejects.toThrow("Control operation cancelled");
+    expect(await queue(sound.id, (signal) => engine.play(sound, signal))).toBe(true);
+    const resumed = monitorContext().resume.mock.calls.length;
+    decoded.resolve();
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    expect(monitorContext().resume).toHaveBeenCalledTimes(resumed);
+    expect(monitorContext().bufferSources).toHaveLength(1);
+    expect(engine.isPlaying(sound.id)).toBe(true);
+    await engine.dispose();
+  });
+
   it("lets an already started voice complete after its client disconnects", async () => {
     const engine = new AudioEngine(playbackSettings, vi.fn());
     const cancellation = new AbortController();

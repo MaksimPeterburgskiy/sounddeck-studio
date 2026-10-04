@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import http from "node:http";
+import { EventEmitter } from "node:events";
+import { readFileSync } from "node:fs";
+import { runInNewContext } from "node:vm";
 import { Duplex } from "node:stream";
 import { mkdtemp, readFile, writeFile, chmod, stat, rm } from "node:fs/promises";
 import * as fs from "node:fs/promises";
@@ -8,10 +11,11 @@ import path from "node:path";
 import { WebSocket, WebSocketServer } from "ws";
 import controlModule from "./externalControl.cjs";
 import rendererModule from "./controlRenderer.cjs";
+import { createControlCancellation } from "../src/lib/controlCancellation.ts";
 import { createAudioControlQueue } from "../src/lib/audioControlQueue.ts";
 import { CONTROL_PROTOCOL_VERSION, CONTROL_DEFAULT_PORT } from "../src/lib/controlProtocol.ts";
 
-const { createExternalControlBridge, launcherPath, PROTOCOL_VERSION, DEFAULT_PORT } = controlModule;
+const { createExternalControlBridge, launcherPath, PROTOCOL_VERSION, DEFAULT_PORT, MAX_IMAGE_DATA_BYTES } = controlModule;
 // Use real HTTP/WS parsers over in-memory sockets so the suite also runs in
 // sandboxes that disallow loopback listeners.
 const listeners = new Map();
@@ -103,6 +107,7 @@ afterEach(async () => {
   for (const socket of sockets) socket.terminate();
   sockets.clear();
   await bridge?.stop();
+  vi.useRealTimers();
   bridge = undefined;
   for (const server of extraServers) await new Promise((resolve) => server.close(resolve));
   extraServers.clear();
@@ -546,6 +551,96 @@ describe("external control protocol and dispatch", () => {
     expect(onCommand).not.toHaveBeenCalled();
   });
 
+  it("keeps ordinary libraries whole and bounds hostile summaries well below the plugin frame limit", async () => {
+    await create();
+    const ordinary = Array.from({ length: 5000 }, (_, index) => ({ id: `sound-${index}`, title: `Sound ${index}`, color: "#1db7a6" }));
+    bridge.updateLibrary({ boards: [{ id: "board-a", name: "Main", color: "#1db7a6", sounds: ordinary }], activeBoardId: "board-a" });
+    expect(bridge.getSnapshot().library.boards[0].sounds).toHaveLength(5000);
+    // Escaped control characters take six JSON bytes per code unit.
+    const large = "\u0000".repeat(1024);
+    const sounds = Array.from({ length: 10000 }, (_, index) => ({ id: `sound-${index}`, title: large, color: large }));
+    bridge.updateLibrary({ boards: [{ id: "board-a", name: large, color: large, sounds }], activeBoardId: "board-a" });
+    const snapshot = bridge.getSnapshot();
+    expect(snapshot.library.boards[0].name.length).toBe(256);
+    expect(snapshot.library.boards[0].sounds[0].title.length).toBe(256);
+    expect(snapshot.library.boards[0].color.length).toBeLessThanOrEqual(32);
+    expect(snapshot.library.boards[0].sounds.length).toBeLessThan(10000);
+    expect(Buffer.byteLength(JSON.stringify({ type: "welcome", protocol: 1, app: { version: "0.1.22" }, state: snapshot }))).toBeLessThan(9 * 1024 * 1024);
+    bridge.updateLibrary({ boards: [{ id: "b".repeat(129), name: "invalid", sounds: [] },
+      { id: "valid", name: "valid", sounds: [{ id: "s".repeat(129), title: "invalid" }] }] });
+    expect(bridge.getSnapshot().library.boards).toEqual([{ id: "valid", name: "valid", color: "", sounds: [] }]);
+  });
+
+  it("preserves the actual active board when the summary budget omits it", async () => {
+    await create();
+    const connection = await session();
+    const events = [];
+    connection.ws.on("message", (data) => events.push(JSON.parse(data.toString())));
+    const sounds = Array.from({ length: 10000 }, (_, index) => ({ id: `large-${index}`, title: "\u0000".repeat(256) }));
+    bridge.updateLibrary({ ...library, boards: [{ id: "large", name: "Large", sounds }, ...library.boards] });
+    const snapshot = bridge.getSnapshot();
+    expect(snapshot.library.boards.some((board) => board.id === "board-a")).toBe(false);
+    expect(snapshot.activeBoardId).toBe("board-a");
+    expect(snapshot.library.activeBoardId).toBe("board-a");
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    expect(events[0]).toMatchObject({ event: "library.changed", data: { activeBoardId: "board-a" } });
+  });
+
+  it("marks capped summaries incomplete and avoids title fallback for omitted sound IDs", async () => {
+    await create();
+    const filler = Array.from({ length: 10000 }, (_, index) => ({ id: `large-${index}`, title: "\u0000".repeat(256) }));
+    bridge.updateLibrary({ ...library, boards: [{ ...library.boards[0], sounds: [library.boards[0].sounds[0], ...filler,
+      { id: "omitted", title: "Airhorn" }] }] });
+    expect(bridge.getSnapshot().library.incomplete).toBe(true);
+    expect((await request("/v1/library")).body.incomplete).toBe(true);
+    expect(await request("/v1/sounds/omitted/play", { method: "POST", body: { boardId: "board-a", title: "Airhorn" } }))
+      .toMatchObject({ status: 404, body: { ok: false, code: "not-found" } });
+    expect((await request("/v1/sounds/sound-new/play", { method: "POST" })).body.ok).toBe(true);
+    bridge.updateLibrary(library);
+    expect(bridge.getSnapshot().library.incomplete).toBeUndefined();
+  });
+
+  it("resolves bounded title fallback after reimport and rejects ambiguous truncated prefixes", async () => {
+    await create();
+    const prefix = "H".repeat(256);
+    const board = { ...library.boards[0], name: "N".repeat(16 * 1024 * 1024), sounds: [{ ...library.boards[0].sounds[0], title: prefix + "first" }] };
+    bridge.updateLibrary({ ...library, boards: [board] });
+    const connection = await client({ maxPayload: 16 * 1024 * 1024 });
+    connection.send(hello());
+    const welcome = await connection.next();
+    expect(welcome.state.library.boards[0].name).toHaveLength(256);
+    expect(welcome.state.library.boards[0].sounds[0].title).toBe(prefix);
+    connection.send({ type: "command", id: "fallback", command: "sound.play", args: { soundId: "old-id", boardId: board.id, title: prefix } });
+    expect(await connection.next()).toMatchObject({ id: "fallback", ok: true });
+    expect(onCommand).toHaveBeenLastCalledWith({ command: "sound.play", args: { soundId: "sound-new" } }, expect.any(AbortSignal), expect.any(AbortSignal));
+    bridge.updateLibrary({ ...library, boards: [{ ...board, sounds: [...board.sounds, { id: "collision", title: prefix + "second" }] }] });
+    expect((await connection.next()).event).toBe("library.changed");
+    connection.send({ type: "command", id: "ambiguous", command: "sound.play", args: { soundId: "old-id", boardId: board.id, title: prefix } });
+    expect(await connection.next()).toMatchObject({ id: "ambiguous", ok: false, code: "not-found" });
+    connection.send({ type: "command", id: "by-id", command: "sound.play", args: { soundId: "collision" } });
+    expect(await connection.next()).toMatchObject({ id: "by-id", ok: true });
+  });
+
+  it.each([0, 1])("bounds encoded image data without closing the session (bytes above limit: %s)", async (extra) => {
+    await create();
+    const prefix = "data:image/png;base64,";
+    const overhead = Buffer.byteLength(JSON.stringify({ image: prefix }));
+    const image = prefix + "A".repeat(MAX_IMAGE_DATA_BYTES - overhead + extra);
+    bridge.updateLibrary({ ...library, boards: [{ ...library.boards[0], sounds: [{ ...library.boards[0].sounds[0], image }] }] });
+    const connection = await client({ maxPayload: 16 * 1024 * 1024 });
+    connection.send(hello());
+    expect((await connection.next()).type).toBe("welcome");
+    connection.send({ type: "command", id: "image", command: "sound.image", args: { soundId: "sound-new" } });
+    const result = await connection.next();
+    if (extra) expect(result).toEqual({ type: "result", id: "image", ok: false, code: "payload-too-large" });
+    else {
+      expect(result.ok).toBe(true);
+      expect(result.data.image === image).toBe(true);
+    }
+    connection.send({ type: "command", id: "play", command: "sound.play", args: { soundId: "sound-new" } });
+    expect(await connection.next()).toEqual({ type: "result", id: "play", ok: true });
+  });
+
   it("resolves sound id first, then exact board and title, and reports missing bindings", async () => {
     await create();
     const connection = await session();
@@ -556,7 +651,7 @@ describe("external control protocol and dispatch", () => {
     ]) {
       connection.send({ type: "command", id: "play", command: "sound.play", args });
       expect(await connection.next()).toMatchObject({ id: "play", ok: true });
-      expect(onCommand).toHaveBeenLastCalledWith({ command: "sound.play", args: { soundId: expected } }, expect.any(AbortSignal));
+      expect(onCommand).toHaveBeenLastCalledWith({ command: "sound.play", args: { soundId: expected } }, expect.any(AbortSignal), expect.any(AbortSignal));
     }
     connection.send({ type: "command", id: "missing", command: "sound.play", args: { soundId: "removed-id", boardId: "board-a", title: "airhorn" } });
     expect(await connection.next()).toMatchObject({ id: "missing", ok: false, code: "not-found" });
@@ -574,7 +669,7 @@ describe("external control protocol and dispatch", () => {
       ["/v1/boards/cycle", {}, { command: "board.cycle", args: {} }]
     ]) {
       expect(await request(url, { method: "POST", body })).toMatchObject({ status: 200, body: { ok: true } });
-      expect(onCommand).toHaveBeenLastCalledWith(expected, expect.any(AbortSignal));
+      expect(onCommand).toHaveBeenLastCalledWith(expected, expect.any(AbortSignal), expect.any(AbortSignal));
     }
     expect((await request("/v1/sounds/missing/stop", { method: "POST" })).status).toBe(404);
     expect((await request("/v1/boards/missing/activate", { method: "POST" })).status).toBe(404);
@@ -844,6 +939,121 @@ describe("external control protocol and dispatch", () => {
     expect(requests.size).toBe(0);
   });
 
+  it.each(["WebSocket", "HTTP"].flatMap((transport) => ["save", "routing"].map((hung) => [transport, hung])))
+  ("releases accepted mutations hung on %s/%s at the deadline after disconnect through preload", async (transport, hung) => {
+    let settings = { ...audioSettings };
+    const persist = vi.fn(async () => {});
+    const routing = vi.fn(async () => {});
+    (hung === "save" ? persist : routing).mockImplementationOnce(() => new Promise(() => {}));
+    const queue = createAudioControlQueue({
+      getSettings: () => settings, writeSettings: (next) => { settings = next; },
+      persist, waitForConfiguration: routing
+    });
+    const requests = new Map();
+    const completed = vi.fn();
+    const cancellations = [];
+    const ipcRenderer = Object.assign(new EventEmitter(), { invoke: vi.fn(async (channel, requestId, result) => {
+      if (channel === "control:received") return { ok: renderer.receive(requestId) };
+      if (channel === "control:result") {
+        completed(result);
+        return { ok: renderer.complete(requestId, result) };
+      }
+    }) });
+    let sounddeck;
+    runInNewContext(readFileSync(new URL("./preload.cjs", import.meta.url), "utf8"), {
+      require: () => ({ ipcRenderer, contextBridge: { exposeInMainWorld: (_name, api) => { sounddeck = api; } } })
+    });
+    ipcRenderer.emit("control-ready-token", {}, "document");
+    sounddeck.onControlCommand((message) => {
+      if (message.command === "control.cancel") {
+        cancellations.push(message);
+        requests.get(message.requestId)?.abort(message.reason);
+        return;
+      }
+      const cancellation = createControlCancellation();
+      requests.set(message.requestId, cancellation);
+      return queue.enqueue(message, cancellation.signal, cancellation.deadlineSignal)
+        .finally(() => requests.delete(message.requestId));
+    });
+    const renderer = rendererModule.createControlRenderer({ send: (message) => ipcRenderer.emit("control-command", {}, message) });
+    onCommand.mockImplementation((command, signal, deadlineSignal) => renderer.dispatch(command, signal, deadlineSignal));
+    await create();
+    const connection = transport === "WebSocket" ? await session() : null;
+    vi.useFakeTimers();
+    let disconnected;
+    if (connection) connection.send({ type: "command", id: "hung", command: "volume.set", args: { bus: "micVirtual", value: 0.6 } });
+    else {
+      disconnected = http.request({ createConnection: memoryConnect, hostname: "127.0.0.1", port: bridge.getState().port,
+        method: "POST", path: "/v1/volumes/micVirtual", headers: { Authorization: `Bearer ${bridge.getState().token}` } });
+      disconnected.on("error", () => {});
+      disconnected.end(JSON.stringify({ value: 0.6 }));
+    }
+    await vi.waitFor(() => expect(persist).toHaveBeenCalledOnce());
+    if (hung === "routing") await vi.waitFor(() => expect(routing).toHaveBeenCalledOnce());
+    const original = [...requests.values()][0];
+    connection?.ws.terminate();
+    disconnected?.destroy();
+    await vi.waitFor(() => expect(original.signal.aborted).toBe(true));
+    await vi.advanceTimersByTimeAsync(50_000);
+    expect(completed).not.toHaveBeenCalled();
+    expect(settings.micVirtualVolume).toBe(0.6);
+    const later = request("/v1/volumes/micVirtual", { method: "POST", body: { delta: 0.2 } });
+    void later.catch(() => {}); // Teardown can close this request if a regression assertion fails.
+    await vi.waitFor(() => expect(onCommand).toHaveBeenCalledTimes(2));
+    await vi.advanceTimersByTimeAsync(10_000);
+    // The original disconnect reason stays immutable; the separate deadline
+    // still reaches the original preload callback and unblocks the global FIFO.
+    expect(original.signal.reason).not.toBe("operation-timeout");
+    expect(original.deadlineSignal.reason).toBe("operation-timeout");
+    expect(cancellations.map(({ reason }) => reason)).toEqual([undefined, "operation-timeout"]);
+    expect(completed.mock.calls[0][0]).toEqual(hung === "save"
+      ? { ok: false, code: "unavailable" }
+      : { ok: true, data: { bus: "micVirtual", value: 0.6, muted: false } });
+    vi.useRealTimers();
+    expect(await later).toEqual({ status: 200, body: { ok: true, data: { bus: "micVirtual", value: 0.8, muted: false } } });
+    expect(requests.size).toBe(0);
+    expect(completed).toHaveBeenCalledTimes(2);
+    expect(onCommand.mock.calls[1][2].aborted).toBe(false);
+  });
+
+  it.each(["WebSocket", "HTTP"])("requests cancellation at the operation deadline and waits for acknowledgement over %s", async (transport) => {
+    await create();
+    const connection = transport === "WebSocket" ? await session() : null;
+    const send = vi.fn();
+    const renderer = rendererModule.createControlRenderer({ send });
+    onCommand.mockImplementation((command, signal) => renderer.dispatch(command, signal));
+    const completed = vi.fn();
+    vi.useFakeTimers();
+    let response;
+    if (connection) {
+      connection.send({ type: "command", id: "slow", command: "sound.play", args: { soundId: "sound-new" } });
+    } else {
+      response = request("/v1/sounds/sound-new/play", { method: "POST" }).then(completed);
+    }
+    await vi.waitFor(() => expect(onCommand).toHaveBeenCalledOnce());
+    const requestId = send.mock.calls[0][0].requestId;
+    renderer.receive(requestId);
+    if (connection) response = new Promise((resolve) => connection.ws.once("message", (data) => resolve(JSON.parse(data.toString())))).then(completed);
+    await vi.advanceTimersByTimeAsync(59_000);
+    expect(onCommand.mock.calls[0][1].aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(onCommand.mock.calls[0][1].reason).toBe("operation-timeout");
+    expect(send).toHaveBeenLastCalledWith({ command: "control.cancel", requestId, reason: "operation-timeout" });
+    expect(completed).not.toHaveBeenCalled();
+    renderer.complete(requestId, { ok: false, code: "unavailable" });
+    vi.useRealTimers();
+    await response;
+    expect(completed).toHaveBeenCalledExactlyOnceWith(connection
+      ? { type: "result", id: "slow", ok: false, code: "unavailable" }
+      : { status: 503, body: { ok: false, code: "unavailable" } });
+    onCommand.mockResolvedValue({ ok: true });
+    if (connection) {
+      expect(await connection.next()).toMatchObject({ id: "slow", ok: false });
+      connection.send({ type: "command", id: "retry", command: "sound.play", args: { soundId: "sound-new" } });
+      expect(await connection.next()).toMatchObject({ id: "retry", ok: true });
+    } else expect((await request("/v1/sounds/sound-new/play", { method: "POST" })).body.ok).toBe(true);
+  });
+
   it("cancels pending WebSocket commands when their client disconnects", async () => {
     await create();
     const connection = await session();
@@ -956,7 +1166,7 @@ describe("external control protocol and dispatch", () => {
         onCommand.mockReturnValueOnce({ ok: true, data });
         connection.send({ type: "command", id: "setting", command, args });
         expect(await connection.next()).toEqual({ type: "result", id: "setting", ok: true, data });
-        expect(onCommand).toHaveBeenLastCalledWith({ command, args }, expect.any(AbortSignal));
+        expect(onCommand).toHaveBeenLastCalledWith({ command, args }, expect.any(AbortSignal), expect.any(AbortSignal));
       }
     }
     for (const bus of ["micVirtual", "micMonitor", "soundboardVirtual", "soundboardMonitor"]) {
@@ -969,7 +1179,7 @@ describe("external control protocol and dispatch", () => {
         onCommand.mockReturnValueOnce({ ok: true, data });
         connection.send({ type: "command", id: "volume", command, args });
         expect(await connection.next()).toEqual({ type: "result", id: "volume", ok: true, data });
-        expect(onCommand).toHaveBeenLastCalledWith({ command, args }, expect.any(AbortSignal));
+        expect(onCommand).toHaveBeenLastCalledWith({ command, args }, expect.any(AbortSignal), expect.any(AbortSignal));
       }
     }
   });
@@ -986,7 +1196,7 @@ describe("external control protocol and dispatch", () => {
     ]) {
       onCommand.mockReturnValueOnce({ ok: true, data });
       expect(await request(url, { method: "POST", body })).toEqual({ status: 200, body: { ok: true, data } });
-      expect(onCommand).toHaveBeenLastCalledWith(expected, expect.any(AbortSignal));
+      expect(onCommand).toHaveBeenLastCalledWith(expected, expect.any(AbortSignal), expect.any(AbortSignal));
     }
     onCommand.mockReturnValueOnce({ ok: false, code: "unavailable" });
     expect(await request("/v1/settings/micPassthrough", { method: "POST", body: { toggle: true } })).toEqual({ status: 503, body: { ok: false, code: "unavailable" } });

@@ -68,6 +68,9 @@ async function boot(storageError) {
       });
     }
     isDestroyed() { return false; }
+    isMinimized() { return false; }
+    show = vi.fn();
+    focus = vi.fn();
     loadFile() {
       this.webContents.emit("did-start-navigation", { isMainFrame: true, isSameDocument: false });
       return new Promise((resolve) => { finishLoading = resolve; });
@@ -89,6 +92,7 @@ async function boot(storageError) {
   const overrides = {
     ...helperModules,
     electron, "node:fs/promises": fileSystem,
+    "node:fs": { renameSync: (from, to) => { files.set(to, files.get(from)); files.delete(from); } },
     "./hotkeys.cjs": { createHotkeyEngine: () => ({ stop: () => {}, setSuspended: vi.fn() }) },
     "./corsair.cjs": { createCorsairBridge: () => ({ start: () => {}, stop: () => {} }) },
     "./externalControl.cjs": { ...controlModule, createExternalControlBridge: (options) => {
@@ -109,7 +113,7 @@ async function boot(storageError) {
     window.webContents.emit("did-navigate");
     window.webContents.emit("did-finish-load");
   };
-  return { window, bridge, onCommand, event, fileSystem, token, documentLoaded,
+  return { window, application: app, bridge, onCommand, event, fileSystem, token, documentLoaded,
     invoke: (name, sender = event, ...args) => {
       const arity = { "library:load": 0, "library:save": 1, "control:state": 1, "control:result": 2, "control:received": 1, "hotkeys:capture": 1 }[name];
       if (arity !== undefined && args.length === arity) args.push(token());
@@ -124,6 +128,30 @@ async function boot(storageError) {
 }
 
 describe("main-process external control lifecycle", () => {
+  it("surfaces external relaunches when control is unavailable and keeps healthy relaunches hidden", async () => {
+    const app = await boot();
+    await app.loaded();
+    await app.invoke("control:getSettings");
+    const state = vi.spyOn(app.bridge, "getState");
+    for (const status of [
+      { enabled: true, listening: false, error: { code: "EADDRINUSE" } },
+      { enabled: false, listening: false, error: null },
+      { enabled: true, listening: false, error: null }
+    ]) {
+      state.mockReturnValue(status);
+      app.application.emit("second-instance", {}, ["/app", startupSettings.EXTERNAL_LAUNCH_ARG, startupSettings.STARTUP_ARG]);
+      expect(app.window.show).toHaveBeenCalledOnce();
+      expect(app.window.focus).toHaveBeenCalledOnce();
+      app.window.show.mockClear();
+      app.window.focus.mockClear();
+    }
+    state.mockReturnValue({ enabled: true, listening: true, error: null });
+    app.application.emit("second-instance", {}, ["/app", startupSettings.EXTERNAL_LAUNCH_ARG]);
+    expect(app.window.show).not.toHaveBeenCalled();
+    state.mockRestore();
+    await app.bridge.stop();
+  });
+
   it("waits for persisted settings before and during background startup", async () => {
     const app = await boot();
     const stored = deferred();
@@ -199,7 +227,7 @@ describe("main-process external control lifecycle", () => {
     const writing = deferred();
     const writeFile = app.fileSystem.writeFile.getMockImplementation();
     app.fileSystem.writeFile.mockImplementation(async (file, data) => {
-      if (file.endsWith("library.json")) {
+      if (file.includes("library.json.")) {
         await writeFile(file, "{");
         await writing.promise;
       }
@@ -225,7 +253,7 @@ describe("main-process external control lifecycle", () => {
     expect(await Promise.all([first, pending, coalesced])).toEqual([{ ok: true }, { ok: true }, { ok: true }]);
     await ready;
     expect(await reload).toEqual(newest);
-    expect(app.fileSystem.writeFile.mock.calls.filter(([file]) => file.endsWith("library.json"))).toHaveLength(1);
+    expect(app.fileSystem.writeFile.mock.calls.filter(([file]) => file.includes("library.json."))).toHaveLength(1);
     expect(app.bridge.getSnapshot().volumes.micVirtual).toEqual({ value: 0.9, muted: true });
     expect(app.bridge.getSnapshot()).toMatchObject({ activeBoardId: newBoard.id, library: { activeBoardId: newBoard.id, boards: expect.arrayContaining([newBoard]) } });
     await app.bridge.stop();
@@ -381,6 +409,28 @@ describe("main-process external control lifecycle", () => {
     await Promise.all([first, last]);
     expect(await reloaded).toEqual(lastLibrary);
     expect(app.bridge.getSnapshot().activeBoardId).toBe("last");
+    await app.bridge.stop();
+  });
+
+  it("relays an accepted mutation's deadline after disconnect and cleans up both signals on completion", async () => {
+    const app = await boot();
+    await app.loaded();
+    await app.invoke("control:getSettings");
+    app.ready();
+    const cancellation = new AbortController();
+    const deadline = new AbortController();
+    const operation = app.onCommand({ command: "volume.set", args: { bus: "micVirtual", value: 0.6 } }, cancellation.signal, deadline.signal);
+    const requestId = app.window.webContents.send.mock.lastCall[1].requestId;
+    expect(app.invoke("control:received", app.event, requestId)).toEqual({ ok: true });
+    cancellation.abort();
+    expect(app.window.webContents.send).toHaveBeenLastCalledWith("control-command", { command: "control.cancel", requestId });
+    deadline.abort("operation-timeout");
+    expect(app.window.webContents.send).toHaveBeenLastCalledWith("control-command", { command: "control.cancel", requestId, reason: "operation-timeout" });
+    app.invoke("control:result", app.event, requestId, { ok: false, code: "unavailable" });
+    expect(await operation).toEqual({ ok: false, code: "unavailable" });
+    const sent = app.window.webContents.send.mock.calls.length;
+    app.window.webContents.emit("did-start-navigation", { isMainFrame: true, isSameDocument: false });
+    expect(app.window.webContents.send.mock.calls.slice(sent).some(([channel]) => channel === "control-command")).toBe(false);
     await app.bridge.stop();
   });
 

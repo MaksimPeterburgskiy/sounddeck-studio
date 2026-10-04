@@ -48,6 +48,7 @@ import { createAudioControlQueue, persistControlLibrary } from "./lib/audioContr
 import { AudioEngine } from "./lib/audioEngine";
 import { CONTROL_DEFAULT_PORT } from "./lib/controlProtocol";
 import { beginAudioConfiguration, trackAudioConfiguration, waitForAudioConfiguration, watchAudioDeviceChanges } from "./lib/controlReadiness";
+import { createControlCancellation } from "./lib/controlCancellation";
 import { createSoundPlayQueue } from "./lib/soundPlayQueue";
 import type { ControlPlaybackResult, ControlPlaybackVoice, ControlSettingsPatch, ControlStatus } from "./lib/controlProtocol";
 import type { AudioDeviceStatus, MicrophoneProcessingStatus } from "./lib/audioEngine";
@@ -94,6 +95,7 @@ function App() {
   const [library, setLibrary] = useState<SoundLibrary | null>(null);
   const libraryRef = useRef<SoundLibrary | null>(null);
   const controlSavedLibrariesRef = useRef(new WeakSet<SoundLibrary>());
+  const [persistenceRevision, setPersistenceRevision] = useState(0);
   const [view, setView] = useState<View>("board");
   const [selectedSoundId, setSelectedSoundId] = useState<string>("");
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
@@ -133,12 +135,12 @@ function App() {
   const engineRef = useRef<AudioEngine | null>(null);
   const audioConfigurationRef = useRef<Promise<void> | null>(null);
   const pendingAudioSettingsRef = useRef<ReturnType<typeof beginAudioConfiguration>[]>([]);
-  const controlRequests = useRef(new Map<string, AbortController>());
+  const controlRequests = useRef(new Map<string, ReturnType<typeof createControlCancellation>>());
   const configuredSettingsRef = useRef<SoundLibrary["settings"] | null>(null);
   const audioControlQueue = useMemo(() => createAudioControlQueue({
     getSettings: () => libraryRef.current?.settings ?? null,
     writeSettings: (settings) => updateLibrary((current) => ({ ...current, settings })),
-    persist: () => persistControlLibrary(libraryRef.current!, controlSavedLibrariesRef.current, window.sounddeck.saveLibrary),
+    persist: (deadlineSignal) => persistControlLibrary(libraryRef.current!, controlSavedLibrariesRef.current, window.sounddeck.saveLibrary, deadlineSignal, () => setPersistenceRevision((revision) => revision + 1)),
     waitForConfiguration: () => waitForAudioConfiguration(() => audioConfigurationRef.current)
   }), []);
   const queueSoundPlay = useMemo(() => createSoundPlayQueue(), []);
@@ -270,7 +272,7 @@ function App() {
     // External mutations own their save; UI edits and rollback snapshots use this path.
     if (!library || library !== libraryRef.current || draggingSoundId || controlSavedLibrariesRef.current.has(library)) return;
     void window.sounddeck.saveLibrary(library).catch(() => undefined);
-  }, [library, draggingSoundId]);
+  }, [library, draggingSoundId, persistenceRevision]);
 
   const virtualAudioCandidates = useMemo(() => findVirtualAudioCandidates(devices, platform), [devices, platform]);
   const recommendedVirtualAudio = useMemo(() => virtualAudioCandidates.find((candidate) => candidate.recommended) || null, [virtualAudioCandidates]);
@@ -555,7 +557,7 @@ function App() {
     void registerHotkeys(library);
   }, [library, draggingSoundId, registerHotkeys, corsairConnected]);
 
-  const triggerSound = useCallback((sound: SoundSlot, external = false, cancellation?: AbortSignal): Promise<ControlPlaybackResult> => queueSoundPlay(sound.id, async (signal) => {
+  const triggerSound = useCallback((sound: SoundSlot, external = false, cancellation?: AbortSignal, deadlineSignal = cancellation): Promise<ControlPlaybackResult> => queueSoundPlay<ControlPlaybackResult>(sound.id, async (signal) => {
     try {
       if (signal.aborted) return { ok: false, code: "unavailable" };
       if (external) await waitForAudioConfiguration(() => audioConfigurationRef.current);
@@ -583,7 +585,7 @@ function App() {
       console.error(error);
       return { ok: false, code: "internal-error" };
     }
-  }, cancellation), [activeBoard?.id, queueSoundPlay]);
+  }, cancellation, deadlineSignal).catch(() => ({ ok: false, code: "unavailable" })), [activeBoard?.id, queueSoundPlay]);
 
   useEffect(() => {
     return window.sounddeck.onHotkeyTrigger((binding) => {
@@ -612,20 +614,20 @@ function App() {
 
   useEffect(() => window.sounddeck.onControlCommand((request) => {
     if (request.command === "control.cancel") {
-      controlRequests.current.get(request.requestId)?.abort();
+      controlRequests.current.get(request.requestId)?.abort(request.reason);
       return;
     }
     const { command, args } = request;
     if (request.command === "setting.set" || request.command === "setting.toggle" || request.command === "volume.set" || request.command === "volume.adjust" || request.command === "volume.mute") {
-      const cancellation = new AbortController();
+      const cancellation = createControlCancellation();
       controlRequests.current.set(request.requestId, cancellation);
-      return audioControlQueue.enqueue(request, cancellation.signal).finally(() => controlRequests.current.delete(request.requestId));
+      return audioControlQueue.enqueue(request, cancellation.signal, cancellation.deadlineSignal).finally(() => controlRequests.current.delete(request.requestId));
     }
     if (command === "sound.play") {
       const sound = libraryRef.current?.boards.flatMap((board) => board.sounds).find((candidate) => candidate.id === args.soundId);
-      const cancellation = new AbortController();
+      const cancellation = createControlCancellation();
       controlRequests.current.set(request.requestId, cancellation);
-      const result = sound ? triggerSound(sound, true, cancellation.signal) : Promise.resolve<ControlPlaybackResult>({ ok: false, code: "not-found" });
+      const result = sound ? triggerSound(sound, true, cancellation.signal, cancellation.deadlineSignal) : Promise.resolve<ControlPlaybackResult>({ ok: false, code: "not-found" });
       return result.finally(() => controlRequests.current.delete(request.requestId));
     }
     if (command === "sound.stop") {

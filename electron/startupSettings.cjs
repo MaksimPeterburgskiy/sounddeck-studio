@@ -1,10 +1,20 @@
 const path = require("node:path");
 
 const STARTUP_ARG = "--sounddeck-startup";
+const EXTERNAL_LAUNCH_ARG = "--sounddeck-external-launch";
 const WINDOWS_STARTUP_NAME = "SoundDeck Studio";
 
 function hasStartupArg(argv = process.argv) {
   return argv.includes(STARTUP_ARG);
+}
+
+function hasExternalLaunchArg(argv = process.argv) {
+  return argv.includes(EXTERNAL_LAUNCH_ARG);
+}
+
+function shouldStartHidden(settings, pendingShowMainWindow = false, argv = process.argv) {
+  return !pendingShowMainWindow && (hasExternalLaunchArg(argv)
+    || Boolean(settings.enabled && settings.wasOpenedAtLogin && settings.hideOnStartup));
 }
 
 // Login-item payload for app.setLoginItemSettings. `platform`/`execPath`
@@ -69,6 +79,9 @@ function getWindowsStartupState(settings = {}, options = {}) {
 
 module.exports = {
   STARTUP_ARG,
+  EXTERNAL_LAUNCH_ARG,
+  hasExternalLaunchArg,
+  shouldStartHidden,
   WINDOWS_STARTUP_NAME,
   hasStartupArg,
   startupLoginItemOptions,
