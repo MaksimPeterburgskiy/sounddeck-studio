@@ -4,6 +4,10 @@ import { keyImage } from "../render/keyImage";
 import { LiveAction } from "./liveAction";
 import { PlaySound } from "./playSound";
 import { ToggleSetting } from "./toggleSetting";
+import { BoardSlot } from "./boardSlot";
+import { NextPage, PreviousPage } from "./page";
+import { BOARD_SLOT, BoardSlots } from "../boardSlots";
+import type { ControlLibrary } from "../../../src/lib/controlProtocol";
 import type { Connection } from "../connection";
 import type { ActionSettings } from "../settings";
 
@@ -20,7 +24,7 @@ const flush = async () => { for (let i = 0; i < 20; i++) await Promise.resolve()
 function fakeConnection() {
   let listener = () => {};
   const connection = {
-    session: {}, status: "connected", statusLabel: "", snapshot: {
+    session: {}, status: "connected", statusLabel: "", handleDisconnectedPress: vi.fn(), snapshot: {
       playback: [] as Array<{ soundId: string; startedAt: number; duration: number; loop: boolean }>,
       settings: { micPassthrough: false }, library: { boards: [] as Array<{ id: string; name?: string; sounds: Array<{ id: string; title: string; hasImage: boolean }> }> },
     },
@@ -45,6 +49,43 @@ function inspectorFixture() {
   const key = { ...fakeKey(), getSettings: vi.fn(async (): Promise<ActionSettings> => ({ boardId: "a" })) };
   streamDeck.ui.action = key as never;
   return { connection, action, key, send: vi.mocked(streamDeck.ui.sendToPropertyInspector) };
+}
+
+function boundSoundKey(kind: "play" | "slot", title = "Horn") {
+  const connection = fakeConnection();
+  const library: ControlLibrary = { activeBoardId: "board", boards: [{ id: "board", name: "Main", color: "#1db7a6",
+    sounds: [{ id: "sound", title, color: "#1db7a6", hasImage: false }] }] };
+  Object.assign(connection.snapshot.library, library);
+  const slots = new BoardSlots();
+  slots.updateLibrary(library);
+  const action = kind === "play" ? new PlaySound(connection as unknown as Connection)
+    : new BoardSlot(connection as unknown as Connection, slots);
+  const key = { ...fakeKey(), device: { id: "deck" }, manifestId: BOARD_SLOT };
+  const settings = kind === "play" ? { soundId: "sound", boardId: "board", title } : { boardId: "board", slot: 1 };
+  const event = { action: key, payload: { settings } };
+  action.onWillAppear(event as never);
+  return { connection, action, key, event };
+}
+
+async function slotActions(secondSettings: ActionSettings = {}) {
+  const connection = fakeConnection();
+  const library: ControlLibrary = { activeBoardId: "board", boards: [{ id: "board", name: "Main", color: "#1db7a6",
+    sounds: ["one", "two", "three"].map((id, index) => ({ id, title: id, color: ["#1db7a6", "#aa2200", "#0033aa"][index], hasImage: false })) },
+    { id: "pinned", name: "Pinned", color: "#1db7a6",
+      sounds: [{ id: "pinned-one", title: "Pinned", color: "#772266", hasImage: false }] }] };
+  Object.assign(connection.snapshot.library, library);
+  const slots = new BoardSlots();
+  slots.updateLibrary(library);
+  const action = new BoardSlot(connection as unknown as Connection, slots);
+  const first = { ...fakeKey(), id: "first", device: { id: "deck" }, manifestId: BOARD_SLOT };
+  const second = { ...fakeKey(), id: "second", device: { id: "deck" }, manifestId: BOARD_SLOT };
+  for (const [column, key] of [first, second].entries()) {
+    action.onWillAppear({ action: key, payload: { settings: column ? secondSettings : {}, coordinates: { row: 0, column } } } as never);
+  }
+  await flush();
+  return { connection, slots, action, first, second,
+    next: new NextPage(connection as unknown as Connection, slots),
+    previous: new PreviousPage(connection as unknown as Connection, slots) };
 }
 
 describe("live actions", () => {
@@ -235,12 +276,8 @@ describe("live actions", () => {
     expect(connection.command).toHaveBeenLastCalledWith("setting.toggle", { key: "micPassthrough" });
   });
 
-  it("sends key up immediately while its press acknowledgement is pending", async () => {
-    const connection = fakeConnection();
-    connection.snapshot.library.boards = [{ id: "board", sounds: [{ id: "sound", title: "Horn", hasImage: false }] }];
-    const action = new PlaySound(connection as unknown as Connection);
-    const key = fakeKey();
-    const event = { action: key, payload: { settings: { soundId: "sound" } } };
+  it.each(["play", "slot"] as const)("sends %s key up immediately while its press acknowledgement is pending", async (kind) => {
+    const { connection, action, event } = boundSoundKey(kind);
     let acknowledge!: (result: { ok: boolean }) => void;
     connection.command.mockImplementationOnce(() => new Promise((resolve) => { acknowledge = resolve; }));
     const down = action.onKeyDown(event as never);
@@ -252,13 +289,11 @@ describe("live actions", () => {
     await down;
   });
 
-  it.each(["keyUp", "disappear"])("alerts on a failed or timed-out press and keeps it held until %s", async (release) => {
-    const connection = fakeConnection();
-    connection.snapshot.library.boards = [{ id: "board", sounds: [{ id: "sound", title: "Horn", hasImage: false }] }];
+  it.each([
+    ["play", "keyUp"], ["play", "disappear"], ["slot", "keyUp"], ["slot", "disappear"],
+  ] as const)("alerts on a failed or timed-out %s press and keeps it held until %s", async (kind, release) => {
+    const { connection, action, key, event } = boundSoundKey(kind);
     connection.command.mockResolvedValueOnce({ ok: false });
-    const action = new PlaySound(connection as unknown as Connection);
-    const key = fakeKey();
-    const event = { action: key, payload: { settings: { soundId: "sound" } } };
     await action.onKeyDown(event as never);
     const pressId = (connection.command.mock.lastCall as unknown as [string, { pressId: string }])[1].pressId;
     expect(key.showAlert).toHaveBeenCalledOnce();
@@ -318,17 +353,89 @@ describe("live actions", () => {
     action.onWillDisappear({ action: key } as never);
   });
 
-  it.each(["H".repeat(257), "Horn\nEffect"])("plays and re-imports sounds with titles outside the protocol limits (case %#)", async (title) => {
-    const connection = fakeConnection();
-    const action = new PlaySound(connection as unknown as Connection);
-    const key = fakeKey();
-    const settings = { soundId: "original", boardId: "board", title };
-    connection.snapshot.library.boards = [{ id: "board", sounds: [{ id: "original", title, hasImage: false }] }];
-    await action.onKeyDown({ action: key, payload: { settings } } as never);
-    expect(connection.command).toHaveBeenLastCalledWith("sound.press", { soundId: "original", pressId: expect.any(String) });
+  it.each([
+    ["play", "H".repeat(257)], ["play", "Horn\nEffect"], ["slot", "H".repeat(257)], ["slot", "Horn\nEffect"],
+  ] as const)("plays and re-imports %s sounds with titles outside the protocol limits (case %#)", async (kind, title) => {
+    const { connection, action, key, event } = boundSoundKey(kind, title);
+    await action.onKeyDown(event as never);
+    expect(connection.command).toHaveBeenLastCalledWith("sound.press", { soundId: "sound", pressId: expect.any(String) });
     connection.snapshot.library.boards[0].sounds[0].id = "imported";
-    await action.onKeyDown({ action: key, payload: { settings } } as never);
+    await action.onKeyDown(event as never);
     expect(connection.command).toHaveBeenLastCalledWith("sound.press", { soundId: "imported", pressId: expect.any(String) });
     expect(key.showAlert).not.toHaveBeenCalled();
+  });
+
+  it("releases the original slot press after paging while its acknowledgement is pending", async () => {
+    const { connection, action, first, second, next } = await slotActions();
+    let acknowledge!: (result: { ok: boolean }) => void;
+    connection.command.mockImplementationOnce(() => new Promise((resolve) => { acknowledge = resolve; }));
+    const down = action.onKeyDown({ action: second, payload: { settings: {} } } as never);
+    expect(connection.command).toHaveBeenLastCalledWith("sound.press", { soundId: "two", pressId: expect.any(String) });
+    const pressId = (connection.command.mock.lastCall as unknown as [string, { pressId: string }])[1].pressId;
+    await next.onKeyDown({ action: first, payload: { settings: {} } } as never);
+    await action.onKeyUp({ action: second } as never);
+    expect(connection.command).toHaveBeenLastCalledWith("sound.release", { pressId });
+    acknowledge({ ok: true });
+    await down;
+  });
+
+  it("leaves empty slots blank and inert when connected or offline", async () => {
+    const { connection, action, first, second, next } = await slotActions();
+    await next.onKeyDown({ action: first, payload: { settings: {} } } as never);
+    await flush();
+    expect(first.setTitle).toHaveBeenLastCalledWith("three");
+    expect(second.setTitle).toHaveBeenLastCalledWith("");
+    const blankImage = second.setImage.mock.lastCall![0];
+    const image = decodeURIComponent(blankImage.split(",")[1]);
+    expect(image).toContain('data-dimmed="true"');
+    expect(image).not.toMatch(/data-glyph|data-warning|data-icon/);
+    await action.onKeyDown({ action: second, payload: { settings: {} } } as never);
+    expect(connection.command).not.toHaveBeenCalled();
+    expect(second.showAlert).not.toHaveBeenCalled();
+    connection.status = "offline";
+    connection.statusLabel = "Offline";
+    action.onDidReceiveSettings({ action: second, payload: { settings: {} } } as never);
+    await flush();
+    expect(second.setTitle).toHaveBeenLastCalledWith("");
+    expect(second.setImage.mock.lastCall![0]).toBe(blankImage);
+    await action.onKeyDown({ action: second, payload: { settings: {} } } as never);
+    expect(connection.command).not.toHaveBeenCalled();
+    expect(connection.handleDisconnectedPress).not.toHaveBeenCalled();
+    expect(second.showAlert).not.toHaveBeenCalled();
+  });
+
+  it("releases a held slot press on disappearance after returning to the previous page", async () => {
+    const { connection, action, first, next, previous } = await slotActions();
+    await next.onKeyDown({ action: first, payload: { settings: {} } } as never);
+    await previous.onKeyDown({ action: first, payload: { settings: {} } } as never);
+    await action.onKeyDown({ action: first, payload: { settings: {} } } as never);
+    expect(connection.command).toHaveBeenLastCalledWith("sound.press", { soundId: "one", pressId: expect.any(String) });
+    const pressId = (connection.command.mock.lastCall as unknown as [string, { pressId: string }])[1].pressId;
+    action.onWillDisappear({ action: first } as never);
+    await flush();
+    expect(connection.command).toHaveBeenLastCalledWith("sound.release", { pressId });
+  });
+
+  it.each([
+    [{}, { slot: 3 }, "three", "three"],
+    [{ slot: 3 }, {}, "two", "two"],
+    [{}, { boardId: "pinned", slot: 1 }, "Pinned", "pinned-one"],
+    [{ boardId: "pinned", slot: 1 }, { slot: 1 }, "one", "one"],
+  ] as const)("renders only the new slot binding when inspector settings change from %j to %j", async (before, after, title, soundId) => {
+    const { connection, action, second } = await slotActions(before);
+    second.setImage.mockClear();
+    second.setTitle.mockClear();
+    action.onDidReceiveSettings({ action: second, payload: { settings: after } } as never);
+    await flush();
+    expect(second.setTitle.mock.calls).toEqual([[title]]);
+    expect(second.setImage).toHaveBeenCalledTimes(1);
+    const image = decodeURIComponent(second.setImage.mock.calls[0][0].split(",")[1]);
+    expect(image).toContain('data-glyph="initial"');
+    expect(image).toContain(`>${title[0].toUpperCase()}</text>`);
+    expect(image).not.toContain('data-dimmed="true"');
+    // Even an event with the previous settings must use the visible key's binding.
+    await action.onKeyDown({ action: second, payload: { settings: before } } as never);
+    expect(connection.command).toHaveBeenLastCalledWith("sound.press", { soundId, pressId: expect.any(String) });
+    await action.onKeyUp({ action: second } as never);
   });
 });

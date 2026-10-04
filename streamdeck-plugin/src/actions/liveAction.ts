@@ -3,13 +3,13 @@ import streamDeck, {
   type DidReceiveSettingsEvent, type KeyDownEvent, type PropertyInspectorDidAppearEvent,
   type PropertyInspectorDidDisappearEvent, type SendToPluginEvent, type TitleParametersDidChangeEvent,
 } from "@elgato/streamdeck";
-import type { ControlCommandArgs, ControlCommandName, ControlResult } from "../../../src/lib/controlProtocol";
+import type { ControlCommandArgs, ControlCommandName, ControlLibrary, ControlResult } from "../../../src/lib/controlProtocol";
 import type { Connection } from "../connection";
 import { keyTitle } from "../render/keyTitle";
 import { keyImage, type KeyTitleLayout } from "../render/keyImage";
 import type { ActionSettings } from "../settings";
 
-type Visual = Parameters<typeof keyImage>[0] & { state?: 0 | 1 };
+type Visual = Parameters<typeof keyImage>[0] & { state?: 0 | 1; blank?: boolean };
 type VisibleKey = {
   action: KeyAction<ActionSettings>;
   settings: ActionSettings;
@@ -42,8 +42,10 @@ export abstract class LiveAction extends SingletonAction<ActionSettings> {
 
   protected syncSettings(settings: ActionSettings): ActionSettings { return settings; }
 
-  protected abstract visual(settings: ActionSettings): Visual;
+  protected abstract visual(settings: ActionSettings, action: KeyAction<ActionSettings>): Visual;
   protected abstract press(ev: KeyDownEvent<ActionSettings>): Promise<void>;
+
+  protected inspectorItems(_settings: ActionSettings, _library?: ControlLibrary): Record<string, Array<{ label: string; value: string }>> { return {}; }
 
   override onWillAppear(ev: WillAppearEvent<ActionSettings>): void {
     if (!ev.action.isKey()) return;
@@ -91,24 +93,25 @@ export abstract class LiveAction extends SingletonAction<ActionSettings> {
     }
   }
 
-  private view(settings: ActionSettings): Visual {
-    const visual = this.visual(settings);
+  private view(settings: ActionSettings, action: KeyAction<ActionSettings>): Visual {
+    const visual = this.visual(settings, action);
+    if (visual.blank) return visual;
     return this.connection.status === "connected" ? visual : {
       ...visual, playing: undefined, playingRing: false, active: false, state: 0,
       dimmed: true, warning: this.connection.status !== "offline", title: this.connection.statusLabel,
     };
   }
-  private refresh(): void {
+  protected refresh(): void {
     for (const entry of this.visible.values()) this.render(entry);
     this.updateTimer();
   }
   private updateTimer(): void {
     const animate = this.connection.status === "connected"
-      && [...this.visible.values()].some((entry) => !!this.visual(entry.settings).playing);
+      && [...this.visible.values()].some((entry) => !!this.visual(entry.settings, entry.action).playing);
     if (animate && !this.timer) {
       this.timer = setInterval(() => {
         for (const entry of this.visible.values()) {
-          if (this.visual(entry.settings).playing) this.render(entry);
+          if (this.visual(entry.settings, entry.action).playing) this.render(entry);
         }
       }, 125);
       this.timer.unref();
@@ -148,7 +151,7 @@ export abstract class LiveAction extends SingletonAction<ActionSettings> {
         }
         if (this.visible.get(entry.action.id) !== entry) return;
         if (entry.dirty) continue;
-        const visual = this.view(entry.settings);
+        const visual = this.view(entry.settings, entry.action);
         const title = keyTitle(visual.title);
         const layout = entry.titleLayouts.get(visual.state ?? entry.initialState);
         const image = keyImage({ ...visual, titleLayout: layout });
@@ -199,7 +202,7 @@ export abstract class LiveAction extends SingletonAction<ActionSettings> {
     ++this.inspectorSettingsGeneration;
   }
   override async onSendToPlugin(ev: SendToPluginEvent<unknown & { event: string }, ActionSettings>): Promise<void> {
-    if (!ev.payload || typeof ev.payload !== "object" || !["boards", "sounds", "status"].includes(ev.payload.event)) return;
+    if (!ev.payload || typeof ev.payload !== "object" || !["boards", "sounds", "slots", "status"].includes(ev.payload.event)) return;
     if (streamDeck.ui.action?.id !== ev.action.id) return;
     this.inspectorId = ev.action.id;
     this.inspectorPayload = "";
@@ -218,14 +221,14 @@ export abstract class LiveAction extends SingletonAction<ActionSettings> {
     const boards = library?.boards.map((item) => ({ label: item.name, value: item.id })) ?? [];
     const sounds = board?.sounds.map((item) => ({ label: item.title, value: item.id })) ?? [];
     const label = this.connection.status === "connected" ? "" : this.connection.statusLabel;
-    const payload = JSON.stringify({ boards, sounds, label });
+    const items = { boards, sounds, ...this.inspectorItems(this.inspectorSettings ?? {}, library) };
+    const payload = JSON.stringify({ ...items, label });
     if (payload === this.inspectorPayload) return;
     this.inspectorPayload = payload;
     const generation = ++this.inspectorGeneration;
     const inspectorId = this.inspectorId;
     for (const message of [
-      { event: "boards", items: boards },
-      { event: "sounds", items: sounds },
+      ...Object.entries(items).map(([event, items]) => ({ event, items })),
       { event: "status", label },
     ]) {
       if (generation !== this.inspectorGeneration || streamDeck.ui.action?.id !== inspectorId || this.inspectorId !== inspectorId) return;
