@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createAudioControlQueue } from "./audioControlQueue";
+import { createAudioControlQueue, persistControlLibrary } from "./audioControlQueue";
 import { beginAudioConfiguration, trackAudioConfiguration, waitForAudioConfiguration, watchAudioDeviceChanges } from "./controlReadiness";
 import { deferred, makeAudioSettings } from "./testing/webAudioFakes";
-import type { AudioSettings } from "../types";
+import type { AudioSettings, SoundLibrary } from "../types";
 
 afterEach(() => vi.useRealTimers());
 
@@ -250,5 +250,39 @@ describe("external audio mutation FIFO", () => {
     save.reject(new Error("disk full"));
     expect(await failed).toEqual({ ok: false, code: "internal-error" });
     expect(app.getSettings()).toEqual(makeAudioSettings({ micVirtualVolume: 0.6, micVirtualMuted: true, monitorDeviceId: "new-headphones" }));
+  });
+});
+
+describe("external control library persistence", () => {
+  it.each(["reject", "not-ok"])("leaves an unsaved edit eligible for UI persistence after a same-value command's save fails (%s)", async (failure) => {
+    let library: SoundLibrary = { version: 1, activeBoardId: "edited-board", boards: [], settings: makeAudioSettings({ micPassthrough: false }) };
+    const savedLibraries = new WeakSet<SoundLibrary>();
+    const save = deferred<{ ok: boolean }>();
+    const saveLibrary = vi.fn(async (_snapshot: SoundLibrary) => ({ ok: true })).mockReturnValueOnce(save.promise);
+    const writeSettings = vi.fn((settings: AudioSettings) => { library = { ...library, settings }; });
+    const queue = createAudioControlQueue({
+      getSettings: () => library.settings,
+      writeSettings,
+      persist: () => persistControlLibrary(library, savedLibraries, saveLibrary),
+      waitForConfiguration: async () => {}
+    });
+    const failed = queue.enqueue({ command: "setting.set", args: { key: "micPassthrough", value: false } });
+    await vi.waitFor(() => expect(saveLibrary).toHaveBeenCalledOnce());
+    const snapshot = library;
+    expect(savedLibraries.has(snapshot)).toBe(true);
+    if (failure === "reject") save.reject(new Error("disk full"));
+    else save.resolve({ ok: false });
+    expect(await failed).toEqual({ ok: false, code: "internal-error" });
+    expect(writeSettings).toHaveBeenCalledOnce();
+    expect(library).toBe(snapshot);
+    expect(library.activeBoardId).toBe("edited-board");
+    expect(savedLibraries.has(snapshot)).toBe(false);
+  });
+
+  it("keeps successfully saved snapshots excluded from UI persistence", async () => {
+    const snapshot: SoundLibrary = { version: 1, activeBoardId: "", boards: [], settings: makeAudioSettings() };
+    const savedLibraries = new WeakSet<SoundLibrary>();
+    await persistControlLibrary(snapshot, savedLibraries, async () => ({ ok: true }));
+    expect(savedLibraries.has(snapshot)).toBe(true);
   });
 });

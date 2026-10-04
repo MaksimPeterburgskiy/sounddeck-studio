@@ -44,7 +44,7 @@ import {
   Waves,
   X
 } from "lucide-react";
-import { createAudioControlQueue } from "./lib/audioControlQueue";
+import { createAudioControlQueue, persistControlLibrary } from "./lib/audioControlQueue";
 import { AudioEngine } from "./lib/audioEngine";
 import { CONTROL_DEFAULT_PORT } from "./lib/controlProtocol";
 import { beginAudioConfiguration, trackAudioConfiguration, waitForAudioConfiguration, watchAudioDeviceChanges } from "./lib/controlReadiness";
@@ -138,13 +138,7 @@ function App() {
   const audioControlQueue = useMemo(() => createAudioControlQueue({
     getSettings: () => libraryRef.current?.settings ?? null,
     writeSettings: (settings) => updateLibrary((current) => ({ ...current, settings })),
-    persist: () => {
-      const snapshot = libraryRef.current!;
-      controlSavedLibrariesRef.current.add(snapshot);
-      return window.sounddeck.saveLibrary(snapshot).then((result) => {
-        if (!result.ok) throw new Error("Library save failed");
-      });
-    },
+    persist: () => persistControlLibrary(libraryRef.current!, controlSavedLibrariesRef.current, window.sounddeck.saveLibrary),
     waitForConfiguration: () => waitForAudioConfiguration(() => audioConfigurationRef.current)
   }), []);
   const queueSoundPlay = useMemo(() => createSoundPlayQueue(), []);

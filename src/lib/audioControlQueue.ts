@@ -1,4 +1,4 @@
-import type { AudioSettings } from "../types";
+import type { AudioSettings, SoundLibrary } from "../types";
 import type { RendererControlResult } from "./controlProtocol";
 import { applyAudioControlCommand, type AudioControlCommand } from "./controlSettings";
 
@@ -61,4 +61,20 @@ export function createAudioControlQueue({ getSettings, writeSettings, persist, w
       return result;
     }
   };
+}
+
+export async function persistControlLibrary(
+  snapshot: SoundLibrary,
+  savedLibraries: WeakSet<SoundLibrary>,
+  saveLibrary: (library: SoundLibrary) => Promise<{ ok: boolean }>
+) {
+  // Reserve the snapshot while saving so the UI persistence effect skips it.
+  savedLibraries.add(snapshot);
+  try {
+    const result = await saveLibrary(snapshot);
+    if (!result.ok) throw new Error("Library save failed");
+  } catch (error) {
+    savedLibraries.delete(snapshot);
+    throw error;
+  }
 }
