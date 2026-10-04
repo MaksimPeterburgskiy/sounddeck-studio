@@ -30,7 +30,7 @@ export function createAudioControlQueue({ getSettings, writeSettings, persist, w
     if (keys.every((key) => previous[key] === applied.settings[key])) {
       // Unchanged settings still acknowledge only after pending audio work settles,
       // or at the operation deadline so a hung configuration cannot block the FIFO.
-      await waitForControlOperation(waitForConfiguration(), cancellation).catch(() => undefined);
+      await waitForControlOperation(waitForConfiguration(), deadlineSignal).catch(() => undefined);
       return { ok: true, data: applied.data };
     }
     recordWrites(keys);

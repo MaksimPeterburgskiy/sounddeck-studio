@@ -57,6 +57,22 @@ describe("external audio mutation FIFO", () => {
     expect(app.getSettings().micPassthrough).toBe(false);
   });
 
+  it("ends an unchanged command's routing wait at its deadline even after a disconnect", async () => {
+    const app = setup({ micPassthrough: true });
+    const routing = deferred<void>();
+    app.waitForConfiguration.mockReturnValueOnce(routing.promise);
+    const request = new AbortController();
+    const deadline = new AbortController();
+    const unchanged = app.queue.enqueue({ command: "setting.set", args: { key: "micPassthrough", value: true } }, request.signal, deadline.signal);
+    await vi.waitFor(() => expect(app.waitForConfiguration).toHaveBeenCalledOnce());
+    request.abort();
+    deadline.abort("operation-timeout");
+    expect(await unchanged).toEqual({ ok: true, data: { key: "micPassthrough", value: true } });
+    expect(await app.queue.enqueue({ command: "setting.toggle", args: { key: "micPassthrough" } }))
+      .toEqual({ ok: true, data: { key: "micPassthrough", value: false } });
+    routing.resolve();
+  });
+
   it("ends an unchanged command's routing wait at its deadline so later commands proceed", async () => {
     const app = setup({ micPassthrough: true });
     const routing = deferred<void>();
