@@ -1,18 +1,20 @@
 import streamDeck, {
   SingletonAction, type KeyAction, type WillAppearEvent, type WillDisappearEvent,
   type DidReceiveSettingsEvent, type KeyDownEvent, type PropertyInspectorDidAppearEvent,
-  type PropertyInspectorDidDisappearEvent, type SendToPluginEvent,
+  type PropertyInspectorDidDisappearEvent, type SendToPluginEvent, type TitleParametersDidChangeEvent,
 } from "@elgato/streamdeck";
 import type { ControlCommandArgs, ControlCommandName } from "../../../src/lib/controlProtocol";
 import type { Connection } from "../connection";
 import { keyTitle } from "../render/keyTitle";
-import { keyImage } from "../render/keyImage";
+import { keyImage, type KeyTitleLayout } from "../render/keyImage";
 import type { ActionSettings } from "../settings";
 
 type Visual = Parameters<typeof keyImage>[0] & { state?: 0 | 1 };
 type VisibleKey = {
   action: KeyAction<ActionSettings>;
   settings: ActionSettings;
+  titleLayouts: Map<number, KeyTitleLayout>;
+  initialState: number;
   image?: string;
   title?: string;
   state?: 0 | 1;
@@ -45,12 +47,18 @@ export abstract class LiveAction extends SingletonAction<ActionSettings> {
 
   override onWillAppear(ev: WillAppearEvent<ActionSettings>): void {
     if (!ev.action.isKey()) return;
-    this.visible.set(ev.action.id, { action: ev.action, settings: ev.payload.settings, rendering: false, dirty: false });
+    this.visible.set(ev.action.id, { action: ev.action, settings: ev.payload.settings, titleLayouts: new Map(), initialState: ev.payload.state ?? 0, rendering: false, dirty: false });
     this.refresh();
   }
   override onWillDisappear(ev: WillDisappearEvent<ActionSettings>): void {
     this.visible.delete(ev.action.id);
     this.updateTimer();
+  }
+  override onTitleParametersDidChange(ev: TitleParametersDidChangeEvent<ActionSettings>): void {
+    const entry = this.visible.get(ev.action.id);
+    if (!entry) return;
+    entry.titleLayouts.set(ev.payload.state ?? 0, { title: ev.payload.title, ...ev.payload.titleParameters });
+    this.render(entry);
   }
   override onDidReceiveSettings(ev: DidReceiveSettingsEvent<ActionSettings>): void {
     const entry = this.visible.get(ev.action.id);
@@ -137,7 +145,9 @@ export abstract class LiveAction extends SingletonAction<ActionSettings> {
         if (this.visible.get(entry.action.id) !== entry) return;
         if (entry.dirty) continue;
         const visual = this.view(entry.settings);
-        const image = keyImage(visual);
+        const title = keyTitle(visual.title);
+        const layout = entry.titleLayouts.get(visual.state ?? entry.initialState);
+        const image = keyImage({ ...visual, titleLayout: layout });
         // Both states receive the same live title/image, so a state transition
         // cannot flash an old title or default icon.
         if (visual.state !== undefined && entry.state !== visual.state) {
@@ -152,7 +162,6 @@ export abstract class LiveAction extends SingletonAction<ActionSettings> {
           if (this.visible.get(entry.action.id) !== entry) return;
           if (entry.dirty) continue;
         }
-        const title = keyTitle(visual.title);
         if (entry.title !== title) {
           await entry.action.setTitle(title);
           entry.title = title;

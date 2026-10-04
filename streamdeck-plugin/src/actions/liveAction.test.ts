@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import streamDeck from "@elgato/streamdeck";
+import { keyImage } from "../render/keyImage";
 import { LiveAction } from "./liveAction";
 import { PlaySound } from "./playSound";
 import { ToggleSetting } from "./toggleSetting";
@@ -47,6 +48,43 @@ function inspectorFixture() {
 }
 
 describe("live actions", () => {
+  it("tracks title layout per visible key and state, including hidden titles and generated-title changes", async () => {
+    class TestAction extends LiveAction {
+      protected override visual(settings: ActionSettings) {
+        return { title: settings.title || "Horn", icon: "cycle-boards" as const, state: settings.key ? 1 as const : 0 as const };
+      }
+      protected override async press() {}
+    }
+    const connection = fakeConnection();
+    const action = new TestAction(connection as unknown as Connection);
+    const first = fakeKey(), second = { ...fakeKey(), id: "second" };
+    for (const key of [first, second]) action.onWillAppear({ action: key, payload: { settings: {} } } as never);
+    await flush();
+    const titleParameters = { showTitle: true, titleAlignment: "bottom" as const, fontSize: 13 };
+    const changed = (title: string, parameters = titleParameters, state = 0) => action.onTitleParametersDidChange({
+      action: first, payload: { title, titleParameters: parameters, state },
+    } as never);
+    changed("Custom\nTitle");
+    await flush();
+    expect(first.setImage).toHaveBeenLastCalledWith(keyImage({ title: "Horn", icon: "cycle-boards", titleLayout: { title: "Custom\nTitle", ...titleParameters } }));
+    expect(first.setTitle).toHaveBeenCalledTimes(1);
+    expect(second.setImage).toHaveBeenCalledTimes(1);
+    const count = first.setImage.mock.calls.length;
+    changed("Hidden", { ...titleParameters, showTitle: false }, 1);
+    await flush();
+    expect(first.setImage).toHaveBeenCalledTimes(count);
+    action.onDidReceiveSettings({ action: first, payload: { settings: { key: "micPassthrough" } } } as never);
+    await flush();
+    expect(first.setImage).toHaveBeenLastCalledWith(keyImage({ title: "", icon: "cycle-boards" }));
+    action.onDidReceiveSettings({ action: first, payload: { settings: {} } } as never);
+    changed("Horn"); // The SDK also reports plugin-generated titles.
+    await flush();
+    action.onDidReceiveSettings({ action: first, payload: { settings: { title: "Main Board" } } } as never);
+    await flush();
+    expect(first.setImage).toHaveBeenLastCalledWith(keyImage({ title: "Main Board", icon: "cycle-boards" }));
+    for (const key of [first, second]) action.onWillDisappear({ action: key } as never);
+  });
+
   it("coalesces renders, deduplicates writes, stops animation after playback, and stops writes on disappearance", async () => {
     vi.useFakeTimers();
     const connection = fakeConnection();

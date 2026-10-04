@@ -68,6 +68,28 @@ describe("key rendering", () => {
     expect(one.bottom).toBeLessThanOrEqual(144 - 8 - 30);
     expect(two.bottom).toBeLessThanOrEqual(144 - 8 - 60);
   });
+  it("reserves explicit user-title lines and font size without wrapping, and restores artwork when titles are hidden", () => {
+    const input = { title: "Horn", icon: "cycle-boards" as const };
+    const layout = { title: "Custom\nTitle", showTitle: true, titleAlignment: "bottom" as const, fontSize: 13 };
+    const custom = keyImage({ ...input, titleLayout: layout });
+    expect(custom).toBe(keyImage({ ...input, title: "Main Board" }));
+    expect(keyImage({ ...input, titleLayout: { ...layout, title: "Main Board" } }))
+      .toBe(keyImage(input)); // An SDK title has explicit lines only.
+    expect(keyImage({ ...input, titleLayout: { ...layout, showTitle: false } }))
+      .toBe(keyImage({ ...input, title: "" }));
+    expect(keyImage({ ...input, titleLayout: { ...layout, fontSize: 20 } })).not.toBe(custom);
+    expect(svg({ ...input, titleLayout: { ...layout, title: "One\nTwo\nThree\nFour\nFive" } }))
+      .not.toContain('data-icon="cycle-boards"');
+  });
+  it.each(["top", "middle"] as const)("places foreground artwork outside a %s aligned user title", (alignment) => {
+    const output = svg({ title: "Horn", icon: "cycle-boards", titleLayout: {
+      title: "Custom\nTitle", showTitle: true, titleAlignment: alignment, fontSize: 13,
+    } });
+    const match = output.match(/data-icon="cycle-boards" transform="translate\(([\d.]+) ([\d.]+)\) scale\(([\d.]+)\)"/)!;
+    const [, y, scale] = match.slice(1).map(Number);
+    const titleTop = alignment === "top" ? 8 : 42;
+    expect(y + 24 * scale <= titleTop || y >= titleTop + 60).toBe(true);
+  });
   it("keeps identical rendered states stable despite timestamp changes", () => {
     expect(keyImage({ title: "Horn", now: 100 })).toBe(keyImage({ title: "Bell", now: 100_000 }));
     expect(keyImage({ title: "Horn", playing: voice, now: 15_000 })).toBe(keyImage({ title: "Horn", playing: voice, now: 15_001 }));
