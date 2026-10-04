@@ -18,6 +18,10 @@ describe("key rendering", () => {
     expect(output).not.toContain("<script>");
     expect(output).toContain('data-pad="sound"');
   });
+  it.each(["\ud800", "\udfff", "\u0000", "\u001f", "\ufffe", "\uffff"])("replaces invalid imported XML glyphs (case %#)", (glyph) => {
+    expect(svg({ title: glyph + "Imported", glyph })).toContain(">\ufffd</text>");
+    expect(svg({ title: "Music", glyph: "🎵" })).toContain(">🎵</text>");
+  });
   it("prefers embedded custom images with both SVG link attributes, rejecting external loads", () => {
     const image = "data:image/png;base64,aGVsbG8=";
     const output = svg({ title: "airhorn", glyph: "A", image });

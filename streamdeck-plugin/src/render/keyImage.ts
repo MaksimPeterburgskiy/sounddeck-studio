@@ -42,7 +42,10 @@ const cache = new Map<string, string>();
 let cacheBytes = 0;
 
 function escapeXml(value: string): string {
-  return value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" })[character]!);
+  // XML 1.0 characters only; imported text can contain lone UTF-16 surrogates
+  // that would also make encodeURIComponent throw when encoding the SVG.
+  return value.replace(/[^\u0009\u000a\u000d\u0020-\ud7ff\ue000-\ufffd\u{10000}-\u{10ffff}]/gu, "\ufffd")
+    .replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" })[character]!);
 }
 
 function safeColor(value?: string): string {
