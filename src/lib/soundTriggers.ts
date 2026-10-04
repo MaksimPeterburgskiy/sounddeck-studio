@@ -32,7 +32,7 @@ export class SoundTriggers {
         fresh: hold,
         waitForRouting: external ? () => waitForAudioConfiguration(this.getConfiguration) : undefined
       });
-    }, signal);
+    }, signal, cancellation ?? signal);
     return hold
       ? this.presses.press(pressId, (signal) => start(signal) as Promise<string | false>,
         (voiceId) => engine.stopVoice(sound.id, voiceId), sound.id, cancellation)

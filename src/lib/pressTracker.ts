@@ -18,7 +18,7 @@ export class PressTracker {
     if (this.presses.has(pressId)) return null;
     const press: Press = { cancellation: new AbortController(), soundId, voiceId: null, stop };
     this.presses.set(pressId, press);
-    const abort = () => this.release(pressId);
+    const abort = () => this.release(pressId, signal?.reason);
     signal?.addEventListener("abort", abort, { once: true });
     if (signal?.aborted) abort();
     try {
@@ -43,10 +43,10 @@ export class PressTracker {
     }
   }
 
-  release(pressId: string) {
+  release(pressId: string, reason?: unknown) {
     const press = this.presses.get(pressId);
     if (!press || press.cancellation.signal.aborted) return;
-    press.cancellation.abort();
+    press.cancellation.abort(reason);
     if (press.voiceId !== null) {
       press.stop(press.voiceId);
       this.presses.delete(pressId);

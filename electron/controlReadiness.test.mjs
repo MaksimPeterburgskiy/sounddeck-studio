@@ -47,7 +47,7 @@ describe("preload control readiness", () => {
       ["control:state", state, "source-document"], ["control:received", "request", "source-document"], ["control:result", "request", { ok: true }, "source-document"]
     ]);
   });
-  it("forwards cancellation ids without completing the original operation", async () => {
+  it.each([undefined, "operation-timeout"])("forwards cancellation ids and reason %s without completing the original operation", async (reason) => {
     const document = preload();
     document.ipcRenderer.emit("control-ready-token", {}, "source-document");
     let finish;
@@ -59,8 +59,8 @@ describe("preload control readiness", () => {
     unsubscribe();
     document.sounddeck.onControlCommand(callback);
     document.ipcRenderer.invoke.mockClear();
-    document.ipcRenderer.emit("control-command", {}, { command: "control.cancel", requestId: "request" });
-    expect(callback).toHaveBeenLastCalledWith({ command: "control.cancel", requestId: "request" });
+    document.ipcRenderer.emit("control-command", {}, { command: "control.cancel", requestId: "request", ...(reason && { reason }) });
+    expect(callback).toHaveBeenLastCalledWith({ command: "control.cancel", requestId: "request", ...(reason && { reason }) });
     expect(document.ipcRenderer.invoke).not.toHaveBeenCalled();
     finish({ ok: false, code: "unavailable" });
     await vi.waitFor(() => expect(document.ipcRenderer.invoke).toHaveBeenCalledExactlyOnceWith("control:result", "request", { ok: false, code: "unavailable" }, "source-document"));

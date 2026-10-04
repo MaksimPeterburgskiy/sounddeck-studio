@@ -10,11 +10,11 @@ const controlReadyToken = new Promise((resolve) => {
 const controlCommandRequests = new Map();
 let controlCommandStarts = Promise.resolve();
 
-function cancelControlRequest(requestId, request) {
+function cancelControlRequest(requestId, request, reason) {
   if (!request || request.cancelled) return;
   request.cancelled = true;
   if (request.started) {
-    try { void Promise.resolve(request.callback({ command: "control.cancel", requestId })).catch(() => {}); } catch {}
+    try { void Promise.resolve(request.callback({ command: "control.cancel", requestId, ...(reason === "operation-timeout" ? { reason } : {}) })).catch(() => {}); } catch {}
   }
 }
 
@@ -85,7 +85,7 @@ contextBridge.exposeInMainWorld("sounddeck", {
   onControlCommand: (callback) => {
     const listener = (_event, { requestId, ...command }) => {
       if (command.command === "control.cancel") {
-        cancelControlRequest(requestId, controlCommandRequests.get(requestId));
+        cancelControlRequest(requestId, controlCommandRequests.get(requestId), command.reason);
         return Promise.resolve();
       }
       // Apply the stop boundary at arrival, before later requests register while

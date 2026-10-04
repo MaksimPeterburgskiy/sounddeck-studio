@@ -290,9 +290,12 @@ describe("AudioEngine output routing", () => {
     await engine.dispose();
   });
 
-  it("acknowledges a decode deadline before preparation settles and never starts that cancelled voice", async () => {
+  it.each([
+    ["play", "none"], ["tap press", "none"], ["hold press", "none"],
+    ["play", "stop"], ["hold press", "release"], ["hold press", "stop"]
+  ])("acknowledges a %s decode deadline after %s before preparation settles and never starts that cancelled voice", async (operation, earlierCancellation) => {
     const engine = new AudioEngine(playbackSettings, vi.fn());
-    const queue = createSoundPlayQueue();
+    const triggers = new SoundTriggers(() => engine, () => null);
     const decoded = deferred<void>();
     const decode = decodeContext().decodeAudioData.getMockImplementation()!;
     decodeContext().decodeAudioData.mockImplementationOnce(async () => {
@@ -300,18 +303,24 @@ describe("AudioEngine output routing", () => {
       return decode();
     });
     const controller = new AbortController();
-    const sound = makeSound({ retriggerMode: "restart" });
-    const expired = queue(sound.id, (signal) => engine.play(sound, signal), controller.signal);
+    const sound = makeSound({ retriggerMode: "restart", triggerMode: operation === "hold press" ? "hold" : "tap" });
+    const pressId = operation === "play" ? undefined : "held";
+    const expired = triggers.trigger(sound, pressId, true, controller.signal);
     await waitForMockCalls(decodeContext().decodeAudioData, 1);
+    if (earlierCancellation === "release") triggers.release("held");
+    else if (earlierCancellation === "stop") triggers.stop(sound.id);
     controller.abort("operation-timeout");
     await expect(expired).rejects.toThrow("Control operation cancelled");
-    expect(await queue(sound.id, (signal) => engine.play(sound, signal))).toBe(true);
+    expect(monitorContext().bufferSources).toHaveLength(0);
+    // A retry with the same press ID must work while the expired decode hangs.
+    expect(await triggers.trigger(sound, pressId, true)).toEqual(expect.any(String));
     const resumed = monitorContext().resume.mock.calls.length;
     decoded.resolve();
     for (let i = 0; i < 10; i++) await Promise.resolve();
     expect(monitorContext().resume).toHaveBeenCalledTimes(resumed);
     expect(monitorContext().bufferSources).toHaveLength(1);
     expect(engine.isPlaying(sound.id)).toBe(true);
+    if (pressId) triggers.release(pressId);
     await engine.dispose();
   });
 

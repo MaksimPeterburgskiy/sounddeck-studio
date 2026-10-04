@@ -17,6 +17,8 @@ export function createSoundPlayQueue() {
     const previous = tails.get(soundId);
     const result = waitForControlOperation(
       (previous ? previous.catch(() => undefined) : Promise.resolve()).then(() => operation(cancellation.signal)),
+      // A release/stop can abort playback before the external deadline arrives.
+      // Keep watching the request so a hung cancelled operation still yields.
       deadlineSignal
     );
     tails.set(soundId, result);

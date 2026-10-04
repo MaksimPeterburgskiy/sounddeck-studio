@@ -157,6 +157,25 @@ describe("sound trigger ordering", () => {
     expect(audio.stopVoice).toHaveBeenLastCalledWith(sound.id, "voice-3");
   });
 
+  it.each(["play", "tap press", "hold press"])("expires an external %s while routing hangs without affecting queued neighbours", async (operation) => {
+    const audio = engine();
+    const configuration = deferred<void>();
+    const triggers = new SoundTriggers(() => audio, () => configuration.promise);
+    const sound = makeSound({ triggerMode: operation === "hold press" ? "hold" : "tap", retriggerMode: "overlap" });
+    const cancellation = new AbortController();
+    const first = triggers.trigger(sound, operation === "play" ? undefined : "expired", true, cancellation.signal);
+    const second = triggers.trigger(sound, "later", true);
+    await Promise.resolve();
+    cancellation.abort("operation-timeout");
+    await expect(first).rejects.toThrow("Control operation cancelled");
+    expect(audio.play).not.toHaveBeenCalled();
+    configuration.resolve();
+    expect(await second).toBe("voice-1");
+    expect(audio.play).toHaveBeenCalledTimes(1);
+    triggers.release("later");
+    expect(audio.stopVoice.mock.calls).toEqual(operation === "hold press" ? [[sound.id, "voice-1"]] : []);
+  });
+
   it("passes request cancellation through a hold's decode without affecting its neighbour", async () => {
     const audio = engine();
     const decoded = deferred<void>();
