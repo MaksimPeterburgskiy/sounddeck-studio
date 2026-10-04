@@ -87,7 +87,10 @@ function createExternalControlBridge({
   let libraryPublished = false;
   let documentToken = null;
   let generation = 0;
-  let appliedGeneration = 0;
+  let appliedLibraryGeneration = 0;
+  let appliedLiveGeneration = 0;
+  // Both library and live updates can publish the active board.
+  let appliedBoardGeneration = 0;
 
   // Capture ownership when work is requested, before any asynchronous reads.
   function beginUpdate(token = documentToken) {
@@ -99,7 +102,7 @@ function createExternalControlBridge({
     return Boolean(owner && owner.token === documentToken);
   }
 
-  function currentUpdate(owner) {
+  function currentUpdate(owner, appliedGeneration) {
     return ownsDocument(owner) && owner.generation >= appliedGeneration;
   }
 
@@ -155,7 +158,7 @@ function createExternalControlBridge({
   }
 
   function updateLiveState(state, owner = beginUpdate()) {
-    if (!currentUpdate(owner)) return false;
+    if (!currentUpdate(owner, appliedLiveGeneration)) return false;
     if (!fields(state, ["activeBoardId", "playback"]) || (state.activeBoardId !== undefined && (typeof state.activeBoardId !== "string"
       || (state.activeBoardId !== "" && !id(state.activeBoardId)))) || !Array.isArray(state.playback)
       || state.playback.length > 4096 || !state.playback.every((voice) => fields(voice, ["soundId", "startedAt", "duration", "loop"])
@@ -163,10 +166,12 @@ function createExternalControlBridge({
         && Number.isFinite(voice.duration) && voice.duration > 0 && typeof voice.loop === "boolean")) {
       throw new Error("Invalid control state");
     }
-    const activeBoardId = state.activeBoardId ?? live.activeBoardId;
+    const updatesBoard = state.activeBoardId !== undefined && currentUpdate(owner, appliedBoardGeneration);
+    const activeBoardId = updatesBoard ? state.activeBoardId : live.activeBoardId;
     const boardChanged = live.activeBoardId !== activeBoardId;
     const playbackChanged = JSON.stringify(live.playback) !== JSON.stringify(state.playback);
-    appliedGeneration = owner.generation;
+    appliedLiveGeneration = owner.generation;
+    if (updatesBoard) appliedBoardGeneration = owner.generation;
     live = { activeBoardId, playback: state.playback.map((voice) => ({ ...voice })) };
     if (boardChanged) event("board.changed", { activeBoardId: live.activeBoardId });
     if (playbackChanged) event("playback.changed", live.playback);
@@ -174,7 +179,7 @@ function createExternalControlBridge({
   }
 
   function updateLibrary(value, owner = beginUpdate()) {
-    if (!currentUpdate(owner)) return false;
+    if (!currentUpdate(owner, appliedLibraryGeneration)) return false;
     const requestedBoardId = value?.activeBoardId ?? "";
     if (typeof requestedBoardId !== "string" || (requestedBoardId !== "" && !id(requestedBoardId))) throw new Error("Invalid active board");
     const boards = (Array.isArray(value?.boards) ? value.boards : []).map((board) => ({
@@ -190,13 +195,17 @@ function createExternalControlBridge({
       }
     }
     const changed = JSON.stringify(library.boards) !== JSON.stringify(boards);
-    const activeBoardId = boards.find((board) => board.id === requestedBoardId)?.id || boards[0]?.id || "";
+    const updatesBoard = currentUpdate(owner, appliedBoardGeneration);
+    const activeBoardId = updatesBoard
+      ? boards.find((board) => board.id === requestedBoardId)?.id || boards[0]?.id || ""
+      : live.activeBoardId;
     const boardChanged = live.activeBoardId !== activeBoardId;
     // Images are fetched separately, but replacing one must invalidate client caches.
     const fingerprint = crypto.createHash("sha256").update(JSON.stringify([...images])).digest("hex");
     const imageChanged = imageFingerprint !== fingerprint;
     imageFingerprint = fingerprint;
-    appliedGeneration = owner.generation;
+    appliedLibraryGeneration = owner.generation;
+    if (updatesBoard) appliedBoardGeneration = owner.generation;
     libraryPublished = true;
     library = { boards };
     live = { ...live, activeBoardId };
@@ -561,7 +570,7 @@ function createExternalControlBridge({
           updateLibrary(value, owner);
         } catch (caught) {
           // A failed obsolete read cannot take a newer renderer cache offline.
-          if (currentUpdate(owner)) throw caught;
+          if (currentUpdate(owner, appliedLibraryGeneration)) throw caught;
         }
       }
       error = null;

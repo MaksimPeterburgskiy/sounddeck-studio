@@ -171,6 +171,24 @@ describe("main-process external control lifecycle", () => {
     await app.bridge.stop();
   });
 
+  it("publishes a pending renderer library load after a playback-only update", async () => {
+    const app = await boot();
+    app.documentLoaded();
+    const pendingRead = deferred();
+    const readFile = app.fileSystem.readFile.getMockImplementation();
+    app.fileSystem.readFile.mockImplementation((file) => file.endsWith("library.json") ? pendingRead.promise : readFile(file));
+    const loading = app.invoke("library:load");
+    await vi.waitFor(() => expect(app.fileSystem.readFile).toHaveBeenCalledWith(expect.stringContaining("library.json"), "utf8"));
+    expect(app.invoke("control:state", app.event, { playback: [] })).toEqual({ ok: true });
+    const library = { activeBoardId: "board-a", boards: [{ id: "board-a", name: "Main", sounds: [{ id: "sound-a", title: "Airhorn" }] }] };
+    pendingRead.resolve(JSON.stringify(library));
+    expect(await loading).toEqual(library);
+    expect(app.bridge.getSnapshot()).toMatchObject({ library, activeBoardId: "board-a", playback: [] });
+    await app.loaded();
+    await app.invoke("control:getSettings");
+    await app.bridge.stop();
+  });
+
   it("allows library initialization to retry after a storage failure", async () => {
     const app = await boot();
     app.documentLoaded();

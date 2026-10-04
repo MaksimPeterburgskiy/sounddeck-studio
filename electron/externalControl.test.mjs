@@ -178,28 +178,30 @@ describe("external control discovery and listener", () => {
     const startup = bridge.start(() => new Promise((resolve) => { finishLoading = resolve; }));
     await vi.waitFor(() => expect(finishLoading).toBeTypeOf("function"));
     const playback = [{ soundId: "sound-new", startedAt: 123, duration: 10, loop: true }];
-    bridge.updateLiveState({ activeBoardId: "board-a", playback });
+    bridge.updateLiveState({ playback });
     finishLoading(library);
     expect(await startup).toMatchObject({ listening: true, error: null });
     expect(bridge.getSnapshot().playback).toEqual(playback);
     expect((await request()).body.playback).toEqual(playback);
     const connection = await client();
     connection.send(hello());
-    expect(await connection.next()).toMatchObject({ type: "welcome", state: { playback } });
+    expect(await connection.next()).toMatchObject({ type: "welcome", state: { playback, activeBoardId: "board-a", library: { boards: [{ id: "board-a" }, { id: "board-b" }] } } });
+    connection.send({ type: "command", id: "play", command: "sound.play", args: { soundId: "sound-new" } });
+    expect(await connection.next()).toMatchObject({ type: "result", id: "play", ok: true });
   });
 
-  it.each(["library", "live"])("discards the startup snapshot after a newer %s update", async (kind) => {
+  it.each(["library", "live"])("preserves newer %s state when the startup library load finishes", async (kind) => {
     await create({}, true, false);
     await bridge.stop();
     let finish;
     const startup = bridge.start(() => new Promise((resolve) => { finish = resolve; }));
     await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
-    if (kind === "library") bridge.updateLibrary({ ...library, activeBoardId: "board-b" });
+    if (kind === "library") bridge.updateLibrary({ ...library, activeBoardId: "board-b", boards: [library.boards[1]] });
     else bridge.updateLiveState({ activeBoardId: "board-b", playback: [] });
     finish(library);
     await startup;
     expect((await request()).body.activeBoardId).toBe("board-b");
-    if (kind === "library") expect((await request("/v1/library")).body.boards).toHaveLength(2);
+    expect((await request("/v1/library")).body.boards).toHaveLength(kind === "library" ? 1 : 2);
   });
 
   it("rejects older generations and obsolete documents for library and live state", async () => {
@@ -208,14 +210,24 @@ describe("external control discovery and listener", () => {
     const oldLibrary = bridge.beginUpdate("old");
     const oldLive = bridge.beginUpdate("old");
     bridge.setDocument("new");
-    bridge.updateLibrary({ ...library, activeBoardId: "board-b" }, bridge.beginUpdate("new"));
     const earlier = bridge.beginUpdate("new");
+    bridge.updateLibrary({ ...library, activeBoardId: "board-b", boards: [library.boards[1]] }, bridge.beginUpdate("new"));
     const playback = [{ soundId: "sound-other", startedAt: 1, duration: 2, loop: false }];
     bridge.updateLiveState({ playback }, bridge.beginUpdate("new"));
     bridge.updateLibrary(library, oldLibrary);
     bridge.updateLiveState({ activeBoardId: "board-a", playback: [] }, oldLive);
     bridge.updateLibrary(library, earlier);
     bridge.updateLiveState({ playback: [] }, earlier);
+    expect((await request()).body).toMatchObject({ activeBoardId: "board-b", playback });
+    expect((await request("/v1/library")).body.boards.map((board) => board.id)).toEqual(["board-b"]);
+  });
+
+  it("accepts pending playback after a newer library update without reverting its active board", async () => {
+    await create();
+    const pendingLive = bridge.beginUpdate();
+    bridge.updateLibrary({ ...library, activeBoardId: "board-b" });
+    const playback = [{ soundId: "sound-other", startedAt: 1, duration: 2, loop: false }];
+    bridge.updateLiveState({ activeBoardId: "board-a", playback }, pendingLive);
     expect((await request()).body).toMatchObject({ activeBoardId: "board-b", playback });
   });
 
