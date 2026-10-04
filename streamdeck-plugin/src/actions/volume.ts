@@ -82,6 +82,8 @@ export class Volume extends LiveAction {
         const presses = this.presses.get(id);
         const initial = presses?.shift();
         if (!presses?.length) this.presses.delete(id);
+        // A tap that was never sent belongs to its session; don't replay it on a new one.
+        if (initial && initial.session !== this.connection.session) continue;
         const repeat = initial ?? this.held.get(id);
         if (!repeat) break;
         if (!initial && this.connection.session !== repeat.session) break;

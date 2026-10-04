@@ -77,7 +77,7 @@ describe("volume keys", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it.each(["up", "disappear", "disconnect", "settings"])("preserves an unsent tap across %s while cancelling hold ticks", async (stop) => {
+  it.each(["up", "disappear", "settings"])("preserves an unsent tap across %s while cancelling hold ticks", async (stop) => {
     vi.useFakeTimers();
     const { connection, key, volume } = setup();
     const acknowledgements = deferCommands(connection);
@@ -87,14 +87,7 @@ describe("volume keys", () => {
     if (stop === "up") volume.onKeyUp(event(key));
     if (stop === "disappear") volume.onWillDisappear(event(key));
     if (stop === "settings") volume.onDidReceiveSettings(event(key, { mode: "up" }));
-    if (stop === "disconnect") {
-      connection.session = null; connection.status = "offline"; connection.emit();
-    }
     acknowledgements[0].resolve(success); await flush();
-    if (stop === "disconnect") {
-      expect(connection.command).toHaveBeenCalledTimes(1);
-      connection.session = {}; connection.status = "connected"; connection.emit();
-    }
     expect(connection.command).toHaveBeenCalledTimes(2);
     expect(connection.command).toHaveBeenLastCalledWith("volume.adjust", { bus: "micMonitor", delta: -0.03 });
     acknowledgements[1].resolve(success); await first; await flush();
@@ -163,6 +156,22 @@ describe("volume keys", () => {
     expect(connection.command).toHaveBeenLastCalledWith("volume.adjust", { bus: "micMonitor", delta: delta * 2 });
     volume.onKeyUp(down);
     acknowledgements[2].resolve(success); await first;
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("discards an unsent tap when its session disconnects instead of replaying it after reconnect", async () => {
+    vi.useFakeTimers();
+    const { connection, key, volume } = setup();
+    const acknowledgements = deferCommands(connection);
+    const first = volume.onKeyDown(event(key));
+    volume.onKeyUp(event(key));
+    await volume.onKeyDown(event(key, { bus: "micMonitor", mode: "down", step: 3 }));
+    volume.onKeyUp(event(key));
+    connection.session = null; connection.status = "offline"; connection.emit();
+    acknowledgements[0].resolve(success); await first; await flush();
+    connection.session = {}; connection.status = "connected"; connection.emit(); await flush();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(connection.command).toHaveBeenCalledTimes(1);
     expect(vi.getTimerCount()).toBe(0);
   });
 
