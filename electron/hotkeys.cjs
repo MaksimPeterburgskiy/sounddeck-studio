@@ -28,6 +28,10 @@ function macOSPermissionReason(platform) {
   return platform === "darwin" ? "macos-input-monitoring-permission" : "hotkey-engine-start-failed";
 }
 
+function isSameHotkeyTarget(left, right) {
+  return Boolean(left && right && left.type === right.type && left.soundId === right.soundId && left.boardId === right.boardId);
+}
+
 function electronAcceleratorFromTokens(tokens, platform) {
   const modifiers = [];
   const keys = [];
@@ -181,6 +185,7 @@ function buildKeycodeMap(keys) {
 // failure-reason and accelerator-mapping branches).
 function createHotkeyEngine({
   onTrigger,
+  onRelease = () => {},
   hook = uIOhook,
   keys = UiohookKey,
   shortcuts = globalShortcut,
@@ -221,11 +226,20 @@ function createHotkeyEngine({
   let bindings = new Map(); // signature -> { binding, tokens, hasSuperset }
   let pressed = new Map(); // keycode -> token
   let pending = null; // matched binding deferred because a longer combo may still complete
+  const activePresses = new Map(); // press token -> { binding, keycodes }
   let started = false;
   let suspended = false;
   let lastFailureReason = "";
 
   const signatureOf = (tokens) => [...new Set(tokens)].sort().join("+");
+
+  function releasePresses(keycode) {
+    for (const [pressToken, press] of activePresses) {
+      if (keycode !== undefined && !press.keycodes.has(keycode)) continue;
+      activePresses.delete(pressToken);
+      onRelease(press.binding, pressToken);
+    }
+  }
 
   hook.on("keydown", (event) => {
     const token = keycodeToToken.get(event.keycode);
@@ -243,10 +257,13 @@ function createHotkeyEngine({
       return;
     }
     pending = null;
-    onTrigger(entry.binding);
+    const pressToken = {};
+    activePresses.set(pressToken, { binding: entry.binding, signature: signatureOf(entry.tokens), keycodes: new Set(pressed.keys()) });
+    onTrigger(entry.binding, pressToken);
   });
 
   hook.on("keyup", (event) => {
+    releasePresses(event.keycode);
     if (!pressed.delete(event.keycode)) return;
     if (pending && !suspended) {
       const binding = pending;
@@ -273,7 +290,6 @@ function createHotkeyEngine({
     register(list) {
       fallback.unregisterAll();
       bindings = new Map();
-      pending = null;
       const results = [];
       for (const binding of list) {
         const tokens = String(binding.accelerator || "").split("+").map((token) => token.trim()).filter(Boolean);
@@ -294,6 +310,15 @@ function createHotkeyEngine({
         entry.hasSuperset = entries.some(
           (other) => other.tokens.length > entry.tokens.length && entry.tokens.every((token) => other.tokens.includes(token))
         );
+      }
+      for (const [pressToken, press] of activePresses) {
+        if (isSameHotkeyTarget(press.binding, bindings.get(press.signature)?.binding)) continue;
+        activePresses.delete(pressToken);
+        onRelease(press.binding, pressToken);
+      }
+      if (pending) {
+        const signature = signatureOf(String(pending.accelerator || "").split("+").map((token) => token.trim()).filter(Boolean));
+        if (!isSameHotkeyTarget(pending, bindings.get(signature)?.binding)) pending = null;
       }
       if (bindings.size && !ensureStarted()) {
         const fallbackResults = fallback.register(results.filter((result) => result.ok));
@@ -320,9 +345,15 @@ function createHotkeyEngine({
     setSuspended(value) {
       suspended = Boolean(value);
       fallback.setSuspended(suspended);
-      if (suspended) pending = null;
+      if (suspended) {
+        pending = null;
+        releasePresses();
+      }
     },
     stop() {
+      releasePresses();
+      pressed.clear();
+      pending = null;
       fallback.unregisterAll();
       if (!started) return;
       started = false;
@@ -343,4 +374,4 @@ function createHotkeyEngine({
   };
 }
 
-module.exports = { createHotkeyEngine };
+module.exports = { createHotkeyEngine, isSameHotkeyTarget };

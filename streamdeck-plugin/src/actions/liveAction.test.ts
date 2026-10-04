@@ -20,7 +20,7 @@ const flush = async () => { for (let i = 0; i < 20; i++) await Promise.resolve()
 function fakeConnection() {
   let listener = () => {};
   const connection = {
-    status: "connected", statusLabel: "", snapshot: {
+    session: {}, status: "connected", statusLabel: "", snapshot: {
       playback: [] as Array<{ soundId: string; startedAt: number; duration: number; loop: boolean }>,
       settings: { micPassthrough: false }, library: { boards: [] as Array<{ id: string; name?: string; sounds: Array<{ id: string; title: string; hasImage: boolean }> }> },
     },
@@ -235,6 +235,40 @@ describe("live actions", () => {
     expect(connection.command).toHaveBeenLastCalledWith("setting.toggle", { key: "micPassthrough" });
   });
 
+  it("sends key up immediately while its press acknowledgement is pending", async () => {
+    const connection = fakeConnection();
+    connection.snapshot.library.boards = [{ id: "board", sounds: [{ id: "sound", title: "Horn", hasImage: false }] }];
+    const action = new PlaySound(connection as unknown as Connection);
+    const key = fakeKey();
+    const event = { action: key, payload: { settings: { soundId: "sound" } } };
+    let acknowledge!: (result: { ok: boolean }) => void;
+    connection.command.mockImplementationOnce(() => new Promise((resolve) => { acknowledge = resolve; }));
+    const down = action.onKeyDown(event as never);
+    expect(connection.command).toHaveBeenLastCalledWith("sound.press", { soundId: "sound", pressId: expect.any(String) });
+    const pressId = (connection.command.mock.lastCall as unknown as [string, { pressId: string }])[1].pressId;
+    await action.onKeyUp(event as never);
+    expect(connection.command).toHaveBeenLastCalledWith("sound.release", { pressId });
+    acknowledge({ ok: true });
+    await down;
+  });
+
+  it.each(["keyUp", "disappear"])("alerts on a failed or timed-out press and keeps it held until %s", async (release) => {
+    const connection = fakeConnection();
+    connection.snapshot.library.boards = [{ id: "board", sounds: [{ id: "sound", title: "Horn", hasImage: false }] }];
+    connection.command.mockResolvedValueOnce({ ok: false });
+    const action = new PlaySound(connection as unknown as Connection);
+    const key = fakeKey();
+    const event = { action: key, payload: { settings: { soundId: "sound" } } };
+    await action.onKeyDown(event as never);
+    const pressId = (connection.command.mock.lastCall as unknown as [string, { pressId: string }])[1].pressId;
+    expect(key.showAlert).toHaveBeenCalledOnce();
+    expect(connection.command).toHaveBeenCalledTimes(1);
+    if (release === "keyUp") await action.onKeyUp(event as never);
+    else { action.onWillDisappear(event as never); await flush(); }
+    expect(connection.command).toHaveBeenLastCalledWith("sound.release", { pressId });
+    expect(connection.command).toHaveBeenCalledTimes(2);
+  });
+
   it("persists renamed and moved sound metadata, then resolves a re-import using that fallback", async () => {
     const connection = fakeConnection();
     const action = new PlaySound(connection as unknown as Connection);
@@ -248,8 +282,11 @@ describe("live actions", () => {
     connection.emit(); await flush();
     expect(key.setSettings).toHaveBeenLastCalledWith({ ...saved, soundId: "imported" });
     await action.onKeyDown({ action: key, payload: { settings: saved } } as never);
-    expect(connection.command).toHaveBeenLastCalledWith("sound.play", { soundId: "imported" });
+    expect(connection.command).toHaveBeenLastCalledWith("sound.press", { soundId: "imported", pressId: expect.any(String) });
+    const pressId = (connection.command.mock.lastCall as unknown as [string, { pressId: string }])[1].pressId;
     action.onWillDisappear({ action: key } as never);
+    await flush();
+    expect(connection.command).toHaveBeenLastCalledWith("sound.release", { pressId });
   });
 
   it("preserves an inspector binding persisted before its echo when syncing library metadata", async () => {
@@ -288,10 +325,10 @@ describe("live actions", () => {
     const settings = { soundId: "original", boardId: "board", title };
     connection.snapshot.library.boards = [{ id: "board", sounds: [{ id: "original", title, hasImage: false }] }];
     await action.onKeyDown({ action: key, payload: { settings } } as never);
-    expect(connection.command).toHaveBeenLastCalledWith("sound.play", { soundId: "original" });
+    expect(connection.command).toHaveBeenLastCalledWith("sound.press", { soundId: "original", pressId: expect.any(String) });
     connection.snapshot.library.boards[0].sounds[0].id = "imported";
     await action.onKeyDown({ action: key, payload: { settings } } as never);
-    expect(connection.command).toHaveBeenLastCalledWith("sound.play", { soundId: "imported" });
+    expect(connection.command).toHaveBeenLastCalledWith("sound.press", { soundId: "imported", pressId: expect.any(String) });
     expect(key.showAlert).not.toHaveBeenCalled();
   });
 });

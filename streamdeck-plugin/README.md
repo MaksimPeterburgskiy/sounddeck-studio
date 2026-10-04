@@ -3,7 +3,10 @@
 Five keypad actions: Play sound, Stop all, Switch to board, Cycle boards, and
 Toggle setting. Requires Stream Deck 7.1+ (including Virtual Stream Deck) and
 SoundDeck Studio with **Settings → External control** enabled. Play sound uses
-`sound.play` on key down; key up does nothing until the separate hold feature.
+`sound.press` on key down and `sound.release` on key up. The sound's Tap/Hold
+trigger mode in the app decides whether releasing stops playback. Each key has
+its own press, so keys bound to the same Hold sound remain independent. Leaving
+the key's page releases it; disconnecting releases all presses on that session.
 
 From the repository root:
 
@@ -35,6 +38,8 @@ Verify a sound's title/image and progress, Stop all lighting, active board
 highlighting, and a setting changed from either the app or the key. Re-import a
 board and check title fallback. Close the app completely, press a key, and check
 that it launches hidden; that first press is intentionally dropped.
+Set a sound's trigger mode to Hold and verify release/fade-out, two keys holding
+the same sound, changing pages while held, and disconnect/reconnect while held.
 
 The committed manifest disables Node debugging. For local development only,
 set `Nodejs.Debug` to `"enabled"` in your local manifest and use `pnpm watch`,

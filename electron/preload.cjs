@@ -10,6 +10,26 @@ const controlReadyToken = new Promise((resolve) => {
 const controlCommandRequests = new Map();
 let controlCommandStarts = Promise.resolve();
 
+function cancelControlRequest(requestId, request, reason) {
+  if (!request || (request.cancelled && (reason !== "operation-timeout" || request.deadlineCancelled))) return;
+  request.cancelled = true;
+  // A disconnect/stop must not swallow the independent operation deadline.
+  if (reason === "operation-timeout") request.deadlineCancelled = true;
+  if (request.started) {
+    try { void Promise.resolve(request.callback({ command: "control.cancel", requestId, ...(reason === "operation-timeout" ? { reason } : {}) })).catch(() => {}); } catch {}
+  }
+}
+
+function cancelPendingControlPlayback(soundId) {
+  // Started playback is owned by SoundTriggers; include requests still waiting
+  // for receipt without running renderer callbacks before the stop snapshot.
+  const earlier = [...controlCommandRequests].filter(([, request]) =>
+    !request.started &&
+    (request.command.command === "sound.play" || request.command.command === "sound.press") &&
+    (soundId === undefined || request.command.args.soundId === soundId));
+  for (const [requestId, request] of earlier) cancelControlRequest(requestId, request);
+}
+
 contextBridge.exposeInMainWorld("sounddeck", {
   loadLibrary: () => controlReadyToken.then((token) => ipcRenderer.invoke("library:load", token)),
   saveLibrary: (library) => controlReadyToken.then((token) => ipcRenderer.invoke("library:save", library, token)),
@@ -47,12 +67,18 @@ contextBridge.exposeInMainWorld("sounddeck", {
     ipcRenderer.on("hotkey-trigger", listener);
     return () => ipcRenderer.removeListener("hotkey-trigger", listener);
   },
+  onHotkeyRelease: (callback) => {
+    const listener = (_event, binding) => callback(binding);
+    ipcRenderer.on("hotkey-release", listener);
+    return () => ipcRenderer.removeListener("hotkey-release", listener);
+  },
   getControlSettings: () => ipcRenderer.invoke("control:getSettings"),
   setControlSettings: (patch) => ipcRenderer.invoke("control:setSettings", patch),
   regenerateControlToken: () => ipcRenderer.invoke("control:regenerateToken"),
   pushControlState: (state) => controlReadyToken.then((token) => ipcRenderer.invoke("control:state", state, token)),
 
   controlReady: () => controlReadyToken.then((token) => ipcRenderer.invoke("control:ready", token)),
+  cancelPendingControlPlayback: cancelPendingControlPlayback,
   onControlStatus: (callback) => {
     const listener = (_event, state) => callback(state);
     ipcRenderer.on("control-status", listener);
@@ -61,18 +87,15 @@ contextBridge.exposeInMainWorld("sounddeck", {
   onControlCommand: (callback) => {
     const listener = (_event, { requestId, ...command }) => {
       if (command.command === "control.cancel") {
-        const request = controlCommandRequests.get(requestId);
-        if (request) {
-          request.cancelled = true;
-          if (request.started) {
-            try { void Promise.resolve(request.callback({ ...command, requestId })).catch(() => {}); } catch {}
-          }
-        }
+        cancelControlRequest(requestId, controlCommandRequests.get(requestId), command.reason);
         return Promise.resolve();
       }
+      // Apply the stop boundary at arrival, before later requests register while
+      // its ordered renderer callback waits for earlier acceptance replies.
+      if (command.command === "sound.stop") cancelPendingControlPlayback(command.args.soundId);
       // Register before receipt can yield, so cancellation cannot get lost
       // while main's acceptance reply is still in flight.
-      const request = { cancelled: false, started: false, callback };
+      const request = { cancelled: false, started: false, callback, command };
       if (requestId) controlCommandRequests.set(requestId, request);
       const start = controlCommandStarts.then(async () => {
         const token = await controlReadyToken;

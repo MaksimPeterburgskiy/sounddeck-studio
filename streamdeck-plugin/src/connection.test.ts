@@ -5,7 +5,9 @@ import path from "node:path";
 import os from "node:os";
 import { createRequire } from "node:module";
 import { WebSocketServer, type ServerOptions } from "ws";
+import type { ControlCommand, ControlHello } from "../../src/lib/controlProtocol";
 import { Connection } from "./connection";
+import { SoundKeyPresses } from "./soundKeyPresses";
 import { parseDiscovery, type DiscoveryFile } from "./discovery";
 
 const { createExternalControlBridge } = createRequire(import.meta.url)("../../electron/externalControl.cjs");
@@ -47,6 +49,82 @@ async function realServer(options: { cooldownMs?: number; createWebSocketServer?
 }
 
 describe("shared connection", () => {
+  it("falls back on a protocol-1 server without press support and probes again after reconnect", async () => {
+    const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+    resources.push(() => new Promise<void>((resolve) => server.close(() => resolve())));
+    await new Promise<void>((resolve) => server.once("listening", resolve));
+    const commands = vi.fn((_message: ControlCommand) => {});
+    let supportsPress = false;
+    server.on("connection", (socket) => socket.on("message", (data) => {
+      const message = JSON.parse(data.toString()) as ControlHello | ControlCommand;
+      if (message.type === "hello") {
+        socket.send(JSON.stringify({
+          type: "welcome", protocol: 1, app: { version: "0.1.22" },
+          state: { library: { boards: [], activeBoardId: "" }, activeBoardId: "", playback: [] },
+        }));
+        return;
+      }
+      commands(message);
+      // PR #116's validator returns unknown-command for sound.press/release.
+      const unsupported = !supportsPress && (message.command === "sound.press" || message.command === "sound.release");
+      socket.send(JSON.stringify({ type: "result", id: message.id, ok: !unsupported, ...(unsupported ? { code: "unknown-command" } : {}) }));
+    }));
+    const connection = new Connection("0.1.22", {
+      discover: async () => ({ path: "state", state: parseDiscovery({
+        enabled: true, protocol: 1, host: "127.0.0.1", port: (server.address() as { port: number }).port,
+        token: "token", allowLan: false, appVersion: "0.1.22", appPath: "/Applications/SoundDeck Studio.app",
+      }) }),
+      retryMinMs: 20, retryMaxMs: 50,
+    });
+    resources.push(() => connection.stop());
+    const keys = new SoundKeyPresses(connection);
+    const otherKeys = new SoundKeyPresses(connection);
+    const binding = { soundId: "sound-a", boardId: "board-a", title: "Horn" };
+    connection.start();
+    await waitFor(() => connection.status === "connected");
+    expect((await keys.press("a", binding)).ok).toBe(true);
+    await keys.release("a");
+    expect((await keys.press("b", binding)).ok).toBe(true);
+    await keys.release("b");
+    expect((await otherKeys.press("c", binding)).ok).toBe(true);
+    await otherKeys.release("c");
+    expect(commands.mock.calls.map(([message]) => [message.command, message.args])).toEqual([
+      ["sound.press", { ...binding, pressId: expect.any(String) }],
+      ["sound.play", binding], ["sound.play", binding], ["sound.play", binding],
+    ]);
+    const session = connection.session;
+    supportsPress = true;
+    for (const socket of server.clients) socket.terminate();
+    await waitFor(() => connection.session !== null && connection.session !== session);
+    expect((await keys.press("a", binding)).ok).toBe(true);
+    await keys.release("a");
+    const press = commands.mock.calls[4][0];
+    expect(press.command).toBe("sound.press");
+    expect(commands.mock.calls[5][0]).toMatchObject({ command: "sound.release", args: { pressId: (press.args as { pressId: string }).pressId } });
+    expect(commands).toHaveBeenCalledTimes(6);
+  });
+
+  it("releases held keys on socket closure and sends no stale releases after reconnect", async () => {
+    const { bridge, connection, command } = await realServer();
+    const keys = new SoundKeyPresses(connection);
+    connection.start();
+    await waitFor(() => connection.status === "connected");
+    const session = connection.session;
+    await keys.press("a", { soundId: "sound-a" });
+    await keys.press("b", { soundId: "sound-a" });
+    const ids = command.mock.calls.map(([message]) => (message as unknown as { args: { pressId: string } }).args.pressId);
+    expect(ids[0]).not.toBe(ids[1]);
+    await bridge.regenerateToken();
+    await waitFor(() => connection.session !== null && connection.session !== session);
+    expect(command.mock.calls.slice(2).map(([message]) => message)).toEqual(ids.map((pressId) => ({ command: "sound.release", args: { pressId } })));
+    await keys.release("a");
+    await keys.release("b");
+    expect(command).toHaveBeenCalledTimes(4);
+    await keys.press("a", { soundId: "sound-a" });
+    await keys.release("a");
+    expect(command).toHaveBeenCalledTimes(6);
+  });
+
   it("authenticates with the real ephemeral server without Origin, models all events, and invalidates image cache", async () => {
     const { bridge, connection, upgrades, command } = await realServer();
     const changed = vi.fn();
@@ -264,11 +342,17 @@ describe("shared connection", () => {
     expect(connection.statusLabel).toBe("Re-pair");
     wrongToken = false;
     await waitFor(() => connection.status === "connected");
+    const oldSession = connection.session;
+    expect(oldSession).not.toBeNull();
     const oldToken = bridge.getState().token;
     await bridge.regenerateToken();
     await waitFor(() => connection.status === "auth-error");
     await waitFor(() => connection.status === "connected");
     expect(bridge.getState().token).not.toBe(oldToken);
+    expect(connection.session).not.toBeNull();
+    expect(connection.session).not.toBe(oldSession);
+    connection.stop();
+    expect(connection.session).toBeNull();
     expect(reads.mock.calls.length).toBeGreaterThanOrEqual(3);
   });
 

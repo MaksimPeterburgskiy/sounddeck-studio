@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createSoundPlayQueue } from "../src/lib/soundPlayQueue.ts";
+import { SoundTriggers } from "../src/lib/soundTriggers.ts";
 import { createControlCancellation } from "../src/lib/controlCancellation.ts";
-import { deferred } from "../src/lib/testing/webAudioFakes.ts";
+import { deferred, makeSound } from "../src/lib/testing/webAudioFakes.ts";
 import rendererModule from "./controlRenderer.cjs";
 
 const { createControlRenderer } = rendererModule;
@@ -9,15 +9,28 @@ const command = { command: "volume.adjust", args: { bus: "micVirtual", delta: 0.
 afterEach(() => vi.useRealTimers());
 
 describe("renderer control acknowledgements", () => {
-  it.each(["sound", "all"])("acknowledges a stalled play at its deadline after stopping %s and releases later plays", async (stop) => {
+  it.each(["play", "tap press", "hold press"].flatMap((operation) =>
+    ["sound", "all"].map((stop) => ({ operation, stop }))
+  ))("acknowledges a stalled $operation at its deadline after stopping $stop and releases later plays", async ({ operation, stop }) => {
     vi.useFakeTimers();
-    const queue = createSoundPlayQueue();
     const serverCancellation = createControlCancellation();
     const rendererCancellation = createControlCancellation();
     const preparation = deferred();
     const started = deferred();
     const start = vi.fn();
     let preparingSignal;
+    const audio = {
+      play: vi.fn().mockImplementationOnce(async (_sound, signal) => {
+        preparingSignal = signal;
+        started.resolve();
+        await preparation.promise;
+        if (!signal.aborted) start();
+        return signal.aborted ? false : "late voice";
+      }).mockResolvedValue("local play"),
+      stop: vi.fn(), stopAll: vi.fn(), stopVoice: vi.fn(), isPlaying: () => false
+    };
+    const triggers = new SoundTriggers(() => audio, () => null);
+    const sound = makeSound({ id: "sound-a", triggerMode: operation === "hold press" ? "hold" : "tap" });
     const completed = vi.fn();
     const bridge = createControlRenderer({ send: (message) => {
       if (message.command === "control.cancel") {
@@ -27,37 +40,34 @@ describe("renderer control acknowledgements", () => {
       // Deliver after dispatch has registered the request, as Electron IPC does.
       queueMicrotask(() => {
         bridge.receive(message.requestId);
-        void queue("sound-a", async (signal) => {
-          preparingSignal = signal;
-          started.resolve();
-          await preparation.promise;
-          if (!signal.aborted) start();
-          return { ok: !signal.aborted };
-        }, rendererCancellation.signal, rendererCancellation.deadlineSignal)
+        void triggers.trigger(sound, message.args.pressId, true,
+          rendererCancellation.signal, rendererCancellation.deadlineSignal)
+          .then((voice) => ({ ok: !rendererCancellation.signal.aborted && voice !== false }))
           .catch(() => ({ ok: false, code: "unavailable" }))
           .then((result) => bridge.complete(message.requestId, result));
       });
     } });
     const deadline = setTimeout(() => serverCancellation.abort("operation-timeout"), 60_000);
-    const result = bridge.dispatch({ command: "sound.play", args: { soundId: "sound-a" } },
+    const result = bridge.dispatch({ command: operation === "play" ? "sound.play" : "sound.press",
+      args: { soundId: sound.id, ...(operation !== "play" && { pressId: "held" }) } },
       serverCancellation.signal, serverCancellation.deadlineSignal).then(completed);
     try {
       await started.promise;
       await vi.advanceTimersByTimeAsync(1000);
-      if (stop === "sound") queue.cancel("sound-a");
-      else queue.cancelAll();
+      if (stop === "sound") triggers.stop(sound.id);
+      else triggers.stopAll();
       expect(preparingSignal.aborted).toBe(true);
       expect(preparingSignal.reason).not.toBe("operation-timeout");
       expect(rendererCancellation.signal.aborted).toBe(false);
-      const later = vi.fn(async () => "local play");
-      const localPlay = queue("sound-a", later);
+      const localPlay = triggers.trigger(sound);
       await vi.advanceTimersByTimeAsync(58_999);
       expect(completed).not.toHaveBeenCalled();
-      expect(later).not.toHaveBeenCalled();
+      expect(audio.play).toHaveBeenCalledOnce();
       await vi.advanceTimersByTimeAsync(1);
       expect(completed).toHaveBeenCalledExactlyOnceWith({ ok: false, code: "unavailable" });
       await result;
       expect(await localPlay).toBe("local play");
+      expect(audio.play).toHaveBeenCalledTimes(2);
       preparation.resolve();
       await vi.advanceTimersByTimeAsync(0);
       expect(start).not.toHaveBeenCalled();
@@ -101,12 +111,12 @@ describe("renderer control acknowledgements", () => {
     expect(await playback).toEqual({ ok: false, code: "not-found" });
   });
 
-  it("times out receipt but keeps accepted commands pending through slow saves and routing", async () => {
+  it.each(["sound.play", "sound.press"])("times out receipt but keeps accepted %s pending through slow saves and routing", async (name) => {
     vi.useFakeTimers();
     const send = vi.fn();
     const bridge = createControlRenderer({ send });
     const completed = vi.fn();
-    const playback = bridge.dispatch({ command: "sound.play", args: { soundId: "sound-a" } }).then(completed);
+    const playback = bridge.dispatch({ command: name, args: { soundId: "sound-a", ...(name === "sound.press" && { pressId: "held" }) } }).then(completed);
     const setting = bridge.dispatch({ command: "setting.toggle", args: { key: "micPassthrough" } });
     const volumeCompleted = vi.fn();
     const volume = bridge.dispatch(command).then(volumeCompleted);
@@ -125,11 +135,11 @@ describe("renderer control acknowledgements", () => {
     expect(completed).toHaveBeenCalledExactlyOnceWith({ ok: true });
   });
 
-  it("relays operation cancellation without disturbing concurrent requests", async () => {
+  it.each(["sound.play", "sound.press"])("relays %s cancellation without disturbing concurrent requests", async (name) => {
     const send = vi.fn();
     const bridge = createControlRenderer({ send });
     const controller = new AbortController();
-    const first = bridge.dispatch({ command: "sound.play", args: { soundId: "sound" } }, controller.signal);
+    const first = bridge.dispatch({ command: name, args: { soundId: "sound", ...(name === "sound.press" && { pressId: "held" }) } }, controller.signal);
     const requestId = send.mock.lastCall[0].requestId;
     const second = bridge.dispatch(command);
     const otherId = send.mock.lastCall[0].requestId;
@@ -159,11 +169,11 @@ describe("renderer control acknowledgements", () => {
     expect(await operation).toEqual({ ok: false, code: "unavailable" });
   });
 
-  it("settles revoked playback and teardown even if cancellation delivery fails", async () => {
+  it.each(["sound.play", "sound.press"])("settles revoked %s and teardown even if cancellation delivery fails", async (name) => {
     const send = vi.fn();
     const bridge = createControlRenderer({ send });
     const controller = new AbortController();
-    const playback = bridge.dispatch({ command: "sound.play", args: { soundId: "sound-a" } }, controller.signal);
+    const playback = bridge.dispatch({ command: name, args: { soundId: "sound-a", ...(name === "sound.press" && { pressId: "held" }) } }, controller.signal);
     const mutation = bridge.dispatch(command);
     send.mockImplementation(() => { throw new Error("Renderer gone"); });
     controller.abort();

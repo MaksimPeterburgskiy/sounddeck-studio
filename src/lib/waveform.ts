@@ -12,3 +12,12 @@ export function makeWaveform(buffer: AudioBuffer, buckets = 48) {
   }
   return peaks;
 }
+
+export function fitPeaks(peaks: number[], max = 48) {
+  if (peaks.length <= max) return peaks;
+  return Array.from({ length: max }, (_, i) => {
+    const start = Math.floor((i * peaks.length) / max);
+    const end = Math.floor(((i + 1) * peaks.length) / max);
+    return Math.max(...peaks.slice(start, end));
+  });
+}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { claimCaptureSlot, eventToToken, formatAccelerator, normalizeAccelerator, orderTokens } from "./hotkeys";
+import { hotkeyFallsBackToTap, claimCaptureSlot, eventToToken, formatAccelerator, normalizeAccelerator, orderTokens } from "./hotkeys";
 
 describe("eventToToken", () => {
   const tokenFor = (code: string) => eventToToken({ code } as KeyboardEvent);
@@ -83,5 +83,24 @@ describe("claimCaptureSlot", () => {
     expect(secondCancelCount).toBe(0);
     expect(releaseFirst()).toBe(false);
     expect(releaseSecond()).toBe(true);
+  });
+});
+
+
+describe("Hold hotkey release hints", () => {
+  const binding = (accelerator: string, ok = true) => ({ type: "sound" as const, accelerator, ok, reason: "" });
+  it("detects a prefix among registered combos, including modifier order and other binding kinds", () => {
+    const results = [binding("Ctrl+Num1"), { ...binding("Num2+Ctrl+Num1"), type: "board" as const }];
+    expect(hotkeyFallsBackToTap("Ctrl+Num1", results)).toBe(true);
+    expect(hotkeyFallsBackToTap("Ctrl+Num1+Num2", results)).toBe(false);
+    expect(hotkeyFallsBackToTap("Ctrl+Num1", [binding("Ctrl+Num1+Num2", false)])).toBe(false);
+  });
+  it("detects fallback after module load or hook start failure, while G-keys still report release", () => {
+    const fallback = { advancedHookAvailable: false, globalShortcutFallbackAvailable: true, lastFailureReason: "" };
+    expect(hotkeyFallsBackToTap("A", [], fallback)).toBe(true);
+    expect(hotkeyFallsBackToTap("A", [], { ...fallback, advancedHookAvailable: true, lastFailureReason: "macos-input-monitoring-permission" })).toBe(true);
+    expect(hotkeyFallsBackToTap("G1", [], fallback)).toBe(false);
+    expect(hotkeyFallsBackToTap("", [], fallback)).toBe(false);
+    expect(hotkeyFallsBackToTap("A", [], { ...fallback, advancedHookAvailable: true })).toBe(false);
   });
 });

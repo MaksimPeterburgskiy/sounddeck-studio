@@ -644,9 +644,9 @@ small { color: var(--text-dim); font-size: 12px; }
   color: var(--text-faint);
 }
 
-.wave { display: flex; align-items: center; gap: 2px; height: 36px; margin-top: 10px; opacity: 0.55; transition: opacity 0.2s ease; }
+.wave { display: flex; align-items: center; gap: 2px; height: 36px; margin-top: 10px; overflow: hidden; opacity: 0.55; transition: opacity 0.2s ease; }
 .pad:hover .wave, .pad.playing .wave { opacity: 0.95; }
-.wave i { flex: 1; min-width: 2px; border-radius: 99px; transition: height 0.3s ease; }
+.wave i { flex: 1; min-width: 1px; border-radius: 99px; transition: height 0.3s ease; }
 .pad.playing .wave i { animation: waveBob 0.9s ease-in-out infinite; }
 .pad.playing .wave i:nth-child(odd) { animation-delay: 0.15s; }
 .pad.playing .wave i:nth-child(3n) { animation-delay: 0.3s; }
@@ -853,6 +853,8 @@ body.draggingPad, body.draggingPad * { cursor: grabbing !important; user-select:
   transition: border-color 0.15s ease;
 }
 .inspector input:focus, .inspector select:focus { border-color: var(--accent); outline: none; }
+.inspector select:disabled { opacity: 0.5; }
+.inspectorHint { margin: 0; color: var(--text-dim); font-size: 12px; line-height: 1.4; }
 .inspector input[type="color"] { padding: 4px; height: 38px; cursor: pointer; }
 
 .iconField {
@@ -920,7 +922,7 @@ input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent);
 
 /* ---------- playhead ---------- */
 
-.waveWrap { position: relative; }
+.waveWrap { position: relative; min-width: 0; }
 .playhead {
   position: absolute;
   top: 0;
@@ -1893,6 +1895,7 @@ input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent);
   .sideNavDivider, .sideNavLabel { grid-column: 1 / -1; }
   .boards { max-height: 170px; }
   .soundGrid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; padding-bottom: 60vh; }
+  .wave { gap: 1px; }
   .pad { min-height: 200px; }
   .inspector {
     right: 10px;
