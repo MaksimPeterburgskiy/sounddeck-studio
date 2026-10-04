@@ -1,5 +1,5 @@
 import streamDeck, {
-  SingletonAction, type KeyAction, type WillAppearEvent, type WillDisappearEvent,
+  SingletonAction, type KeyAction, type DialAction, type FeedbackPayload, type WillAppearEvent, type WillDisappearEvent,
   type DidReceiveSettingsEvent, type KeyDownEvent, type PropertyInspectorDidAppearEvent,
   type PropertyInspectorDidDisappearEvent, type SendToPluginEvent, type TitleParametersDidChangeEvent,
 } from "@elgato/streamdeck";
@@ -11,7 +11,7 @@ import type { ActionSettings } from "../settings";
 
 type Visual = Parameters<typeof keyImage>[0] & { state?: 0 | 1; blank?: boolean };
 type VisibleKey = {
-  action: KeyAction<ActionSettings>;
+  action: KeyAction<ActionSettings> | DialAction<ActionSettings>;
   settings: ActionSettings;
   titleLayouts: Map<number, KeyTitleLayout>;
   initialState: number;
@@ -20,9 +20,11 @@ type VisibleKey = {
   state?: 0 | 1;
   rendering: boolean;
   dirty: boolean;
+  feedback?: string;
+  updateAppSession?: object;
 };
 
-/** Keeps subscriptions, animation, and SDK writes scoped to visible keys. */
+/** Keeps subscriptions, animation, and SDK writes scoped to visible keys and dials. */
 export abstract class LiveAction extends SingletonAction<ActionSettings> {
   private readonly visible = new Map<string, VisibleKey>();
   private timer?: ReturnType<typeof setInterval>;
@@ -42,13 +44,19 @@ export abstract class LiveAction extends SingletonAction<ActionSettings> {
 
   protected syncSettings(settings: ActionSettings): ActionSettings { return settings; }
 
-  protected abstract visual(settings: ActionSettings, action: KeyAction<ActionSettings>): Visual;
+  protected abstract visual(settings: ActionSettings, action: KeyAction<ActionSettings> | DialAction<ActionSettings>): Visual;
   protected abstract press(ev: KeyDownEvent<ActionSettings>): Promise<void>;
+  protected feedback(_settings: ActionSettings, _action: DialAction<ActionSettings>): FeedbackPayload | undefined { return undefined; }
+
+  protected updateAppRequired(action: KeyAction<ActionSettings> | DialAction<ActionSettings>): boolean {
+    const session = this.connection.session;
+    return !!session && this.visible.get(action.id)?.updateAppSession === session;
+  }
 
   protected inspectorItems(_settings: ActionSettings, _library?: ControlLibrary): Record<string, Array<{ label: string; value: string }>> { return {}; }
 
   override onWillAppear(ev: WillAppearEvent<ActionSettings>): void {
-    if (!ev.action.isKey()) return;
+    if (!ev.action.isKey() && !ev.action.isDial()) return;
     this.visible.set(ev.action.id, { action: ev.action, settings: ev.payload.settings, titleLayouts: new Map(), initialState: ev.payload.state ?? 0, rendering: false, dirty: false });
     this.refresh();
   }
@@ -81,13 +89,19 @@ export abstract class LiveAction extends SingletonAction<ActionSettings> {
     await this.press(ev);
   }
 
-  protected async command<Name extends ControlCommandName>(ev: KeyDownEvent<ActionSettings>, name: Name, args: ControlCommandArgs[Name]): Promise<void> {
+  protected async command<Name extends ControlCommandName>(ev: { action: KeyAction<ActionSettings> | DialAction<ActionSettings> }, name: Name, args: ControlCommandArgs[Name]): Promise<void> {
+    const session = this.connection.session;
     const result = await this.connection.command(name, args);
-    await this.reportResult(ev.action, name, result);
+    await this.reportResult(ev.action, name, result, session);
   }
 
-  protected async reportResult(action: KeyAction<ActionSettings>, name: ControlCommandName, result: ControlResult | undefined): Promise<void> {
+  protected async reportResult(action: KeyAction<ActionSettings> | DialAction<ActionSettings>, name: ControlCommandName, result: ControlResult | undefined, session = this.connection.session): Promise<void> {
     if (result && !result.ok) {
+      const entry = this.visible.get(action.id);
+      if (result.code === "unknown-command" && entry && session && session === this.connection.session) {
+        entry.updateAppSession = session;
+        this.refresh();
+      }
       streamDeck.logger.warn(`SoundDeck command ${name} failed: ${result.code}`);
       await action.showAlert();
     }
@@ -96,9 +110,10 @@ export abstract class LiveAction extends SingletonAction<ActionSettings> {
   private view(settings: ActionSettings, action: KeyAction<ActionSettings>): Visual {
     const visual = this.visual(settings, action);
     if (visual.blank) return visual;
-    return this.connection.status === "connected" ? visual : {
-      ...visual, playing: undefined, playingRing: false, active: false, state: 0,
-      dimmed: true, warning: this.connection.status !== "offline", title: this.connection.statusLabel,
+    const updateApp = this.updateAppRequired(action);
+    return this.connection.status === "connected" && !updateApp ? visual : {
+      ...visual, badge: undefined, playing: undefined, playingRing: false, active: false, state: visual.state === undefined ? undefined : 0,
+      dimmed: true, warning: updateApp || this.connection.status !== "offline", title: updateApp ? "Update\napp" : this.connection.statusLabel,
     };
   }
   protected refresh(): void {
@@ -107,11 +122,11 @@ export abstract class LiveAction extends SingletonAction<ActionSettings> {
   }
   private updateTimer(): void {
     const animate = this.connection.status === "connected"
-      && [...this.visible.values()].some((entry) => !!this.visual(entry.settings, entry.action).playing);
+      && [...this.visible.values()].some((entry) => entry.action.isKey() && !!this.visual(entry.settings, entry.action).playing);
     if (animate && !this.timer) {
       this.timer = setInterval(() => {
         for (const entry of this.visible.values()) {
-          if (this.visual(entry.settings, entry.action).playing) this.render(entry);
+          if (entry.action.isKey() && this.visual(entry.settings, entry.action).playing) this.render(entry);
         }
       }, 125);
       this.timer.unref();
@@ -151,6 +166,23 @@ export abstract class LiveAction extends SingletonAction<ActionSettings> {
         }
         if (this.visible.get(entry.action.id) !== entry) return;
         if (entry.dirty) continue;
+        if (entry.action.isDial()) {
+          const title = this.visual(entry.settings, entry.action).title;
+          if (entry.title !== title) {
+            await entry.action.setTitle(title);
+            entry.title = title;
+            if (this.visible.get(entry.action.id) !== entry) return;
+            if (entry.dirty) continue;
+          }
+          const feedback = this.feedback(entry.settings, entry.action);
+          const serialized = JSON.stringify(feedback);
+          if (feedback && entry.feedback !== serialized) {
+            await entry.action.setFeedback(feedback);
+            entry.feedback = serialized;
+          }
+          continue;
+        }
+        if (!entry.action.isKey()) return;
         const visual = this.view(entry.settings, entry.action);
         const title = keyTitle(visual.title);
         const layout = entry.titleLayouts.get(visual.state ?? entry.initialState);

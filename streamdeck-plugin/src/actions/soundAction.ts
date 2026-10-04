@@ -37,12 +37,14 @@ export abstract class SoundAction extends LiveAction {
     if (!sound) { await ev.action.showAlert(); return; }
     // Both key types resolve against the live library. Fallback titles can
     // exceed protocol limits and are unnecessary with the resolved sound id.
+    const session = this.connection.session;
     const result = await this.presses.press(ev.action.id, { soundId: sound.id });
-    await this.reportResult(ev.action, "sound.press", result);
+    await this.reportResult(ev.action, "sound.press", result, session);
   }
   override async onKeyUp(ev: KeyUpEvent<ActionSettings>): Promise<void> {
+    const session = this.connection.session;
     const result = await this.presses.release(ev.action.id);
-    await this.reportResult(ev.action, "sound.release", result);
+    await this.reportResult(ev.action, "sound.release", result, session);
   }
   override onWillDisappear(ev: WillDisappearEvent<ActionSettings>): void {
     super.onWillDisappear(ev);

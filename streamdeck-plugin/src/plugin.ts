@@ -9,6 +9,9 @@ import { ToggleSetting } from "./actions/toggleSetting";
 import { BoardSlots } from "./boardSlots";
 import { BoardSlot } from "./actions/boardSlot";
 import { NextPage, PreviousPage } from "./actions/page";
+import { Volume } from "./actions/volume";
+import { VolumeMute } from "./actions/volumeMute";
+import { VolumeDial } from "./actions/volumeDial";
 
 declare const __PLUGIN_VERSION__: string;
 const connection = new Connection(__PLUGIN_VERSION__, {
@@ -37,6 +40,9 @@ streamDeck.actions.registerAction(new ToggleSetting(connection));
 streamDeck.actions.registerAction(new BoardSlot(connection, slots));
 streamDeck.actions.registerAction(new NextPage(connection, slots));
 streamDeck.actions.registerAction(new PreviousPage(connection, slots));
+streamDeck.actions.registerAction(new Volume(connection));
+streamDeck.actions.registerAction(new VolumeMute(connection));
+streamDeck.actions.registerAction(new VolumeDial(connection));
 await streamDeck.connect();
 streamDeck.logger.info(`SoundDeck plugin ${__PLUGIN_VERSION__} started`);
 connection.start();

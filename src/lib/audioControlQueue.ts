@@ -27,6 +27,12 @@ export function createAudioControlQueue({ getSettings, writeSettings, persist, w
     const keys: Array<keyof AudioSettings> = "key" in command.args ? [command.args.key]
       : command.command === "volume.mute" ? [`${command.args.bus}Muted`]
       : [`${command.args.bus}Volume`, `${command.args.bus}Muted`];
+    if (keys.every((key) => previous[key] === applied.settings[key])) {
+      // Unchanged settings still acknowledge only after pending audio work settles,
+      // or at the operation deadline so a hung configuration cannot block the FIFO.
+      await waitForControlOperation(waitForConfiguration(), deadlineSignal).catch(() => undefined);
+      return { ok: true, data: applied.data };
+    }
     recordWrites(keys);
     const ownedVersions = keys.map((key) => versions.get(key));
     writeSettings(applied.settings);
