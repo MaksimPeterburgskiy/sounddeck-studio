@@ -244,7 +244,8 @@ function createExternalControlBridge({
     const changed = JSON.stringify(library.boards) !== JSON.stringify(boards);
     const updatesBoard = currentUpdate(owner, appliedBoardGeneration);
     const activeBoardId = updatesBoard
-      ? boards.find((board) => board.id === requestedBoardId)?.id || boards[0]?.id || ""
+      // Budgeting controls metadata, not the desktop's selected board.
+      ? (Array.isArray(value?.boards) ? value.boards : []).find((board) => board?.id === requestedBoardId)?.id || boards[0]?.id || ""
       : live.activeBoardId;
     const boardChanged = live.activeBoardId !== activeBoardId;
     // Images are fetched separately, but replacing one must invalidate client caches.

@@ -571,6 +571,21 @@ describe("external control protocol and dispatch", () => {
     expect(bridge.getSnapshot().library.boards).toEqual([{ id: "valid", name: "valid", color: "", sounds: [] }]);
   });
 
+  it("preserves the actual active board when the summary budget omits it", async () => {
+    await create();
+    const connection = await session();
+    const events = [];
+    connection.ws.on("message", (data) => events.push(JSON.parse(data.toString())));
+    const sounds = Array.from({ length: 10000 }, (_, index) => ({ id: `large-${index}`, title: "\u0000".repeat(256) }));
+    bridge.updateLibrary({ ...library, boards: [{ id: "large", name: "Large", sounds }, ...library.boards] });
+    const snapshot = bridge.getSnapshot();
+    expect(snapshot.library.boards.some((board) => board.id === "board-a")).toBe(false);
+    expect(snapshot.activeBoardId).toBe("board-a");
+    expect(snapshot.library.activeBoardId).toBe("board-a");
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    expect(events[0]).toMatchObject({ event: "library.changed", data: { activeBoardId: "board-a" } });
+  });
+
   it("resolves bounded title fallback after reimport and rejects ambiguous truncated prefixes", async () => {
     await create();
     const prefix = "H".repeat(256);
