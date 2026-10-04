@@ -588,16 +588,28 @@ describe("external control protocol and dispatch", () => {
     expect(events[0]).toMatchObject({ event: "library.changed", data: { activeBoardId: "board-a" } });
   });
 
-  it("marks capped summaries incomplete and avoids title fallback for omitted sound IDs", async () => {
+  it.each(["play", "press"])("marks capped summaries incomplete and avoids %s title fallback for omitted sound IDs", async (action) => {
     await create();
     const filler = Array.from({ length: 10000 }, (_, index) => ({ id: `large-${index}`, title: "\u0000".repeat(256) }));
     bridge.updateLibrary({ ...library, boards: [{ ...library.boards[0], sounds: [library.boards[0].sounds[0], ...filler,
       { id: "omitted", title: "Airhorn" }] }] });
     expect(bridge.getSnapshot().library.incomplete).toBe(true);
     expect((await request("/v1/library")).body.incomplete).toBe(true);
-    expect(await request("/v1/sounds/omitted/play", { method: "POST", body: { boardId: "board-a", title: "Airhorn" } }))
+    const calls = onCommand.mock.calls.length;
+    expect(await request(`/v1/sounds/omitted/${action}`, { method: "POST", body: { boardId: "board-a", title: "Airhorn" } }))
       .toMatchObject({ status: 404, body: { ok: false, code: "not-found" } });
-    expect((await request("/v1/sounds/sound-new/play", { method: "POST" })).body.ok).toBe(true);
+    const connection = await client();
+    connection.send(hello());
+    expect((await connection.next()).state.library.incomplete).toBe(true);
+    const pressArgs = action === "press" ? { pressId: "held" } : {};
+    connection.send({ type: "command", id: "omitted", command: `sound.${action}`,
+      args: { soundId: "omitted", boardId: "board-a", title: "Airhorn", ...pressArgs } });
+    expect(await connection.next()).toMatchObject({ id: "omitted", ok: false, code: "not-found" });
+    expect(onCommand).toHaveBeenCalledTimes(calls);
+    expect((await request(`/v1/sounds/sound-new/${action}`, { method: "POST" })).body.ok).toBe(true);
+    connection.send({ type: "command", id: "by-id", command: `sound.${action}`,
+      args: { soundId: "sound-new", ...pressArgs } });
+    expect(await connection.next()).toMatchObject({ id: "by-id", ok: true });
     bridge.updateLibrary(library);
     expect(bridge.getSnapshot().library.incomplete).toBeUndefined();
   });
