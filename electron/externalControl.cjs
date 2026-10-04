@@ -13,10 +13,9 @@ const MAX_BUFFERED = 8 * 1024 * 1024;
 // Bound encoded image data, leaving ample envelope headroom below the plugin's
 // 16 MiB receive limit. Imported artwork is preserved in the app's library.
 const MAX_IMAGE_DATA_BYTES = 8 * 1024 * 1024;
-// Even six-byte JSON escapes keep the summary below 5 MiB, with room for
-// the bounded playback state and welcome envelope under the client's 16 MiB.
-const MAX_SUMMARY_BOARDS = 256;
-const MAX_SUMMARY_SOUNDS = 2048;
+// Budget the published summary by size rather than count, so ordinary libraries
+// are never cut while hostile titles can't approach the plugin's 16 MiB frames.
+const MAX_SUMMARY_BYTES = 8 * 1024 * 1024;
 const MAX_SUMMARY_TITLE_LENGTH = 256;
 const MAX_SUMMARY_COLOR_LENGTH = 32;
 const SETTING_KEYS = ["micPassthrough", "soundboardToVirtualMic", "noiseSuppressionEnabled", "echoCancellationEnabled", "monitorToHeadphones"];
@@ -223,22 +222,24 @@ function createExternalControlBridge({
     const settingsChanged = JSON.stringify(audio.settings) !== JSON.stringify(nextAudio.settings);
     const volumesChanged = JSON.stringify(audio.volumes) !== JSON.stringify(nextAudio.volumes);
     const boards = [];
-    let soundCount = 0;
+    let summaryBytes = 0;
+    const fits = (entry) => (summaryBytes += Buffer.byteLength(JSON.stringify(entry)) + 1) <= MAX_SUMMARY_BYTES;
     images.clear();
-    for (const board of Array.isArray(value?.boards) ? value.boards : []) {
-      if (boards.length >= MAX_SUMMARY_BOARDS) break;
+    summarize: for (const board of Array.isArray(value?.boards) ? value.boards : []) {
       if (!id(board?.id)) continue;
       const sounds = [];
+      const summary = { id: board.id, name: typeof board.name === "string" ? board.name.slice(0, MAX_SUMMARY_TITLE_LENGTH) : "",
+        color: typeof board.color === "string" ? board.color.slice(0, MAX_SUMMARY_COLOR_LENGTH) : "", sounds };
+      if (!fits(summary)) break;
+      boards.push(summary);
       for (const sound of Array.isArray(board.sounds) ? board.sounds : []) {
-        if (soundCount >= MAX_SUMMARY_SOUNDS) break;
         if (!id(sound?.id)) continue;
-        sounds.push({ id: sound.id, title: typeof sound.title === "string" ? sound.title.slice(0, MAX_SUMMARY_TITLE_LENGTH) : "",
-          color: typeof sound.color === "string" ? sound.color.slice(0, MAX_SUMMARY_COLOR_LENGTH) : "", hasImage: Boolean(sound.image) });
-        ++soundCount;
+        const entry = { id: sound.id, title: typeof sound.title === "string" ? sound.title.slice(0, MAX_SUMMARY_TITLE_LENGTH) : "",
+          color: typeof sound.color === "string" ? sound.color.slice(0, MAX_SUMMARY_COLOR_LENGTH) : "", hasImage: Boolean(sound.image) };
+        if (!fits(entry)) break summarize;
+        sounds.push(entry);
         if (typeof sound.image === "string" && /^data:image\/[a-zA-Z0-9.+-]+;base64,/.test(sound.image)) images.set(sound.id, sound.image);
       }
-      boards.push({ id: board.id, name: typeof board.name === "string" ? board.name.slice(0, MAX_SUMMARY_TITLE_LENGTH) : "",
-        color: typeof board.color === "string" ? board.color.slice(0, MAX_SUMMARY_COLOR_LENGTH) : "", sounds });
     }
     const changed = JSON.stringify(library.boards) !== JSON.stringify(boards);
     const updatesBoard = currentUpdate(owner, appliedBoardGeneration);

@@ -551,21 +551,21 @@ describe("external control protocol and dispatch", () => {
     expect(onCommand).not.toHaveBeenCalled();
   });
 
-  it("bounds imported summary fields and total entries well below the plugin frame limit", async () => {
+  it("keeps ordinary libraries whole and bounds hostile summaries well below the plugin frame limit", async () => {
     await create();
+    const ordinary = Array.from({ length: 5000 }, (_, index) => ({ id: `sound-${index}`, title: `Sound ${index}`, color: "#1db7a6" }));
+    bridge.updateLibrary({ boards: [{ id: "board-a", name: "Main", color: "#1db7a6", sounds: ordinary }], activeBoardId: "board-a" });
+    expect(bridge.getSnapshot().library.boards[0].sounds).toHaveLength(5000);
     // Escaped control characters take six JSON bytes per code unit.
     const large = "\u0000".repeat(1024);
-    const sounds = Array.from({ length: 1025 }, (_, index) => ({ id: `sound-${index}`, title: large, color: large }));
-    const boards = Array.from({ length: 257 }, (_, index) => ({ id: `board-${index}`, name: large, color: large, sounds: index < 2 ? sounds : [] }));
-    bridge.updateLibrary({ boards, activeBoardId: "board-0" });
+    const sounds = Array.from({ length: 10000 }, (_, index) => ({ id: `sound-${index}`, title: large, color: large }));
+    bridge.updateLibrary({ boards: [{ id: "board-a", name: large, color: large, sounds }], activeBoardId: "board-a" });
     const snapshot = bridge.getSnapshot();
-    expect(snapshot.library.boards).toHaveLength(256);
-    expect(snapshot.library.boards.flatMap((board) => board.sounds)).toHaveLength(2048);
     expect(snapshot.library.boards[0].name.length).toBe(256);
     expect(snapshot.library.boards[0].sounds[0].title.length).toBe(256);
     expect(snapshot.library.boards[0].color.length).toBeLessThanOrEqual(32);
-    expect(snapshot.library.boards[0].sounds[0].color.length).toBeLessThanOrEqual(32);
-    expect(Buffer.byteLength(JSON.stringify({ type: "welcome", protocol: 1, app: { version: "0.1.22" }, state: snapshot }))).toBeLessThan(5 * 1024 * 1024);
+    expect(snapshot.library.boards[0].sounds.length).toBeLessThan(10000);
+    expect(Buffer.byteLength(JSON.stringify({ type: "welcome", protocol: 1, app: { version: "0.1.22" }, state: snapshot }))).toBeLessThan(9 * 1024 * 1024);
     bridge.updateLibrary({ boards: [{ id: "b".repeat(129), name: "invalid", sounds: [] },
       { id: "valid", name: "valid", sounds: [{ id: "s".repeat(129), title: "invalid" }] }] });
     expect(bridge.getSnapshot().library.boards).toEqual([{ id: "valid", name: "valid", color: "", sounds: [] }]);

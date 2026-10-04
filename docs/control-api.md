@@ -97,7 +97,7 @@ Commands that change app state return `busy` while a hotkey is being captured an
 | `volume.adjust` | `bus`, `delta`: finite number | `data: {bus,value,muted}` |
 | `volume.mute` | `bus`, optional `muted`: boolean | `data: {bus,value,muted}` |
 
-Library summaries expose at most 256 boards and 2,048 sounds in total, in library order. Board names and sound titles are limited to 256 UTF-16 code units, colors to 32, and IDs to the protocol's 128-character format. These limits keep summaries below 5 MiB; the app retains the full library.
+Board names and sound titles in library summaries are limited to 256 UTF-16 code units, colors to 32, and IDs to the protocol's 128-character format. A summary is also capped at 8 MiB of JSON, in library order, so it always fits a client frame; ordinary libraries never reach that cap. The app retains the full library.
 
 `sound.play` resolves the sound ID first. If it is missing, an exact title match within the supplied board is used; the first matching sound in board order wins for titles shorter than 256 code units. At the 256-code-unit truncation boundary, multiple matches return `not-found` to avoid playing a different sound with the same prefix. This lets saved bindings survive a board re-import. If neither resolves, the result is `not-found`. `sound.stop` stops every voice for that ID; it does not use fallback lookup. Cycling wraps around in either direction.
 
