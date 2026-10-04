@@ -51,6 +51,13 @@ export class SoundKeyPresses {
     // The server releases closed sockets. Never replay an old release on a
     // new connection, even if it has already returned to "connected".
     if (this.connection.session !== press.session || playOnlySessions.has(press.session)) return;
-    return this.connection.command("sound.release", { pressId: press.pressId });
+    const result = await this.connection.command("sound.release", { pressId: press.pressId });
+    // A release can beat the press's capability check. Servers predating hold-to-play
+    // reject it, and the pending press then falls back to sound.play, so it isn't a failure.
+    if (!result.ok && result.code === "unknown-command") {
+      playOnlySessions.add(press.session);
+      return;
+    }
+    return result;
   }
 }

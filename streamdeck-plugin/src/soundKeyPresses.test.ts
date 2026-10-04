@@ -80,6 +80,20 @@ describe("sound key presses", () => {
     expect(connection.command.mock.calls.map(([name]) => name)).toEqual(["sound.press", "sound.release", "sound.press"]);
   });
 
+  it("treats a release rejected by a pre-hold server during capability detection as no failure", async () => {
+    const { connection, keys } = setup();
+    let acknowledge!: (result: ControlResult) => void;
+    connection.command
+      .mockImplementationOnce(() => new Promise((resolve) => { acknowledge = resolve; }))
+      .mockResolvedValueOnce(unknownCommand)
+      .mockResolvedValueOnce(success);
+    const pending = keys.press("key", binding);
+    expect(await keys.release("key")).toBeUndefined();
+    acknowledge(unknownCommand);
+    expect(await pending).toEqual(success);
+    expect(connection.command.mock.calls.map(([name]) => name)).toEqual(["sound.press", "sound.release", "sound.play"]);
+  });
+
   it("does not replay or downgrade a reconnected session for a late unknown-command result", async () => {
     const { connection, keys } = setup();
     let acknowledge!: (result: ControlResult) => void;
