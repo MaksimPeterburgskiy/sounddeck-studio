@@ -88,6 +88,8 @@ describe("model helpers", () => {
       boards: [],
       settings: {
         micVirtualVolume: 0.25,
+        micMonitorVolume: 2,
+        soundboardVirtualVolume: -0.5,
         micVirtualMuted: true,
         micMonitorMuted: "true",
         soundboardVirtualMuted: null,
@@ -95,6 +97,8 @@ describe("model helpers", () => {
       } as unknown as SoundLibrary["settings"]
     });
     expect(library.settings.micVirtualVolume).toBe(0.25);
+    expect(library.settings.micMonitorVolume).toBe(1);
+    expect(library.settings.soundboardVirtualVolume).toBe(0);
     expect(library.settings.micVirtualMuted).toBe(true);
     expect(library.settings.micMonitorMuted).toBe(false);
     expect(library.settings.soundboardVirtualMuted).toBe(false);

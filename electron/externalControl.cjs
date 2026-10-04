@@ -16,7 +16,7 @@ const VOLUME_BUSES = ["micVirtual", "micMonitor", "soundboardVirtual", "soundboa
 function audioState(value) {
   const settings = Object.fromEntries(SETTING_KEYS.map((key) => [key, typeof value?.[key] === "boolean" ? value[key] : key === "monitorToHeadphones"]));
   const volumes = Object.fromEntries(VOLUME_BUSES.map((bus) => [bus, {
-    value: Number.isFinite(value?.[`${bus}Volume`]) ? value[`${bus}Volume`] : 1,
+    value: Number.isFinite(value?.[`${bus}Volume`]) ? Math.min(1, Math.max(0, value[`${bus}Volume`])) : 1,
     muted: value?.[`${bus}Muted`] === true
   }]));
   return { settings, volumes };

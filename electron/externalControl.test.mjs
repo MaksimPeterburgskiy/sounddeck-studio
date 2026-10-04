@@ -247,10 +247,10 @@ describe("external control discovery and listener", () => {
     const old = bridge.beginUpdate("old");
     bridge.setDocument("new");
     const earlier = bridge.beginUpdate("new");
-    const settings = { ...audioSettings, micPassthrough: true, micVirtualVolume: 0.3, micVirtualMuted: true };
+    const settings = { ...audioSettings, micPassthrough: true, micVirtualVolume: 0.3, micVirtualMuted: true, soundboardMonitorVolume: 2 };
     expect(bridge.updateLibrary({ ...library, settings }, bridge.beginUpdate("new"))).toBe(true);
     expect(await connection.next()).toMatchObject({ event: "settings.changed", data: { micPassthrough: true } });
-    expect(await connection.next()).toMatchObject({ event: "volumes.changed", data: { micVirtual: { value: 0.3, muted: true } } });
+    expect(await connection.next()).toMatchObject({ event: "volumes.changed", data: { micVirtual: { value: 0.3, muted: true }, soundboardMonitor: { value: 1 } } });
     expect(bridge.updateLibrary(library, old)).toBe(false);
     expect(bridge.updateLibrary(library, earlier)).toBe(false);
     connection.send({ type: "command", id: "after-stale-audio", command: "library.get", args: {} });

@@ -218,7 +218,8 @@ export function normalizeLibrary(library: SoundLibrary): SoundLibrary {
   delete currentSettings.micVolume;
   delete currentSettings.soundboardVolume;
   delete currentSettings.monitorVolume;
-  const volumeOr = (value: unknown, fallback: number) => typeof value === "number" && Number.isFinite(value) ? value : fallback;
+  // Bus volumes are 0–1; clamp hand-edited or legacy values so every consumer sees a valid level.
+  const volumeOr = (value: unknown, fallback: number) => typeof value === "number" && Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : fallback;
   const settings = {
     ...defaultSettings,
     ...currentSettings,
