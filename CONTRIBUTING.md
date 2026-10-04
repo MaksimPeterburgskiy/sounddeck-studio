@@ -24,10 +24,15 @@ Useful commands:
 | --- | --- |
 | `pnpm start` | Fetch verified native tools, then run the app in development (Vite + Electron) |
 | `pnpm test` | Run the Vitest unit tests |
+| `pnpm run build:streamdeck` | Type-check and build the Stream Deck plugin |
+| `pnpm run pack:streamdeck` | Build and validate the plugin, then pack the app-versioned installer into `streamdeck-plugin/dist/` |
+| `pnpm --filter @sounddeck/streamdeck-plugin validate` | Validate the plugin with the Stream Deck CLI |
 | `pnpm run build` | Type-check (tsc) and bundle the renderer |
 | `pnpm run dist:win` | Build the Windows installer + portable exe into `release/` (downloads VB-CABLE on first run) |
 | `pnpm run dist:mac` | Build the signed/notarized macOS package and updater artifacts into `release/` |
 | `pnpm run dist:mac:unsigned` | Build an unsigned macOS smoke-test app artifact |
+
+Both distribution commands pack and bundle the Stream Deck plugin automatically. Packing stages its manifest under the ignored `streamdeck-plugin/dist/` directory; builds do not change tracked files. Stable app versions map to `x.y.z.99999`, and beta versions to `x.y.z.n`.
 
 > Some features need real OS services, drivers, or hardware. Test VB-CABLE and NSIS packaging on Windows, BlackHole and notarized PKG packaging on macOS, and hardware-key integrations with the matching device.
 
@@ -56,6 +61,7 @@ electron/   Main process (window, tray, hotkeys, library storage, Corsair, auto-
 src/        Renderer (React + TypeScript)
 src/lib/    Pure logic (board model, audio engine, hotkey parsing, waveforms)
 build/      Packaging resources (icons, NSIS script, generated macOS package inputs)
+streamdeck-plugin/ Stream Deck actions, property inspector, and packaging
 scripts/    Build helper scripts for Windows and macOS packaging
 ```
 

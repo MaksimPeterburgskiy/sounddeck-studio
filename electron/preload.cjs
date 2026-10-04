@@ -73,6 +73,8 @@ contextBridge.exposeInMainWorld("sounddeck", {
     return () => ipcRenderer.removeListener("hotkey-release", listener);
   },
   getControlSettings: () => ipcRenderer.invoke("control:getSettings"),
+  installStreamDeckPlugin: () => ipcRenderer.invoke("streamdeck:install"),
+  getStreamDeckStatus: () => ipcRenderer.invoke("streamdeck:status"),
   setControlSettings: (patch) => ipcRenderer.invoke("control:setSettings", patch),
   regenerateControlToken: () => ipcRenderer.invoke("control:regenerateToken"),
   pushControlState: (state) => controlReadyToken.then((token) => ipcRenderer.invoke("control:state", state, token)),

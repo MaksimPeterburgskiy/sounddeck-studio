@@ -72,7 +72,9 @@ const steps = [
   ["node", ["scripts/build-blackhole.mjs"]],
   ...(unsigned ? [] : [["node", ["scripts/build-mac-hal-driver-pkg.mjs"]]]),
   ["pnpm", ["run", "build"]],
+  ["pnpm", ["run", "pack:streamdeck"]],
   ["pnpm", electronBuilderArgs, { SOUNDDECK_NATIVE_TOOLS_OFFLINE: "1" }],
+  ["node", ["scripts/verify-streamdeck-resource.mjs", "release/mac-universal/SoundDeck Studio.app/Contents/Resources"]],
   ["node", [
     "scripts/verify-ytdlp-runtime.mjs",
     "release/mac-universal/SoundDeck Studio.app/Contents/MacOS/SoundDeck Studio",

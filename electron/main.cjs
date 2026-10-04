@@ -9,6 +9,7 @@ const os = require("node:os");
 const { spawn } = require("node:child_process");
 const { createCorsairBridge, createCorsairPressTracker, isCorsairSupportedPlatform, isGKeyAccelerator } = require("./corsair.cjs");
 const { createExternalControlBridge, launcherPath } = require("./externalControl.cjs");
+const { createStreamDeckInstaller } = require("./streamdeckInstall.cjs");
 const { createControlRenderer } = require("./controlRenderer.cjs");
 const { createLibrarySaveQueue, createAtomicLibrarySave } = require("./librarySaveQueue.cjs");
 const { createHotkeyEngine, isSameHotkeyTarget } = require("./hotkeys.cjs");
@@ -1402,6 +1403,17 @@ handleTrustedIpc("hotkeys:capture", (_event, active, token) => {
 });
 
 handleTrustedIpc("corsair:status", async () => corsair.getState());
+
+const streamdeckInstaller = createStreamDeckInstaller({
+  isPackaged: app.isPackaged,
+  resourcesPath: process.resourcesPath,
+  appRoot: path.join(__dirname, ".."),
+  appVersion: app.getVersion(),
+  openPath: (file) => shell.openPath(file),
+  getClients: () => externalControl.getState().clients
+});
+handleTrustedIpc("streamdeck:install", () => streamdeckInstaller.install());
+handleTrustedIpc("streamdeck:status", () => streamdeckInstaller.status());
 
 handleTrustedIpc("control:getSettings", () => externalControl.getSettings());
 handleTrustedIpc("control:setSettings", (_event, patch) => externalControl.setSettings(patch));

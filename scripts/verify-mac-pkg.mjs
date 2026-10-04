@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { verifyPackagedProvenance } from "./native-tools.mjs";
+import { verifyStreamDeckResource } from "./verify-streamdeck-resource.mjs";
 import { verifyYtDlpRuntime } from "./verify-ytdlp-runtime.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -53,6 +54,7 @@ async function run(command, args) {
 }
 
 async function verifyAppPayload(appPath) {
+  await verifyStreamDeckResource(path.join(appPath, "Contents/Resources"));
   await assertSymlink(
     path.join(appPath, "Contents/Frameworks/Electron Framework.framework/Electron Framework"),
     "Electron Framework.framework/Electron Framework must remain a symlink."

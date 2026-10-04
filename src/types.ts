@@ -202,6 +202,14 @@ export type WindowState = {
   fullscreen: boolean;
 };
 
+export interface StreamDeckStatus {
+  bundledVersion: string;
+  installed: boolean;
+  installedVersion?: string;
+  source: "client" | "manifest" | "unknown";
+  updateAvailable: boolean;
+}
+
 declare global {
   interface Window {
     sounddeck: {
@@ -235,6 +243,8 @@ declare global {
       onHotkeyTrigger: (callback: (binding: HotkeyTrigger) => void) => () => void;
       onHotkeyRelease: (callback: (binding: HotkeyRelease) => void) => () => void;
       getControlSettings: () => Promise<ControlStatus>;
+      installStreamDeckPlugin: () => Promise<{ ok: boolean; reason?: "missing-file" | "no-handler" }>;
+      getStreamDeckStatus: () => Promise<StreamDeckStatus>;
       setControlSettings: (patch: ControlSettingsPatch) => Promise<ControlStatus>;
       regenerateControlToken: () => Promise<ControlStatus>;
       pushControlState: (state: Pick<ControlLiveState, "playback">) => Promise<{ ok: boolean }>;
