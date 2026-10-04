@@ -41,6 +41,8 @@ export class Connection {
   private readonly images = new Map<string, string | null>();
   private readonly imageRequests = new Map<string, Promise<string | null>>();
   private readonly oversizedImages = new Set<string>();
+  private imageQueue: Promise<void> = Promise.resolve();
+  private activeImage?: { soundId: string };
 
   constructor(private readonly version: string, private readonly options: ConnectionOptions = {}) {
     this.readDiscovery = options.discover ?? discover;
@@ -89,7 +91,7 @@ export class Connection {
     this.socket = null;
     socket?.terminate();
     this.failPending();
-    this.invalidateImages();
+    this.invalidateImages(true);
     if (this.status === "connected") this.setStatus("offline");
   }
 
@@ -198,7 +200,7 @@ export class Connection {
       clearInterval(this.heartbeatTimer);
       this.socket = null;
       this.failPending();
-      this.invalidateImages();
+      this.invalidateImages(true);
       if (this.status === "connected") this.setStatus("offline");
       this.schedule(generation);
     });
@@ -220,7 +222,7 @@ export class Connection {
       }
       clearTimeout(this.handshakeTimer);
       this.retryDelay = this.retryMin;
-      this.invalidateImages();
+      this.invalidateImages(true);
       this.snapshot = message.state;
       this.status = "connected";
       this.notify();
@@ -278,16 +280,20 @@ export class Connection {
     }
     this.pending.clear();
   }
-  private invalidateImages(): void {
+  private invalidateImages(newSession = false): void {
+    if (newSession) {
+      this.imageQueue = Promise.resolve();
+      this.activeImage = undefined;
+    }
     ++this.imageGeneration;
     this.images.clear();
     this.imageRequests.clear();
   }
   private rejectPendingImages(): void {
     // Older servers may send an oversized frame before we can read its id.
-    // Conservatively suppress all in-flight artwork across reconnects. The
-    // protocol has no image revision; a library.changed event permits a retry.
-    for (const soundId of this.imageRequests.keys()) this.oversizedImages.add(soundId);
+    // Suppress the in-flight artwork across reconnects, leaving unsent queued
+    // images eligible. A library.changed event permits a retry.
+    if (this.activeImage) this.oversizedImages.add(this.activeImage.soundId);
   }
   peekImage(soundId: string): string | null | undefined {
     return this.oversizedImages.has(soundId) ? null : this.images.get(soundId);
@@ -298,7 +304,14 @@ export class Connection {
     const pending = this.imageRequests.get(soundId);
     if (pending) return pending;
     const generation = this.imageGeneration;
-    const request = this.command("sound.image", { soundId }).then((result) => {
+    const active = { soundId };
+    // Wait for the previous reply before sending another image on this session.
+    // Library invalidation skips obsolete queued work without starting a second
+    // reply alongside an image that is still in flight.
+    const request = this.imageQueue.then(async () => {
+      if (generation !== this.imageGeneration) return null;
+      this.activeImage = active;
+      const result = await this.command("sound.image", { soundId });
       if (generation !== this.imageGeneration) return null;
       if (!result.ok) {
         if (result.code === "payload-too-large") {
@@ -313,8 +326,10 @@ export class Connection {
       this.notify();
       return image;
     }).finally(() => {
+      if (this.activeImage === active) this.activeImage = undefined;
       if (this.imageRequests.get(soundId) === request) this.imageRequests.delete(soundId);
     });
+    this.imageQueue = request.then(() => undefined, () => undefined);
     this.imageRequests.set(soundId, request);
     return request;
   }

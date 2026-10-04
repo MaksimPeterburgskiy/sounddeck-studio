@@ -75,6 +75,60 @@ describe("shared connection", () => {
     unsubscribe();
   });
 
+  it("fetches four multi-MiB images without closing the shared server session", async () => {
+    const { bridge, connection, upgrades } = await realServer();
+    const sounds = Array.from({ length: 4 }, (_, index) => ({
+      ...library.boards[0].sounds[0], id: `image-${index}`,
+      image: "data:image/png;base64," + String(index).repeat(3 * 1024 * 1024),
+    }));
+    bridge.updateLibrary({ ...library, boards: [{ ...library.boards[0], sounds }] });
+    connection.start();
+    await waitFor(() => connection.status === "connected");
+    const results = await Promise.all(sounds.map((sound) => connection.getImage(sound.id)));
+    // Avoid printing several MiB of artwork when the pre-fix server disconnects.
+    expect(results.map((image, index) => image === sounds[index].image)).toEqual([true, true, true, true]);
+    expect(connection.status).toBe("connected");
+    expect(upgrades).toHaveLength(1);
+    expect((await connection.command("sound.play", { soundId: sounds[0].id })).ok).toBe(true);
+  });
+
+  it.each(["library change", "reconnect"])("discards obsolete queued images after a %s", async (change) => {
+    const { bridge, connection } = await realServer();
+    connection.start();
+    await waitFor(() => connection.status === "connected");
+    let finish!: (result: Awaited<ReturnType<Connection["command"]>>) => void;
+    const commands = vi.spyOn(connection, "command")
+      .mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }))
+      .mockResolvedValue({ type: "result", id: "image", ok: true, data: { image: "fresh" } });
+    const old = connection.getImage("sound-a");
+    const queued = connection.getImage("sound-b");
+    expect(connection.getImage("sound-b")).toBe(queued);
+    await waitFor(() => commands.mock.calls.length > 0);
+    expect(commands).toHaveBeenCalledOnce();
+    if (change === "library change") {
+      bridge.updateLibrary({ ...library, boards: [{ ...library.boards[0], name: "Changed" }] });
+      await waitFor(() => connection.snapshot?.library.boards[0].name === "Changed");
+    } else {
+      connection.stop();
+      connection.start();
+      await waitFor(() => connection.status === "connected");
+    }
+    const fresh = connection.getImage("sound-a");
+    if (change === "library change") {
+      await Promise.resolve();
+      // A new library generation still shares the session's in-flight reply.
+      expect(commands).toHaveBeenCalledOnce();
+    } else {
+      // A new session must not wait for an obsolete session's reply.
+      expect(await fresh).toBe("fresh");
+    }
+    finish({ type: "result", id: "old", ok: true, data: { image: "obsolete" } });
+    expect(await Promise.all([old, queued])).toEqual([null, null]);
+    expect(await fresh).toBe("fresh");
+    expect(connection.peekImage("sound-a")).toBe("fresh");
+    expect(commands.mock.calls.map(([, args]) => args)).toEqual([{ soundId: "sound-a" }, { soundId: "sound-a" }]);
+  });
+
   it("falls back for refused oversized artwork, keeps commands usable, and retries after artwork changes", async () => {
     const { bridge, connection, upgrades } = await realServer();
     const image = "data:image/png;base64," + "A".repeat(16 * 1024 * 1024);
