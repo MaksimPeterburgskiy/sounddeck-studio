@@ -113,13 +113,21 @@ export abstract class LiveAction extends SingletonAction<ActionSettings> {
       while (entry.dirty && this.visible.get(entry.action.id) === entry) {
         entry.dirty = false;
         const previous = entry.settings;
-        const settings = this.syncSettings(previous);
+        let settings = this.syncSettings(previous);
         if (settings !== previous) {
-          // Update our cache before saving so subsequent refreshes cannot restore stale metadata.
-          entry.settings = settings;
-          await entry.action.setSettings(settings);
+          // Inspector edits can be persisted before their settings echo reaches us.
+          // Recompute from the current snapshot, preserving its binding and revision.
+          const current = await entry.action.getSettings();
           if (this.visible.get(entry.action.id) !== entry) return;
-          if (entry.settings !== settings) { entry.dirty = true; continue; }
+          // getSettings may itself emit didReceiveSettings with this snapshot.
+          // Any other settings event during the read supersedes it.
+          if (entry.settings !== previous && entry.settings !== current) { entry.dirty = true; continue; }
+          settings = this.syncSettings(current);
+          if (settings !== current) await entry.action.setSettings(settings);
+          if (this.visible.get(entry.action.id) !== entry) return;
+          if (entry.settings !== previous && entry.settings !== current) { entry.dirty = true; continue; }
+          // Publish synced metadata only after it has been sent for persistence.
+          entry.settings = settings;
           if (this.inspectorId === entry.action.id) {
             ++this.inspectorSettingsGeneration;
             this.inspectorSettings = settings;

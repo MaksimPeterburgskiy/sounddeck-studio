@@ -29,10 +29,11 @@ function fakeConnection() {
   };
   return connection;
 }
-function fakeKey() {
+function fakeKey(settings: ActionSettings = {}) {
   return { id: "key", isKey: () => true, setImage: vi.fn(async (_image: string) => {}),
     setTitle: vi.fn(async (_title: string) => {}), setState: vi.fn(async (_state: number) => {}),
-    setSettings: vi.fn(async (_settings: ActionSettings) => {}), showAlert: vi.fn() };
+    getSettings: vi.fn(async () => settings),
+    setSettings: vi.fn(async (next: ActionSettings) => { settings = next; }), showAlert: vi.fn() };
 }
 function inspectorFixture() {
   const connection = fakeConnection();
@@ -199,7 +200,7 @@ describe("live actions", () => {
   it("persists renamed and moved sound metadata, then resolves a re-import using that fallback", async () => {
     const connection = fakeConnection();
     const action = new PlaySound(connection as unknown as Connection);
-    const key = fakeKey();
+    const key = fakeKey({ soundId: "original", boardId: "old-board", title: "Horn" });
     connection.snapshot.library.boards = [{ id: "new-board", sounds: [{ id: "original", title: "Airhorn", hasImage: false }] }];
     action.onWillAppear({ action: key, payload: { settings: { soundId: "original", boardId: "old-board", title: "Horn" } } } as never);
     await flush();
@@ -210,6 +211,35 @@ describe("live actions", () => {
     expect(key.setSettings).toHaveBeenLastCalledWith({ ...saved, soundId: "imported" });
     await action.onKeyDown({ action: key, payload: { settings: saved } } as never);
     expect(connection.command).toHaveBeenLastCalledWith("sound.play", { soundId: "imported" });
+    action.onWillDisappear({ action: key } as never);
+  });
+
+  it("preserves an inspector binding persisted before its echo when syncing library metadata", async () => {
+    const connection = fakeConnection();
+    const action = new PlaySound(connection as unknown as Connection);
+    const original = { soundId: "original", boardId: "board", title: "Horn", inspectorRevision: 1 };
+    const selected = { ...original, soundId: "selected", title: "Selected", inspectorRevision: 2 };
+    const key = fakeKey(original);
+    connection.snapshot.library.boards = [{ id: "board", sounds: [
+      { id: "original", title: "Horn", hasImage: false },
+      { id: "selected", title: "Selected", hasImage: false },
+    ] }];
+    action.onWillAppear({ action: key, payload: { settings: original } } as never);
+    await flush();
+
+    // The inspector has saved a different binding, but no didReceiveSettings
+    // echo has reached the plugin yet.
+    key.getSettings.mockResolvedValue(selected);
+    connection.snapshot.library.boards[0].sounds[0].title = "Renamed Horn";
+    connection.emit();
+    await flush();
+    expect(key.setSettings).not.toHaveBeenCalled();
+    expect(key.setTitle).toHaveBeenLastCalledWith("Selected");
+
+    connection.snapshot.library.boards[0].sounds[1].title = "Renamed Selection";
+    connection.emit();
+    await flush();
+    expect(key.setSettings).toHaveBeenCalledExactlyOnceWith({ ...selected, title: "Renamed Selection" });
     action.onWillDisappear({ action: key } as never);
   });
 
