@@ -16,6 +16,25 @@ function setup(initial: Partial<AudioSettings> = {}) {
 }
 
 describe("external audio mutation FIFO", () => {
+  it.each(["pending", "saved", "failed"])("releases a hung save at its deadline without rolling back its unknown outcome (%s)", async (outcome) => {
+    const app = setup({ micVirtualVolume: 0.4 });
+    const save = deferred<void>();
+    app.persist.mockReturnValueOnce(save.promise);
+    const cancellation = new AbortController();
+    const first = app.queue.enqueue({ command: "volume.set", args: { bus: "micVirtual", value: 0.6 } }, cancellation.signal);
+    const later = app.queue.enqueue({ command: "volume.adjust", args: { bus: "micVirtual", delta: 0.2 } });
+    await vi.waitFor(() => expect(app.persist).toHaveBeenCalledOnce());
+    cancellation.abort("operation-timeout");
+    expect(await first).toEqual({ ok: false, code: "unavailable" });
+    expect(await later).toEqual({ ok: true, data: { bus: "micVirtual", value: 0.8, muted: false } });
+    expect(app.waitForConfiguration).toHaveBeenCalledOnce();
+    if (outcome === "saved") save.resolve();
+    if (outcome === "failed") save.reject(new Error("disk full"));
+    await Promise.resolve();
+    expect(app.getSettings().micVirtualVolume).toBe(0.8);
+    expect(app.writeSettings).toHaveBeenCalledTimes(2);
+  });
+
   it("acknowledges a saved mutation at its deadline without waiting for hung routing or applying a cancelled queued toggle", async () => {
     const app = setup({ micPassthrough: false });
     const routing = deferred<void>();
@@ -276,6 +295,22 @@ describe("external audio mutation FIFO", () => {
 });
 
 describe("external control library persistence", () => {
+  it.each(["saved", "failed"])("leaves a timed-out snapshot eligible for UI persistence even after a late save settles (%s)", async (outcome) => {
+    const snapshot: SoundLibrary = { version: 1, activeBoardId: "", boards: [], settings: makeAudioSettings() };
+    const savedLibraries = new WeakSet<SoundLibrary>();
+    const save = deferred<{ ok: boolean }>();
+    const cancellation = new AbortController();
+    const saving = persistControlLibrary(snapshot, savedLibraries, () => save.promise, cancellation.signal);
+    expect(savedLibraries.has(snapshot)).toBe(true);
+    cancellation.abort("operation-timeout");
+    await expect(saving).rejects.toThrow("Control operation cancelled");
+    expect(savedLibraries.has(snapshot)).toBe(false);
+    if (outcome === "saved") save.resolve({ ok: true });
+    else save.reject(new Error("disk full"));
+    await Promise.resolve();
+    expect(savedLibraries.has(snapshot)).toBe(false);
+  });
+
   it.each(["reject", "not-ok"])("leaves an unsaved edit eligible for UI persistence after a same-value command's save fails (%s)", async (failure) => {
     let library: SoundLibrary = { version: 1, activeBoardId: "edited-board", boards: [], settings: makeAudioSettings({ micPassthrough: false }) };
     const savedLibraries = new WeakSet<SoundLibrary>();

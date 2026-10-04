@@ -138,7 +138,7 @@ function App() {
   const audioControlQueue = useMemo(() => createAudioControlQueue({
     getSettings: () => libraryRef.current?.settings ?? null,
     writeSettings: (settings) => updateLibrary((current) => ({ ...current, settings })),
-    persist: () => persistControlLibrary(libraryRef.current!, controlSavedLibrariesRef.current, window.sounddeck.saveLibrary),
+    persist: (cancellation) => persistControlLibrary(libraryRef.current!, controlSavedLibrariesRef.current, window.sounddeck.saveLibrary, cancellation),
     waitForConfiguration: () => waitForAudioConfiguration(() => audioConfigurationRef.current)
   }), []);
   const queueSoundPlay = useMemo(() => createSoundPlayQueue(), []);
