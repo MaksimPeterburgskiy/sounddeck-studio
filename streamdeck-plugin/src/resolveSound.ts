@@ -1,4 +1,4 @@
-import type { ControlLibrary } from "../../src/lib/controlProtocol";
+import { CONTROL_MAX_TITLE_LENGTH, type ControlLibrary } from "../../src/lib/controlProtocol";
 
 export type SoundBinding = { soundId?: string; boardId?: string; title?: string };
 export type LibrarySound = ControlLibrary["boards"][number]["sounds"][number];
@@ -8,7 +8,15 @@ export function resolveSound(library: ControlLibrary, binding: SoundBinding): Li
   const byId = library.boards.flatMap((board) => board.sounds).find((sound) => sound.id === binding.soundId);
   if (byId) return byId;
   if (!binding.boardId || !binding.title) return undefined;
-  return library.boards.find((board) => board.id === binding.boardId)?.sounds.find((sound) => sound.title === binding.title);
+  // Older bindings can contain the full title from before summaries were bounded.
+  const sounds = library.boards.find((board) => board.id === binding.boardId)?.sounds ?? [];
+  let title = binding.title;
+  let matches = sounds.filter((sound) => sound.title === title);
+  if (!matches.length && title.length > CONTROL_MAX_TITLE_LENGTH) {
+    title = title.slice(0, CONTROL_MAX_TITLE_LENGTH);
+    matches = sounds.filter((sound) => sound.title === title);
+  }
+  return title.length === CONTROL_MAX_TITLE_LENGTH && matches.length > 1 ? undefined : matches[0];
 }
 
 /** Keep import fallback metadata current while the stable id still resolves. */

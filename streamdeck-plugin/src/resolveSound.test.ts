@@ -21,6 +21,15 @@ describe("sound binding resolution", () => {
     expect(resolveSound(library, { boardId: "b", title: "Airhorn" })?.id).toBe("three");
   });
 
+  it("matches old full titles to bounded metadata without guessing between truncated collisions", () => {
+    const prefix = "H".repeat(256);
+    const bounded: ControlLibrary = { activeBoardId: "a", boards: [{ id: "a", name: "One", color: "", sounds: [sound("new-id", prefix)] }] };
+    expect(resolveSound(bounded, { soundId: "old-id", boardId: "a", title: prefix + "original" })?.id).toBe("new-id");
+    bounded.boards[0].sounds.push(sound("other-id", prefix));
+    expect(resolveSound(bounded, { soundId: "old-id", boardId: "a", title: prefix })).toBeUndefined();
+    expect(resolveSound(bounded, { soundId: "other-id", boardId: "a", title: prefix })?.id).toBe("other-id");
+  });
+
   it("does not guess by title across boards or use case-insensitive matches", () => {
     expect(resolveSound(library, { soundId: "old-id", title: "Airhorn" })).toBeUndefined();
     expect(resolveSound(library, { boardId: "missing", title: "Airhorn" })).toBeUndefined();

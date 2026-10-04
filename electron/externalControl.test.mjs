@@ -547,6 +547,47 @@ describe("external control protocol and dispatch", () => {
     expect(onCommand).not.toHaveBeenCalled();
   });
 
+  it("bounds imported summary fields and total entries well below the plugin frame limit", async () => {
+    await create();
+    // Escaped control characters take six JSON bytes per code unit.
+    const large = "\u0000".repeat(1024);
+    const sounds = Array.from({ length: 1025 }, (_, index) => ({ id: `sound-${index}`, title: large, color: large }));
+    const boards = Array.from({ length: 257 }, (_, index) => ({ id: `board-${index}`, name: large, color: large, sounds: index < 2 ? sounds : [] }));
+    bridge.updateLibrary({ boards, activeBoardId: "board-0" });
+    const snapshot = bridge.getSnapshot();
+    expect(snapshot.library.boards).toHaveLength(256);
+    expect(snapshot.library.boards.flatMap((board) => board.sounds)).toHaveLength(2048);
+    expect(snapshot.library.boards[0].name.length).toBe(256);
+    expect(snapshot.library.boards[0].sounds[0].title.length).toBe(256);
+    expect(snapshot.library.boards[0].color.length).toBeLessThanOrEqual(32);
+    expect(snapshot.library.boards[0].sounds[0].color.length).toBeLessThanOrEqual(32);
+    expect(Buffer.byteLength(JSON.stringify({ type: "welcome", protocol: 1, app: { version: "0.1.22" }, state: snapshot }))).toBeLessThan(5 * 1024 * 1024);
+    bridge.updateLibrary({ boards: [{ id: "b".repeat(129), name: "invalid", sounds: [] },
+      { id: "valid", name: "valid", sounds: [{ id: "s".repeat(129), title: "invalid" }] }] });
+    expect(bridge.getSnapshot().library.boards).toEqual([{ id: "valid", name: "valid", color: "", sounds: [] }]);
+  });
+
+  it("resolves bounded title fallback after reimport and rejects ambiguous truncated prefixes", async () => {
+    await create();
+    const prefix = "H".repeat(256);
+    const board = { ...library.boards[0], name: "N".repeat(16 * 1024 * 1024), sounds: [{ ...library.boards[0].sounds[0], title: prefix + "first" }] };
+    bridge.updateLibrary({ ...library, boards: [board] });
+    const connection = await client({ maxPayload: 16 * 1024 * 1024 });
+    connection.send(hello());
+    const welcome = await connection.next();
+    expect(welcome.state.library.boards[0].name).toHaveLength(256);
+    expect(welcome.state.library.boards[0].sounds[0].title).toBe(prefix);
+    connection.send({ type: "command", id: "fallback", command: "sound.play", args: { soundId: "old-id", boardId: board.id, title: prefix } });
+    expect(await connection.next()).toMatchObject({ id: "fallback", ok: true });
+    expect(onCommand).toHaveBeenLastCalledWith({ command: "sound.play", args: { soundId: "sound-new" } }, expect.any(AbortSignal));
+    bridge.updateLibrary({ ...library, boards: [{ ...board, sounds: [...board.sounds, { id: "collision", title: prefix + "second" }] }] });
+    expect((await connection.next()).event).toBe("library.changed");
+    connection.send({ type: "command", id: "ambiguous", command: "sound.play", args: { soundId: "old-id", boardId: board.id, title: prefix } });
+    expect(await connection.next()).toMatchObject({ id: "ambiguous", ok: false, code: "not-found" });
+    connection.send({ type: "command", id: "by-id", command: "sound.play", args: { soundId: "collision" } });
+    expect(await connection.next()).toMatchObject({ id: "by-id", ok: true });
+  });
+
   it.each([0, 1])("bounds encoded image data without closing the session (bytes above limit: %s)", async (extra) => {
     await create();
     const prefix = "data:image/png;base64,";

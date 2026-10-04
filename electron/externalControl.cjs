@@ -13,6 +13,12 @@ const MAX_BUFFERED = 8 * 1024 * 1024;
 // Bound encoded image data, leaving ample envelope headroom below the plugin's
 // 16 MiB receive limit. Imported artwork is preserved in the app's library.
 const MAX_IMAGE_DATA_BYTES = 8 * 1024 * 1024;
+// Even six-byte JSON escapes keep the summary below 5 MiB, with room for
+// the bounded playback state and welcome envelope under the client's 16 MiB.
+const MAX_SUMMARY_BOARDS = 256;
+const MAX_SUMMARY_SOUNDS = 2048;
+const MAX_SUMMARY_TITLE_LENGTH = 256;
+const MAX_SUMMARY_COLOR_LENGTH = 32;
 const SETTING_KEYS = ["micPassthrough", "soundboardToVirtualMic", "noiseSuppressionEnabled", "echoCancellationEnabled", "monitorToHeadphones"];
 const VOLUME_BUSES = ["micVirtual", "micMonitor", "soundboardVirtual", "soundboardMonitor"];
 
@@ -216,17 +222,23 @@ function createExternalControlBridge({
     const nextAudio = audioState(value?.settings);
     const settingsChanged = JSON.stringify(audio.settings) !== JSON.stringify(nextAudio.settings);
     const volumesChanged = JSON.stringify(audio.volumes) !== JSON.stringify(nextAudio.volumes);
-    const boards = (Array.isArray(value?.boards) ? value.boards : []).map((board) => ({
-      id: board.id, name: board.name, color: board.color,
-      sounds: (Array.isArray(board.sounds) ? board.sounds : []).map((sound) => ({
-        id: sound.id, title: sound.title, color: sound.color, hasImage: Boolean(sound.image)
-      }))
-    }));
+    const boards = [];
+    let soundCount = 0;
     images.clear();
-    for (const board of value?.boards || []) {
-      for (const sound of board.sounds || []) {
+    for (const board of Array.isArray(value?.boards) ? value.boards : []) {
+      if (boards.length >= MAX_SUMMARY_BOARDS) break;
+      if (!id(board?.id)) continue;
+      const sounds = [];
+      for (const sound of Array.isArray(board.sounds) ? board.sounds : []) {
+        if (soundCount >= MAX_SUMMARY_SOUNDS) break;
+        if (!id(sound?.id)) continue;
+        sounds.push({ id: sound.id, title: typeof sound.title === "string" ? sound.title.slice(0, MAX_SUMMARY_TITLE_LENGTH) : "",
+          color: typeof sound.color === "string" ? sound.color.slice(0, MAX_SUMMARY_COLOR_LENGTH) : "", hasImage: Boolean(sound.image) });
+        ++soundCount;
         if (typeof sound.image === "string" && /^data:image\/[a-zA-Z0-9.+-]+;base64,/.test(sound.image)) images.set(sound.id, sound.image);
       }
+      boards.push({ id: board.id, name: typeof board.name === "string" ? board.name.slice(0, MAX_SUMMARY_TITLE_LENGTH) : "",
+        color: typeof board.color === "string" ? board.color.slice(0, MAX_SUMMARY_COLOR_LENGTH) : "", sounds });
     }
     const changed = JSON.stringify(library.boards) !== JSON.stringify(boards);
     const updatesBoard = currentUpdate(owner, appliedBoardGeneration);
@@ -260,7 +272,10 @@ function createExternalControlBridge({
     if (command.startsWith("sound.")) {
       let sound = sounds.find((candidate) => candidate.id === args.soundId);
       if (!sound && command === "sound.play" && args.boardId && args.title) {
-        sound = library.boards.find((board) => board.id === args.boardId)?.sounds.find((candidate) => candidate.title === args.title);
+        const matches = library.boards.find((board) => board.id === args.boardId)?.sounds.filter((candidate) => candidate.title === args.title) || [];
+        // At the truncation boundary distinct original titles may collide.
+        // Preserve first-duplicate lookup for shorter, untruncated titles.
+        sound = args.title.length === MAX_SUMMARY_TITLE_LENGTH && matches.length > 1 ? undefined : matches[0];
       }
       if (!sound) return { ok: false, code: "not-found" };
       if (command === "sound.image") {

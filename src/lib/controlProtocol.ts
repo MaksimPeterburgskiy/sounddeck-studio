@@ -1,5 +1,6 @@
 export const CONTROL_PROTOCOL_VERSION = 1;
 export const CONTROL_DEFAULT_PORT = 41730;
+export const CONTROL_MAX_TITLE_LENGTH = 256;
 
 export type ControlSettingKey = "micPassthrough" | "soundboardToVirtualMic" | "noiseSuppressionEnabled" | "echoCancellationEnabled" | "monitorToHeadphones";
 export type ControlVolumeBus = "micVirtual" | "micMonitor" | "soundboardVirtual" | "soundboardMonitor";
