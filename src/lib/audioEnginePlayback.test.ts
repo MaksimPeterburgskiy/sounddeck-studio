@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AudioEngine } from "./audioEngine";
-import { FakeAudioContext, deferred, makeAudioSettings, makeSound, voiceGains } from "./testing/webAudioFakes";
+import { normalizeSoundEffects } from "./model";
+import { beginAudioConfiguration, waitForAudioConfiguration, watchAudioDeviceChanges } from "./controlReadiness";
+import { createSoundPlayQueue } from "./soundPlayQueue";
+import { FakeAudioContext, deferred, makeAudioSettings, makeSound, voiceGains, waitForMockCalls } from "./testing/webAudioFakes";
 
 const playbackSettings = makeAudioSettings({
   micPassthrough: false,
@@ -48,6 +51,323 @@ afterEach(() => {
 });
 
 describe("AudioEngine output routing", () => {
+  it.each([["decode", false], ["resume", false], ["decode", true], ["resume", true]])("waits for routing requested during %s before starting an external voice (cancelled: %s)", async (stage, cancelled) => {
+    const engine = new AudioEngine(playbackSettings, vi.fn());
+    const configuration = { current: engine.configure(playbackSettings, "") };
+    await configuration.current;
+    const preparation = deferred<AudioBuffer>();
+    const resume = deferred<void>();
+    if (stage === "decode") decodeContext().decodeAudioData.mockReturnValueOnce(preparation.promise);
+    else monitorContext().resume.mockReturnValueOnce(resume.promise);
+    const cancellation = new AbortController();
+    const play = engine.play(makeSound(), cancellation.signal, () => waitForAudioConfiguration(() => configuration.current));
+    await waitForMockCalls(stage === "decode" ? decodeContext().decodeAudioData : monitorContext().resume, 1);
+    const completeRouting = beginAudioConfiguration(configuration);
+    preparation.resolve({ duration: 2 } as AudioBuffer);
+    resume.resolve();
+    for (let turn = 0; turn < 20; turn++) await Promise.resolve();
+    expect(monitorContext().bufferSources).toHaveLength(0);
+    const routing = deferred<void>();
+    completeRouting(routing.promise);
+    for (let turn = 0; turn < 20; turn++) await Promise.resolve();
+    expect(monitorContext().bufferSources).toHaveLength(0);
+    if (cancelled) cancellation.abort();
+    routing.resolve();
+    expect(await play).toBe(!cancelled);
+    expect(monitorContext().bufferSources).toHaveLength(cancelled ? 0 : 1);
+    await engine.dispose();
+  });
+
+  it("rejects an already cancelled solo restart without reading media or stopping active voices", async () => {
+    const status = vi.fn();
+    const engine = new AudioEngine(playbackSettings, status);
+    try {
+      await engine.play(makeSound());
+      const source = monitorContext().bufferSources[0];
+      const reads = vi.mocked(window.sounddeck.readMedia).mock.calls.length;
+      const resumes = monitorContext().resume.mock.calls.length;
+      status.mockClear();
+      const cancellation = new AbortController();
+      cancellation.abort();
+
+      expect(await engine.play(makeSound({ soloPlay: true, retriggerMode: "restart" }), cancellation.signal)).toBe(false);
+      expect(window.sounddeck.readMedia).toHaveBeenCalledTimes(reads);
+      expect(monitorContext().resume).toHaveBeenCalledTimes(resumes);
+      expect(monitorContext().bufferSources).toEqual([source]);
+      expect(source.stop).not.toHaveBeenCalled();
+      expect(engine.isPlaying("sound-1")).toBe(true);
+      expect(status).not.toHaveBeenCalled();
+    } finally {
+      await engine.dispose();
+    }
+  });
+
+  it("cancels a solo restart during resume without silencing itself or other sounds", async () => {
+    const status = vi.fn();
+    const engine = new AudioEngine(playbackSettings, status);
+    const resumed = deferred<void>();
+    try {
+      await engine.play(makeSound());
+      await engine.play(makeSound({ id: "other" }));
+      const sources = [...monitorContext().bufferSources];
+      const gains = voiceGains(monitorContext());
+      status.mockClear();
+      monitorContext().resume.mockReturnValueOnce(resumed.promise);
+      const cancellation = new AbortController();
+      const pending = engine.play(makeSound({ soloPlay: true, retriggerMode: "restart" }), cancellation.signal);
+      await waitForMockCalls(monitorContext().resume, 3);
+      cancellation.abort();
+      resumed.resolve();
+
+      expect(await pending).toBe(false);
+      expect(monitorContext().bufferSources).toEqual(sources);
+      expect(gains.map((gain) => gain.gain.value)).toEqual([1, 1]);
+      expect(engine.isPlaying("sound-1")).toBe(true);
+      expect(engine.isPlaying("other")).toBe(true);
+      expect(status).not.toHaveBeenCalled();
+    } finally {
+      resumed.resolve();
+      await engine.dispose();
+    }
+  });
+
+  it.each([
+    ["sound", "routing"], ["sound", "decode"], ["sound", "resume"],
+    ["all", "routing"], ["all", "decode"], ["all", "resume"]
+  ])("cancels pending and queued plays on %s stop during %s preparation", async (stop, preparation) => {
+    const engine = new AudioEngine(dualRouteSettings, vi.fn());
+    const sound = makeSound({ outputTarget: "virtual", retriggerMode: "restart" });
+    const otherSound = makeSound({ id: "sound-2", mediaPath: "other.wav", outputTarget: "virtual" });
+    const ready = deferred<void>();
+    if (preparation === "routing") virtualContext().setSinkId.mockReturnValueOnce(ready.promise);
+    const configuration = engine.configure(dualRouteSettings, "cable-device");
+    if (preparation !== "routing") {
+      await configuration;
+      if (preparation === "decode") {
+        const decode = decodeContext().decodeAudioData.getMockImplementation()!;
+        decodeContext().decodeAudioData.mockImplementation(async () => {
+          await ready.promise;
+          return decode();
+        });
+      } else {
+        virtualContext().resume.mockReturnValue(ready.promise);
+      }
+    }
+    const queue = createSoundPlayQueue();
+    const trigger = (slot = sound) => queue(slot.id, async (signal) => {
+      if (signal.aborted) return false;
+      await waitForAudioConfiguration(() => configuration);
+      if (signal.aborted) return false;
+      return engine.play(slot, signal);
+    });
+    const first = trigger();
+    const queued = trigger();
+    const other = trigger(otherSound);
+    if (preparation === "routing") await waitForMockCalls(virtualContext().setSinkId, 1);
+    else if (preparation === "decode") await waitForMockCalls(decodeContext().decodeAudioData, 2);
+    else await waitForMockCalls(virtualContext().resume, 2);
+    expect(virtualContext().bufferSources).toHaveLength(0);
+    if (stop === "sound") {
+      queue.cancel(sound.id);
+      engine.stop(sound.id);
+    } else {
+      // External stop-all and the stop-all hotkey use this same renderer path.
+      queue.cancelAll();
+      engine.stopAll();
+    }
+    ready.resolve();
+    expect(await Promise.all([first, queued, other])).toEqual([false, false, stop === "sound"]);
+    expect(virtualContext().bufferSources).toHaveLength(stop === "sound" ? 1 : 0);
+    expect(engine.isPlaying(sound.id)).toBe(false);
+    expect(engine.isPlaying(otherSound.id)).toBe(stop === "sound");
+    expect(await trigger()).toBe(true);
+    expect(engine.isPlaying(sound.id)).toBe(true);
+    await engine.dispose();
+  });
+
+  it.each(["decode", "routing"])("serializes external and hotkey toggle plays while %s is pending", async (preparation) => {
+    const engine = new AudioEngine(dualRouteSettings, vi.fn());
+    const sound = makeSound({ outputTarget: "virtual", retriggerMode: "stop" });
+    const ready = deferred<void>();
+    let configuration: Promise<void>;
+    if (preparation === "routing") {
+      virtualContext().setSinkId.mockReturnValueOnce(ready.promise);
+      configuration = engine.configure(dualRouteSettings, "cable-device");
+    } else {
+      configuration = engine.configure(dualRouteSettings, "cable-device");
+      await configuration;
+      const decode = decodeContext().decodeAudioData.getMockImplementation()!;
+      decodeContext().decodeAudioData.mockImplementationOnce(async () => {
+        await ready.promise;
+        return decode();
+      });
+    }
+    const queue = createSoundPlayQueue();
+    const play = vi.spyOn(engine, "play");
+    const trigger = (external: boolean) => queue(sound.id, async (signal) => {
+      if (signal.aborted) return false;
+      if (external) await waitForAudioConfiguration(() => configuration);
+      if (signal.aborted) return false;
+      if (engine.isPlaying(sound.id)) {
+        engine.stop(sound.id);
+        return true;
+      }
+      return engine.play(sound, signal);
+    });
+    const first = trigger(true);
+    if (preparation === "decode") await waitForMockCalls(decodeContext().decodeAudioData, 1);
+    else await waitForMockCalls(virtualContext().setSinkId, 1);
+    const second = trigger(true);
+    const third = trigger(true);
+    expect(engine.isPlaying(sound.id)).toBe(false);
+    ready.resolve();
+    expect(await Promise.all([first, second, third])).toEqual([true, true, true]);
+    expect(play).toHaveBeenCalledTimes(2);
+    expect(virtualContext().bufferSources).toHaveLength(2);
+    expect(engine.isPlaying(sound.id)).toBe(true);
+    // Hotkeys and external commands share the same queue and toggle semantics.
+    expect(await Promise.all([trigger(false), trigger(true)])).toEqual([true, true]);
+    expect(play).toHaveBeenCalledTimes(3);
+    expect(engine.isPlaying(sound.id)).toBe(true);
+    await engine.dispose();
+  });
+
+  it("cancels a disconnected play during decoding while allowing a later play to start", async () => {
+    const engine = new AudioEngine(playbackSettings, vi.fn());
+    const queue = createSoundPlayQueue();
+    const decoded = deferred<void>();
+    const decode = decodeContext().decodeAudioData.getMockImplementation()!;
+    decodeContext().decodeAudioData.mockImplementationOnce(async () => {
+      await decoded.promise;
+      return decode();
+    });
+    const cancellation = new AbortController();
+    const sound = makeSound({ retriggerMode: "stop" });
+    const first = queue(sound.id, (signal) => engine.play(sound, signal), cancellation.signal);
+    const later = queue(sound.id, (signal) => engine.play(sound, signal));
+    await waitForMockCalls(decodeContext().decodeAudioData, 1);
+    cancellation.abort();
+    decoded.resolve();
+    expect(await Promise.all([first, later])).toEqual([false, true]);
+    expect(monitorContext().bufferSources).toHaveLength(1);
+    expect(engine.isPlaying(sound.id)).toBe(true);
+    await engine.dispose();
+  });
+
+  it("lets an already started voice complete after its client disconnects", async () => {
+    const engine = new AudioEngine(playbackSettings, vi.fn());
+    const cancellation = new AbortController();
+    const sound = makeSound();
+    expect(await engine.play(sound, cancellation.signal)).toBe(true);
+    const source = monitorContext().bufferSources[0];
+    cancellation.abort();
+    expect(engine.isPlaying(sound.id)).toBe(true);
+    expect(source.stop).not.toHaveBeenCalled();
+    source.onended?.();
+    expect(engine.isPlaying(sound.id)).toBe(false);
+    await engine.dispose();
+  });
+
+  it("waits for a delayed virtual sink before accepting the first external play command", async () => {
+    const engine = new AudioEngine(dualRouteSettings, vi.fn());
+    const sink = deferred<void>();
+    virtualContext().setSinkId.mockReturnValueOnce(sink.promise);
+    const configuration = engine.configure(dualRouteSettings, "cable-device");
+    const ready = vi.fn(() => engine.play(makeSound({ outputTarget: "virtual" })));
+    const pending = waitForAudioConfiguration(() => configuration).then(ready);
+    await waitForMockCalls(virtualContext().setSinkId, 1);
+    expect(ready).not.toHaveBeenCalled();
+    expect(virtualContext().bufferSources).toHaveLength(0);
+    sink.resolve();
+    expect(await pending).toBe(true);
+    expect(virtualContext().bufferSources).toHaveLength(1);
+    expect(engine.isPlaying("sound-1")).toBe(true);
+    await engine.dispose();
+  });
+
+  it("waits for virtual routing to be enabled after startup without dropping external plays", async () => {
+    const engine = new AudioEngine(playbackSettings, vi.fn());
+    await engine.configure(playbackSettings, "");
+    const sink = deferred<void>();
+    virtualContext().setSinkId.mockReturnValueOnce(sink.promise);
+    const configuration = engine.configure(dualRouteSettings, "cable-device");
+    const play = vi.fn(() => engine.play(makeSound({ outputTarget: "virtual", retriggerMode: "overlap" })));
+    const pending = [1, 2].map(() => waitForAudioConfiguration(() => configuration).then(play));
+    await waitForMockCalls(virtualContext().setSinkId, 1);
+    expect(play).not.toHaveBeenCalled();
+    expect(virtualContext().bufferSources).toHaveLength(0);
+    sink.resolve();
+    expect(await Promise.all(pending)).toEqual([true, true]);
+    expect(virtualContext().bufferSources).toHaveLength(2);
+    await engine.dispose();
+  });
+
+  it("reports playback failure if reconfiguration leaves no enabled route", async () => {
+    const engine = new AudioEngine(dualRouteSettings, vi.fn());
+    await engine.configure(dualRouteSettings, "cable-device");
+    const configuration = engine.configure({ ...playbackSettings, monitorToHeadphones: false }, "");
+    const started = await waitForAudioConfiguration(() => configuration).then(() => engine.play(makeSound({ outputTarget: "virtual" })));
+    expect(started).toBe(false);
+    expect(virtualContext().bufferSources).toHaveLength(0);
+    await engine.dispose();
+  });
+
+  it.each([false, true])("waits from devicechange through debounce, refresh and both monitor retries (fallback succeeds: %s)", async (fallbackSucceeds) => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const settings = { ...playbackSettings, monitorDeviceId: "preferred-output" };
+    const engine = new AudioEngine(settings, vi.fn());
+    const configuration = { current: engine.configure(settings, "") };
+    await configuration.current;
+    vi.useFakeTimers();
+    const refresh = deferred<void>();
+    const preferred = deferred<void>();
+    const fallback = deferred<void>();
+    monitorContext().setSinkId.mockReturnValueOnce(preferred.promise).mockReturnValueOnce(fallback.promise);
+    const devices = new EventTarget() as MediaDevices;
+    const retry = vi.fn(() => refresh.promise.then(() => engine.retryPreferredDevices({ recheckMonitor: true })));
+    const cleanup = watchAudioDeviceChanges(devices, configuration, retry);
+    devices.dispatchEvent(new Event("devicechange"));
+    const play = vi.fn(() => engine.play(makeSound({ outputTarget: "monitor" })));
+    const result = vi.fn();
+    const pending = waitForAudioConfiguration(() => configuration.current).then(play).then(result);
+    try {
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(play).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(599);
+      expect(retry).not.toHaveBeenCalled();
+      expect(monitorContext().bufferSources).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(retry).toHaveBeenCalledOnce();
+      expect(play).not.toHaveBeenCalled();
+      refresh.resolve();
+      await waitForMockCalls(monitorContext().setSinkId, 2);
+      expect(monitorContext().setSinkId).toHaveBeenLastCalledWith("preferred-output");
+      expect(play).not.toHaveBeenCalled();
+      preferred.reject(new DOMException("output unavailable", "NotFoundError"));
+      await waitForMockCalls(monitorContext().setSinkId, 3);
+      expect(monitorContext().setSinkId).toHaveBeenLastCalledWith("");
+      expect(play).not.toHaveBeenCalled();
+      expect(result).not.toHaveBeenCalled();
+      expect(monitorContext().bufferSources).toHaveLength(0);
+      if (fallbackSucceeds) fallback.resolve();
+      else fallback.reject(new DOMException("default unavailable", "NotFoundError"));
+      await pending;
+      expect(result).toHaveBeenCalledExactlyOnceWith(fallbackSucceeds);
+      expect(engine.getDeviceStatus().monitor.state).toBe(fallbackSucceeds ? "fallback" : "unavailable");
+      expect(monitorContext().bufferSources).toHaveLength(fallbackSucceeds ? 1 : 0);
+      expect(engine.isPlaying("sound-1")).toBe(fallbackSucceeds);
+    } finally {
+      cleanup();
+      refresh.resolve();
+      preferred.resolve();
+      fallback.resolve();
+      await pending;
+      await engine.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("routes a monitor-target sound to the monitor context only", async () => {
     const engine = new AudioEngine(playbackSettings, vi.fn());
 
@@ -55,6 +375,45 @@ describe("AudioEngine output routing", () => {
 
     expect(monitorContext().bufferSources).toHaveLength(1);
     expect(virtualContext().bufferSources).toHaveLength(0);
+
+    await engine.dispose();
+  });
+
+  it.each(["monitor", "both"] as const)("rejects a %s play after both monitor sinks fail and allows playback after retry", async (outputTarget) => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const settings = { ...playbackSettings, monitorDeviceId: "preferred-output" };
+    const status = vi.fn();
+    const engine = new AudioEngine(settings, status);
+    const sound = makeSound({ outputTarget });
+    await engine.configure(settings, "");
+    monitorContext().setSinkId
+      .mockRejectedValueOnce(new DOMException("output unavailable", "NotFoundError"))
+      .mockRejectedValueOnce(new DOMException("default unavailable", "NotFoundError"));
+
+    await engine.retryPreferredDevices({ recheckMonitor: true });
+
+    expect(engine.getDeviceStatus().monitor.state).toBe("unavailable");
+    expect(await engine.play(sound)).toBe(false);
+    expect(window.sounddeck.readMedia).not.toHaveBeenCalled();
+    expect(monitorContext().bufferSources).toHaveLength(0);
+    expect(virtualContext().bufferSources).toHaveLength(0);
+    expect(engine.isPlaying(sound.id)).toBe(false);
+    expect(status).not.toHaveBeenCalled();
+
+    monitorContext().setSinkId.mockRejectedValueOnce(new DOMException("output still unavailable", "NotFoundError"));
+    await engine.retryPreferredDevices();
+
+    expect(engine.getDeviceStatus().monitor.state).toBe("fallback");
+    expect(monitorContext().setSinkId).toHaveBeenLastCalledWith("");
+    expect(await engine.play(sound)).toBe(true);
+    expect(monitorContext().bufferSources).toHaveLength(1);
+
+    await engine.retryPreferredDevices();
+
+    expect(engine.getDeviceStatus().monitor.state).toBe("selected");
+    expect(monitorContext().setSinkId).toHaveBeenLastCalledWith("preferred-output");
+    expect(await engine.play(sound)).toBe(true);
+    expect(monitorContext().bufferSources).toHaveLength(2);
 
     await engine.dispose();
   });
@@ -491,6 +850,74 @@ describe("AudioEngine fades", () => {
 });
 
 describe("AudioEngine preview lifecycle", () => {
+  it("preserves preview position during live pitch updates without publishing it as soundboard playback", async () => {
+    const status = vi.fn();
+    const now = vi.spyOn(performance, "now").mockReturnValue(1000);
+    const engine = new AudioEngine(playbackSettings, status);
+    const sound = makeSound({ trimStartSec: 0.25, trimEndSec: 1.75 });
+    try {
+      await engine.previewPlay(sound, 0.5, 1);
+      const source = monitorContext().bufferSources[0];
+      now.mockReturnValue(1250);
+      engine.setSoundEffects("other", normalizeSoundEffects({ pitchEnabled: true, pitchSemitones: 12 }));
+      expect(source.detune.value).toBe(0);
+      engine.setSoundEffects(sound.id, normalizeSoundEffects({ pitchEnabled: true, pitchSemitones: 12 }));
+      expect(engine.getPreviewPosition()).toBe(0.75);
+      expect(source.detune.value).toBe(1200);
+      now.mockReturnValue(1500);
+      expect(engine.getPreviewPosition()).toBe(1.25);
+      expect(source.start).toHaveBeenCalledOnce();
+      expect(status).not.toHaveBeenCalled();
+      expect(engine.isPlaying(sound.id)).toBe(false);
+
+      await engine.previewRestart(sound, 0.5);
+      expect(source.stop).toHaveBeenCalledOnce();
+      expect(monitorContext().bufferSources[1].start).toHaveBeenCalledWith(0, 0.25, 1.5);
+      expect(engine.getPreviewPosition()).toBe(0.25);
+    } finally {
+      await engine.dispose();
+    }
+  });
+
+  it("finishes a preview once after its reverb tail and ignores a stale completion after restart", async () => {
+    vi.useFakeTimers();
+    window.setTimeout = setTimeout;
+    window.clearTimeout = clearTimeout;
+    const now = vi.spyOn(performance, "now").mockReturnValue(1000);
+    const engine = new AudioEngine(playbackSettings, vi.fn());
+    const sound = makeSound({
+      trimStartSec: 0.25,
+      trimEndSec: 1.75,
+      effects: normalizeSoundEffects({ reverb: { enabled: true, mix: 0.25, decaySec: 0.1 } })
+    });
+    try {
+      await engine.previewPlay(sound, 0.25, 1);
+      const staleEnded = monitorContext().bufferSources[0].onended!;
+      await engine.previewRestart(sound, 1);
+      staleEnded();
+      expect(engine.getPreviewPosition()).toBe(0.25);
+      const source = monitorContext().bufferSources[1];
+      const convolver = monitorContext().convolvers[1];
+      const ended = source.onended!;
+      now.mockReturnValue(2500);
+      ended();
+      ended();
+      expect(engine.getPreviewPosition()).toBe(1.75);
+      expect(convolver.disconnect).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(99);
+      expect(engine.isPreviewing()).toBe(true);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(engine.isPreviewing()).toBe(false);
+      expect(engine.getPreviewPosition()).toBe(1.75);
+      expect(convolver.disconnect).toHaveBeenCalledOnce();
+      expect(source.disconnect).toHaveBeenCalledOnce();
+      expect(source.stop).not.toHaveBeenCalled();
+    } finally {
+      await engine.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps editor preview audible when soundboard monitoring is disabled", async () => {
     const previewSettings = makeAudioSettings({
       micPassthrough: false,
@@ -605,11 +1032,123 @@ describe("AudioEngine lifecycle and cache", () => {
     const engine = new AudioEngine(playbackSettings, status);
 
     await engine.play(makeSound());
-    expect(status).toHaveBeenLastCalledWith("playing", ["sound-1"]);
+    expect(status).toHaveBeenLastCalledWith("playing", ["sound-1"], [expect.objectContaining({ soundId: "sound-1", duration: 2, loop: false })]);
 
     monitorContext().bufferSources[0].onended?.();
-    expect(status).toHaveBeenLastCalledWith("idle", []);
+    expect(status).toHaveBeenLastCalledWith("idle", [], []);
 
+    await engine.dispose();
+  });
+
+  it("reports every overlapping voice with an epoch timestamp and effective trimmed duration", async () => {
+    const status = vi.fn();
+    const engine = new AudioEngine(playbackSettings, status);
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1700000000000);
+    const sound = makeSound({ retriggerMode: "overlap", trimStartSec: 0.25, trimEndSec: 1.75, playbackRate: 2, loop: true });
+    await engine.play(sound);
+    clock.mockReturnValue(1700000000200);
+    await engine.play(sound);
+
+    expect(status.mock.lastCall?.[2]).toEqual([
+      { soundId: "sound-1", startedAt: 1700000000000, duration: 0.75, loop: true },
+      { soundId: "sound-1", startedAt: 1700000000200, duration: 0.75, loop: true }
+    ]);
+    engine.stop("sound-1");
+    expect(status.mock.lastCall?.[2]).toEqual([]);
+    await engine.dispose();
+  });
+
+  it("removes only the completed overlapping voice from control state across both routes", async () => {
+    vi.useFakeTimers();
+    window.setTimeout = setTimeout;
+    window.clearTimeout = clearTimeout;
+    const status = vi.fn();
+    const engine = new AudioEngine(dualRouteSettings, status);
+    const epoch = vi.spyOn(Date, "now").mockReturnValue(1700000000000);
+    const sound = makeSound({ outputTarget: "both", effects: normalizeSoundEffects({
+      reverb: { enabled: true, mix: 0.25, decaySec: 0.1 }
+    }) });
+    try {
+      await engine.configure(dualRouteSettings, "cable-device");
+      await engine.play(sound);
+      epoch.mockReturnValue(1700000000200);
+      await engine.play(sound);
+      expect(status.mock.lastCall?.[2]).toHaveLength(2);
+
+      monitorContext().bufferSources[0].onended!();
+      const notifications = status.mock.calls.length;
+      virtualContext().bufferSources[0].onended!();
+      expect(status).toHaveBeenCalledTimes(notifications);
+      expect(status).toHaveBeenLastCalledWith("playing", [sound.id], [
+        { soundId: sound.id, startedAt: 1700000000200, duration: 2, loop: false }
+      ]);
+      expect(engine.isPlaying(sound.id)).toBe(true);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(monitorContext().bufferSources[0].disconnect).toHaveBeenCalledOnce();
+      expect(virtualContext().bufferSources[0].disconnect).toHaveBeenCalledOnce();
+      expect(monitorContext().bufferSources[1].disconnect).not.toHaveBeenCalled();
+
+      engine.stopAll();
+      expect(status).toHaveBeenLastCalledWith("idle", [], []);
+      await vi.advanceTimersByTimeAsync(50);
+      expect(monitorContext().bufferSources[1].stop).toHaveBeenCalledOnce();
+      expect(virtualContext().bufferSources[1].stop).toHaveBeenCalledOnce();
+    } finally {
+      await engine.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("rebases each overlapping voice independently through repeated live pitch changes", async () => {
+    const status = vi.fn();
+    const engine = new AudioEngine(playbackSettings, status);
+    const epoch = vi.spyOn(Date, "now").mockReturnValue(1700000000000);
+    const now = vi.spyOn(performance, "now").mockReturnValue(1000);
+    const sound = makeSound({ loop: true, trimStartSec: 0.25, trimEndSec: 1.75 });
+    try {
+      await engine.play(sound);
+      now.mockReturnValue(1200);
+      epoch.mockReturnValue(1700000000200);
+      await engine.play(sound);
+      now.mockReturnValue(1400);
+      epoch.mockReturnValue(1700000000400);
+      engine.setSoundEffects(sound.id, normalizeSoundEffects({ pitchEnabled: true, pitchSemitones: 12 }));
+      expect(status.mock.lastCall?.[2]).toEqual([
+        { soundId: sound.id, startedAt: 1700000000200, duration: 0.75, loop: true },
+        { soundId: sound.id, startedAt: 1700000000300, duration: 0.75, loop: true }
+      ]);
+      expect(engine.getPosition(sound.id)).toBeCloseTo(0.45);
+
+      now.mockReturnValue(1600);
+      epoch.mockReturnValue(1700000000600);
+      engine.setSoundEffects(sound.id, undefined);
+      expect(status.mock.lastCall?.[2]).toEqual([
+        { soundId: sound.id, startedAt: 1699999999800, duration: 1.5, loop: true },
+        { soundId: sound.id, startedAt: 1700000000000, duration: 1.5, loop: true }
+      ]);
+      expect(engine.getPosition(sound.id)).toBeCloseTo(0.85);
+      expect(monitorContext().bufferSources.map((source) => source.detune.value)).toEqual([0, 0]);
+      for (const source of monitorContext().bufferSources) expect(source.start).toHaveBeenCalledOnce();
+    } finally {
+      await engine.dispose();
+    }
+  });
+
+  it("updates effective duration and preserves progress when live pitch changes playback speed", async () => {
+    const status = vi.fn();
+    const engine = new AudioEngine(playbackSettings, status);
+    const epoch = vi.spyOn(Date, "now").mockReturnValue(1700000000000);
+    const monotonic = vi.spyOn(performance, "now").mockReturnValue(1000);
+    const sound = makeSound({ trimStartSec: 0.25, trimEndSec: 1.75, playbackRate: 2 });
+    await engine.play(sound);
+    monotonic.mockReturnValue(1250);
+    epoch.mockReturnValue(1700000000250);
+    engine.setSoundEffects(sound.id, { ...sound.effects!, pitchEnabled: true, pitchSemitones: 12 });
+
+    const voice = status.mock.lastCall?.[2][0];
+    expect(voice.duration).toBe(0.375);
+    expect(voice.startedAt).toBe(1700000000125);
+    expect((Date.now() - voice.startedAt) / (voice.duration * 1000)).toBeCloseTo(1 / 3);
     await engine.dispose();
   });
 
