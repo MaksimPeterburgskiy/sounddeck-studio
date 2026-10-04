@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ControlLibrary } from "../../src/lib/controlProtocol";
-import { resolveSound } from "./resolveSound";
+import { resolveSound, currentSoundBinding } from "./resolveSound";
 
 const sound = (id: string, title: string) => ({ id, title, color: "#1db7a6", hasImage: false });
 const library: ControlLibrary = {
@@ -28,6 +28,17 @@ describe("sound binding resolution", () => {
     bounded.boards[0].sounds.push(sound("other-id", prefix));
     expect(resolveSound(bounded, { soundId: "old-id", boardId: "a", title: prefix })).toBeUndefined();
     expect(resolveSound(bounded, { soundId: "other-id", boardId: "a", title: prefix })?.id).toBe("other-id");
+  });
+
+  it("preserves missing stable bindings in incomplete summaries while keeping summarized IDs usable", () => {
+    const partial: ControlLibrary = { ...library, incomplete: true };
+    const binding = { soundId: "omitted", boardId: "a", title: "Airhorn" };
+    expect(resolveSound(partial, binding)).toBeUndefined();
+    expect(currentSoundBinding(partial, binding)).toBe(binding);
+    expect(resolveSound(partial, { soundId: "three", boardId: "a", title: "Airhorn" })?.id).toBe("three");
+    expect(currentSoundBinding(partial, { soundId: "three", boardId: "a", title: "Old" })).toEqual({ soundId: "three", boardId: "b", title: "Airhorn" });
+    // Full snapshots keep the existing reimport fallback behavior.
+    expect(resolveSound({ ...partial, incomplete: false }, binding)?.id).toBe("one");
   });
 
   it("does not guess by title across boards or use case-insensitive matches", () => {

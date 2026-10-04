@@ -172,7 +172,7 @@ function createExternalControlBridge({
   }
 
   function getLibrary() {
-    return { boards: library.boards, activeBoardId: live.activeBoardId };
+    return { ...library, activeBoardId: live.activeBoardId };
   }
 
   function getSnapshot() {
@@ -222,8 +222,15 @@ function createExternalControlBridge({
     const settingsChanged = JSON.stringify(audio.settings) !== JSON.stringify(nextAudio.settings);
     const volumesChanged = JSON.stringify(audio.volumes) !== JSON.stringify(nextAudio.volumes);
     const boards = [];
-    let summaryBytes = 0;
-    const fits = (entry) => (summaryBytes += Buffer.byteLength(JSON.stringify(entry)) + 1) <= MAX_SUMMARY_BYTES;
+    // Reserve the envelope and the longest valid active ID, including the
+    // completeness marker, before accounting for metadata entries.
+    let summaryBytes = Buffer.byteLength(JSON.stringify({ boards: [], activeBoardId: "x".repeat(128), incomplete: true }));
+    let incomplete = false;
+    const fits = (entry) => {
+      summaryBytes += Buffer.byteLength(JSON.stringify(entry)) + 1;
+      if (summaryBytes > MAX_SUMMARY_BYTES) incomplete = true;
+      return !incomplete;
+    };
     images.clear();
     summarize: for (const board of Array.isArray(value?.boards) ? value.boards : []) {
       if (!id(board?.id)) continue;
@@ -241,7 +248,7 @@ function createExternalControlBridge({
         if (typeof sound.image === "string" && /^data:image\/[a-zA-Z0-9.+-]+;base64,/.test(sound.image)) images.set(sound.id, sound.image);
       }
     }
-    const changed = JSON.stringify(library.boards) !== JSON.stringify(boards);
+    const changed = (library.incomplete === true) !== incomplete || JSON.stringify(library.boards) !== JSON.stringify(boards);
     const updatesBoard = currentUpdate(owner, appliedBoardGeneration);
     const activeBoardId = updatesBoard
       // Budgeting controls metadata, not the desktop's selected board.
@@ -255,7 +262,7 @@ function createExternalControlBridge({
     appliedLibraryGeneration = owner.generation;
     if (updatesBoard) appliedBoardGeneration = owner.generation;
     libraryPublished = true;
-    library = { boards };
+    library = { boards, ...(incomplete ? { incomplete: true } : {}) };
     live = { ...live, activeBoardId };
     audio = nextAudio;
     if (changed || imageChanged) event("library.changed", getLibrary());
@@ -273,7 +280,7 @@ function createExternalControlBridge({
     if (command === "library.get") return { ok: true, data: getLibrary() };
     if (command.startsWith("sound.")) {
       let sound = sounds.find((candidate) => candidate.id === args.soundId);
-      if (!sound && command === "sound.play" && args.boardId && args.title) {
+      if (!sound && !library.incomplete && command === "sound.play" && args.boardId && args.title) {
         const matches = library.boards.find((board) => board.id === args.boardId)?.sounds.filter((candidate) => candidate.title === args.title) || [];
         // At the truncation boundary distinct original titles may collide.
         // Preserve first-duplicate lookup for shorter, untruncated titles.

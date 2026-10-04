@@ -7,7 +7,7 @@ export type LibrarySound = ControlLibrary["boards"][number]["sounds"][number];
 export function resolveSound(library: ControlLibrary, binding: SoundBinding): LibrarySound | undefined {
   const byId = library.boards.flatMap((board) => board.sounds).find((sound) => sound.id === binding.soundId);
   if (byId) return byId;
-  if (!binding.boardId || !binding.title) return undefined;
+  if (library.incomplete || !binding.boardId || !binding.title) return undefined;
   // Older bindings can contain the full title from before summaries were bounded.
   const sounds = library.boards.find((board) => board.id === binding.boardId)?.sounds ?? [];
   let title = binding.title;

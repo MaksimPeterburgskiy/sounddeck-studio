@@ -25,6 +25,8 @@ export type ControlPlaybackResult = { ok: true } | { ok: false; code: "unavailab
 
 export interface ControlLibrary {
   activeBoardId: string;
+  // Metadata was omitted to keep the snapshot inside the frame budget.
+  incomplete?: boolean;
   boards: Array<{
     id: string;
     name: string;

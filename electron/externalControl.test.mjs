@@ -586,6 +586,20 @@ describe("external control protocol and dispatch", () => {
     expect(events[0]).toMatchObject({ event: "library.changed", data: { activeBoardId: "board-a" } });
   });
 
+  it("marks capped summaries incomplete and avoids title fallback for omitted sound IDs", async () => {
+    await create();
+    const filler = Array.from({ length: 10000 }, (_, index) => ({ id: `large-${index}`, title: "\u0000".repeat(256) }));
+    bridge.updateLibrary({ ...library, boards: [{ ...library.boards[0], sounds: [library.boards[0].sounds[0], ...filler,
+      { id: "omitted", title: "Airhorn" }] }] });
+    expect(bridge.getSnapshot().library.incomplete).toBe(true);
+    expect((await request("/v1/library")).body.incomplete).toBe(true);
+    expect(await request("/v1/sounds/omitted/play", { method: "POST", body: { boardId: "board-a", title: "Airhorn" } }))
+      .toMatchObject({ status: 404, body: { ok: false, code: "not-found" } });
+    expect((await request("/v1/sounds/sound-new/play", { method: "POST" })).body.ok).toBe(true);
+    bridge.updateLibrary(library);
+    expect(bridge.getSnapshot().library.incomplete).toBeUndefined();
+  });
+
   it("resolves bounded title fallback after reimport and rejects ambiguous truncated prefixes", async () => {
     await create();
     const prefix = "H".repeat(256);
