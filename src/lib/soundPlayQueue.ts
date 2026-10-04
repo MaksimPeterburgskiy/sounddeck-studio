@@ -6,7 +6,7 @@ export function createSoundPlayQueue() {
   const tails = new Map<string, Promise<unknown>>();
   const pending = new Map<string, Set<AbortController>>();
 
-  function play<T>(soundId: string, operation: (signal: AbortSignal) => Promise<T>, signal?: AbortSignal): Promise<T> {
+  function play<T>(soundId: string, operation: (signal: AbortSignal) => Promise<T>, signal?: AbortSignal, deadlineSignal = signal): Promise<T> {
     const cancellation = new AbortController();
     const abort = () => cancellation.abort(signal?.reason);
     signal?.addEventListener("abort", abort, { once: true });
@@ -17,7 +17,7 @@ export function createSoundPlayQueue() {
     const previous = tails.get(soundId);
     const result = waitForControlOperation(
       (previous ? previous.catch(() => undefined) : Promise.resolve()).then(() => operation(cancellation.signal)),
-      cancellation.signal
+      deadlineSignal
     );
     tails.set(soundId, result);
     const clear = () => {
