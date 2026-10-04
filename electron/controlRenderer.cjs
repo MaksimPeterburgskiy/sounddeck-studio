@@ -18,14 +18,14 @@ function createControlRenderer({ send, timeoutMs = 5000 }) {
     return new Promise((resolve) => {
       const requestId = randomUUID();
       const sendCancellation = () => {
-        try { send({ command: "control.cancel", requestId }); } catch {}
+        try { send({ command: "control.cancel", requestId, ...(signal?.reason === "operation-timeout" ? { reason: "operation-timeout" } : {}) }); } catch {}
       };
       const cancel = () => {
         const request = pending.get(requestId);
         if (!request) return;
-        // Plays and commands awaiting receipt can fail immediately. Accepted
-        // mutations must let the FIFO distinguish queued work from applied work.
-        if (message.command === "sound.play" || !request.received) {
+        // A deadline must await renderer acknowledgement even for playback.
+        // Disconnects retain their existing revocation behavior.
+        if (!request.received || (message.command === "sound.play" && signal?.reason !== "operation-timeout")) {
           cleanup();
           pending.delete(requestId);
           resolve({ ok: false, code: "unavailable" });

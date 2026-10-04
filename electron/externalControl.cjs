@@ -98,7 +98,8 @@ function createExternalControlBridge({
   now = Date.now,
   defaultPort = DEFAULT_PORT,
   helloTimeoutMs = 5000,
-  cooldownMs = 30000
+  cooldownMs = 30000,
+  operationTimeoutMs = 60000
 }) {
   const stateFile = path.join(userData, "external-control.json");
   let settings = { enabled: false, port: defaultPort, token: "", allowLan: false };
@@ -247,7 +248,7 @@ function createExternalControlBridge({
     return true;
   }
 
-  async function dispatch(command, args, signal) {
+  async function dispatch(command, args, cancellation) {
     const invalid = validateCommand(command, args);
     if (invalid) return { ok: false, code: invalid };
     if (!settings.enabled || stopped) return { ok: false, code: "disabled" };
@@ -263,10 +264,16 @@ function createExternalControlBridge({
       args = { soundId: sound.id };
     }
     if (command === "board.activate" && !library.boards.some((board) => board.id === args.boardId)) return { ok: false, code: "not-found" };
+    // A minute accommodates large decodes while bounding hung renderer work.
+    // Abort requests cancellation; only the renderer can acknowledge its outcome.
+    const deadline = setTimeout(() => cancellation.abort("operation-timeout"), operationTimeoutMs);
+    deadline.unref?.();
     try {
-      return await onCommand({ command, args }, signal);
+      return await onCommand({ command, args }, cancellation.signal);
     } catch {
       return { ok: false, code: "internal-error" };
+    } finally {
+      clearTimeout(deadline);
     }
   }
 
@@ -459,7 +466,7 @@ function createExternalControlBridge({
       if (res.destroyed) cancellation.abort();
       let result;
       try {
-        result = await dispatch(command, args, cancellation.signal);
+        result = await dispatch(command, args, cancellation);
       } finally {
         httpControllers.delete(cancellation);
         res.removeListener("close", disconnected);
@@ -538,7 +545,7 @@ function createExternalControlBridge({
       const cancellation = new AbortController();
       pendingCommands.add(cancellation);
       try {
-        const result = await dispatch(message.command, message.args, cancellation.signal);
+        const result = await dispatch(message.command, message.args, cancellation);
         send(ws, { type: "result", id: message.id, ...result });
       } finally {
         pendingCommands.delete(cancellation);

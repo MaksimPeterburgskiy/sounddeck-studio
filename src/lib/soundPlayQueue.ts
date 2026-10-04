@@ -1,3 +1,5 @@
+import { waitForControlOperation } from "./controlCancellation";
+
 // Serialize preparation and toggle decisions per sound. Cancellation belongs to
 // each operation: a stop snapshots the operations that already exist.
 export function createSoundPlayQueue() {
@@ -6,14 +8,17 @@ export function createSoundPlayQueue() {
 
   function play<T>(soundId: string, operation: (signal: AbortSignal) => Promise<T>, signal?: AbortSignal): Promise<T> {
     const cancellation = new AbortController();
-    const abort = () => cancellation.abort();
+    const abort = () => cancellation.abort(signal?.reason);
     signal?.addEventListener("abort", abort, { once: true });
     if (signal?.aborted) abort();
     const operations = pending.get(soundId) ?? new Set<AbortController>();
     operations.add(cancellation);
     pending.set(soundId, operations);
     const previous = tails.get(soundId);
-    const result = (previous ? previous.catch(() => undefined) : Promise.resolve()).then(() => operation(cancellation.signal));
+    const result = waitForControlOperation(
+      (previous ? previous.catch(() => undefined) : Promise.resolve()).then(() => operation(cancellation.signal)),
+      cancellation.signal
+    );
     tails.set(soundId, result);
     const clear = () => {
       signal?.removeEventListener("abort", abort);

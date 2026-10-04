@@ -555,7 +555,7 @@ function App() {
     void registerHotkeys(library);
   }, [library, draggingSoundId, registerHotkeys, corsairConnected]);
 
-  const triggerSound = useCallback((sound: SoundSlot, external = false, cancellation?: AbortSignal): Promise<ControlPlaybackResult> => queueSoundPlay(sound.id, async (signal) => {
+  const triggerSound = useCallback((sound: SoundSlot, external = false, cancellation?: AbortSignal): Promise<ControlPlaybackResult> => queueSoundPlay<ControlPlaybackResult>(sound.id, async (signal) => {
     try {
       if (signal.aborted) return { ok: false, code: "unavailable" };
       if (external) await waitForAudioConfiguration(() => audioConfigurationRef.current);
@@ -583,7 +583,7 @@ function App() {
       console.error(error);
       return { ok: false, code: "internal-error" };
     }
-  }, cancellation), [activeBoard?.id, queueSoundPlay]);
+  }, cancellation).catch(() => ({ ok: false, code: "unavailable" })), [activeBoard?.id, queueSoundPlay]);
 
   useEffect(() => {
     return window.sounddeck.onHotkeyTrigger((binding) => {
@@ -612,7 +612,7 @@ function App() {
 
   useEffect(() => window.sounddeck.onControlCommand((request) => {
     if (request.command === "control.cancel") {
-      controlRequests.current.get(request.requestId)?.abort();
+      controlRequests.current.get(request.requestId)?.abort(request.reason);
       return;
     }
     const { command, args } = request;

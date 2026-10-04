@@ -16,6 +16,28 @@ function setup(initial: Partial<AudioSettings> = {}) {
 }
 
 describe("external audio mutation FIFO", () => {
+  it("acknowledges a saved mutation at its deadline without waiting for hung routing or applying a cancelled queued toggle", async () => {
+    const app = setup({ micPassthrough: false });
+    const routing = deferred<void>();
+    app.waitForConfiguration.mockReturnValueOnce(routing.promise);
+    const appliedController = new AbortController();
+    const queuedController = new AbortController();
+    const applied = app.queue.enqueue({ command: "setting.toggle", args: { key: "micPassthrough" } }, appliedController.signal);
+    const queued = app.queue.enqueue({ command: "setting.toggle", args: { key: "micPassthrough" } }, queuedController.signal);
+    await vi.waitFor(() => expect(app.waitForConfiguration).toHaveBeenCalledOnce());
+    appliedController.abort("operation-timeout");
+    queuedController.abort("operation-timeout");
+    expect(await applied).toEqual({ ok: true, data: { key: "micPassthrough", value: true } });
+    expect(await queued).toEqual({ ok: false, code: "unavailable" });
+    expect(app.persist).toHaveBeenCalledOnce();
+    expect(app.getSettings().micPassthrough).toBe(true);
+    expect(await app.queue.enqueue({ command: "setting.toggle", args: { key: "micPassthrough" } }))
+      .toEqual({ ok: true, data: { key: "micPassthrough", value: false } });
+    routing.resolve();
+    await Promise.resolve();
+    expect(app.getSettings().micPassthrough).toBe(false);
+  });
+
   it.each(["settings", "devicechange"])("waits for pending %s routing before acknowledging a saved mutation and advancing the FIFO", async (source) => {
     vi.useFakeTimers();
     let settings = makeAudioSettings({ micPassthrough: false });

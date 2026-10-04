@@ -103,6 +103,7 @@ afterEach(async () => {
   for (const socket of sockets) socket.terminate();
   sockets.clear();
   await bridge?.stop();
+  vi.useRealTimers();
   bridge = undefined;
   for (const server of extraServers) await new Promise((resolve) => server.close(resolve));
   extraServers.clear();
@@ -842,6 +843,44 @@ describe("external control protocol and dispatch", () => {
     }
     expect(completed).toEqual(expected);
     expect(requests.size).toBe(0);
+  });
+
+  it.each(["WebSocket", "HTTP"])("requests cancellation at the operation deadline and waits for acknowledgement over %s", async (transport) => {
+    await create();
+    const connection = transport === "WebSocket" ? await session() : null;
+    const send = vi.fn();
+    const renderer = rendererModule.createControlRenderer({ send });
+    onCommand.mockImplementation((command, signal) => renderer.dispatch(command, signal));
+    const completed = vi.fn();
+    vi.useFakeTimers();
+    let response;
+    if (connection) {
+      connection.send({ type: "command", id: "slow", command: "sound.play", args: { soundId: "sound-new" } });
+    } else {
+      response = request("/v1/sounds/sound-new/play", { method: "POST" }).then(completed);
+    }
+    await vi.waitFor(() => expect(onCommand).toHaveBeenCalledOnce());
+    const requestId = send.mock.calls[0][0].requestId;
+    renderer.receive(requestId);
+    if (connection) response = new Promise((resolve) => connection.ws.once("message", (data) => resolve(JSON.parse(data.toString())))).then(completed);
+    await vi.advanceTimersByTimeAsync(59_000);
+    expect(onCommand.mock.calls[0][1].aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(onCommand.mock.calls[0][1].reason).toBe("operation-timeout");
+    expect(send).toHaveBeenLastCalledWith({ command: "control.cancel", requestId, reason: "operation-timeout" });
+    expect(completed).not.toHaveBeenCalled();
+    renderer.complete(requestId, { ok: false, code: "unavailable" });
+    vi.useRealTimers();
+    await response;
+    expect(completed).toHaveBeenCalledExactlyOnceWith(connection
+      ? { type: "result", id: "slow", ok: false, code: "unavailable" }
+      : { status: 503, body: { ok: false, code: "unavailable" } });
+    onCommand.mockResolvedValue({ ok: true });
+    if (connection) {
+      expect(await connection.next()).toMatchObject({ id: "slow", ok: false });
+      connection.send({ type: "command", id: "retry", command: "sound.play", args: { soundId: "sound-new" } });
+      expect(await connection.next()).toMatchObject({ id: "retry", ok: true });
+    } else expect((await request("/v1/sounds/sound-new/play", { method: "POST" })).body.ok).toBe(true);
   });
 
   it("cancels pending WebSocket commands when their client disconnects", async () => {

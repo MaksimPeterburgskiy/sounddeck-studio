@@ -123,7 +123,7 @@ export interface ControlStatus extends ControlSettings {
 
 type RendererMutationCommandName = "sound.play" | "setting.set" | "setting.toggle" | "volume.set" | "volume.adjust" | "volume.mute";
 export type RendererControlCommand =
-  | { command: "control.cancel"; requestId: string }
+  | { command: "control.cancel"; requestId: string; reason?: "operation-timeout" }
   | {
     [Name in RendererMutationCommandName]: { command: Name; requestId: string; args: ControlCommandArgs[Name] }
   }[RendererMutationCommandName]

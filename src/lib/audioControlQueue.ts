@@ -1,5 +1,6 @@
 import type { AudioSettings, SoundLibrary } from "../types";
 import type { RendererControlResult } from "./controlProtocol";
+import { waitForControlOperation } from "./controlCancellation";
 import { applyAudioControlCommand, type AudioControlCommand } from "./controlSettings";
 
 export function createAudioControlQueue({ getSettings, writeSettings, persist, waitForConfiguration }: {
@@ -43,12 +44,13 @@ export function createAudioControlQueue({ getSettings, writeSettings, persist, w
         }
         if (restored !== current) writeSettings(restored);
       }
-      await waitForConfiguration().catch(() => undefined);
+      await waitForControlOperation(waitForConfiguration(), cancellation).catch(() => undefined);
       return { ok: false, code: "internal-error" };
     }
-    // Persistence commits the mutation. Audio failures are surfaced by the app
-    // and must not turn a saved change into a failed command.
-    await waitForConfiguration().catch(() => undefined);
+    // Persistence commits the mutation. A deadline ends the configuration wait,
+    // but must report the saved change as applied even if routing finishes later.
+    // An in-flight save still owns its completion and rollback.
+    await waitForControlOperation(waitForConfiguration(), cancellation).catch(() => undefined);
     return { ok: true, data: applied.data };
   }
 

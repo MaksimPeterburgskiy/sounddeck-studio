@@ -3,6 +3,24 @@ import { createSoundPlayQueue } from "./soundPlayQueue";
 import { deferred } from "./testing/webAudioFakes";
 
 describe("per-sound play queue", () => {
+  it("releases a hung preparation at its deadline and prevents a late start", async () => {
+    const queue = createSoundPlayQueue();
+    const preparation = deferred<void>();
+    const controller = new AbortController();
+    const start = vi.fn();
+    const first = queue("sound-a", async (signal) => {
+      await preparation.promise;
+      if (!signal.aborted) start();
+    }, controller.signal);
+    await Promise.resolve();
+    controller.abort("operation-timeout");
+    await expect(first).rejects.toThrow("Control operation cancelled");
+    expect(await queue("sound-a", async () => "retry")).toBe("retry");
+    preparation.resolve();
+    await Promise.resolve();
+    expect(start).not.toHaveBeenCalled();
+  });
+
   it("preserves an already cancelled request without cancelling the next play", async () => {
     const queue = createSoundPlayQueue();
     const cancellation = new AbortController();
