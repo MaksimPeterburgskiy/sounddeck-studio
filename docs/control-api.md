@@ -90,7 +90,7 @@ Commands that change app state return `busy` while a hotkey is being captured an
 | `board.activate` | `boardId` | — |
 | `board.cycle` | Optional `direction`: `1` (default) or `-1` | — |
 | `library.get` | `{}` | Library summary in `data` |
-| `sound.image` | `soundId` | `data: {"image":"data:image/png;base64,..."}`; `image: null` if no custom image |
+| `sound.image` | `soundId` | `data: {"image":"data:image/png;base64,..."}`; `image: null` if no custom image; `payload-too-large` if encoded data exceeds 8 MiB |
 | `setting.set` | `key`, `value`: boolean | `data: {key,value}` |
 | `setting.toggle` | `key` | `data: {key,value}` |
 | `volume.set` | `bus`, `value`: number from 0 to 1 | `data: {bus,value,muted}` |
@@ -194,7 +194,7 @@ Session/HTTP errors use `{type:"error",code,message,protocol:1}`; WebSocket comm
 | `invalid-args` | Invalid command arguments or HTTP JSON / 400 |
 | `unknown-command` | Command not recognized |
 | `not-found` | Sound, board or endpoint missing / 404 |
-| `payload-too-large` | Body exceeds 64 KiB / 413; oversized WS frames close with code 1009 |
+| `payload-too-large` | Body exceeds 64 KiB / 413; oversized incoming WS frames close with code 1009; `sound.image` data exceeds 8 MiB (session stays open) |
 | `busy` | Hotkey capture active, session capacity reached, or pending command limit reached / 503 |
 | `unavailable` | Renderer unavailable or still initializing / 503 |
 | `internal-error` | Command could not be dispatched / 500 |

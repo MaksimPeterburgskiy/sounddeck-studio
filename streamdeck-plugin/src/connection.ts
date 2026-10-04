@@ -40,6 +40,7 @@ export class Connection {
   private imageGeneration = 0;
   private readonly images = new Map<string, string | null>();
   private readonly imageRequests = new Map<string, Promise<string | null>>();
+  private readonly oversizedImages = new Set<string>();
 
   constructor(private readonly version: string, private readonly options: ConnectionOptions = {}) {
     this.readDiscovery = options.discover ?? discover;
@@ -184,13 +185,15 @@ export class Connection {
     });
     socket.on("error", (error) => {
       if (!current()) return;
+      if ((error as NodeJS.ErrnoException).code === "WS_ERR_UNSUPPORTED_MESSAGE_LENGTH") this.rejectPendingImages();
       // A stopped listener supersedes authentication or protocol errors from
       // an earlier attempt, even when discovery still has the same token/port.
       if ((error as NodeJS.ErrnoException).code === "ECONNREFUSED") this.setStatus("offline");
       // Close schedules the next discovery attempt.
     });
-    socket.on("close", () => {
+    socket.on("close", (code) => {
       if (!current()) return;
+      if (code === 1009) this.rejectPendingImages();
       clearTimeout(this.handshakeTimer);
       clearInterval(this.heartbeatTimer);
       this.socket = null;
@@ -236,6 +239,7 @@ export class Connection {
     const snapshot = this.snapshot!;
     switch (event.event) {
       case "library.changed":
+        this.oversizedImages.clear();
         this.invalidateImages();
         this.snapshot = { ...snapshot, library: event.data, activeBoardId: event.data.activeBoardId };
         break;
@@ -279,14 +283,31 @@ export class Connection {
     this.images.clear();
     this.imageRequests.clear();
   }
-  peekImage(soundId: string): string | null | undefined { return this.images.get(soundId); }
+  private rejectPendingImages(): void {
+    // Older servers may send an oversized frame before we can read its id.
+    // Conservatively suppress all in-flight artwork across reconnects. The
+    // protocol has no image revision; a library.changed event permits a retry.
+    for (const soundId of this.imageRequests.keys()) this.oversizedImages.add(soundId);
+  }
+  peekImage(soundId: string): string | null | undefined {
+    return this.oversizedImages.has(soundId) ? null : this.images.get(soundId);
+  }
   getImage(soundId: string): Promise<string | null> {
+    if (this.oversizedImages.has(soundId)) return Promise.resolve(null);
     if (this.images.has(soundId)) return Promise.resolve(this.images.get(soundId)!);
     const pending = this.imageRequests.get(soundId);
     if (pending) return pending;
     const generation = this.imageGeneration;
     const request = this.command("sound.image", { soundId }).then((result) => {
-      if (generation !== this.imageGeneration || !result.ok || !result.data || !("image" in result.data)) return null;
+      if (generation !== this.imageGeneration) return null;
+      if (!result.ok) {
+        if (result.code === "payload-too-large") {
+          this.oversizedImages.add(soundId);
+          this.notify();
+        }
+        return null;
+      }
+      if (!result.data || !("image" in result.data)) return null;
       const image = result.data.image;
       this.images.set(soundId, image);
       this.notify();

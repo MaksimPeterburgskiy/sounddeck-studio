@@ -75,6 +75,65 @@ describe("shared connection", () => {
     unsubscribe();
   });
 
+  it("falls back for refused oversized artwork, keeps commands usable, and retries after artwork changes", async () => {
+    const { bridge, connection, upgrades } = await realServer();
+    const image = "data:image/png;base64," + "A".repeat(16 * 1024 * 1024);
+    bridge.updateLibrary({ ...library, boards: [{ ...library.boards[0], sounds: [{ ...library.boards[0].sounds[0], image }] }] });
+    const commands = vi.spyOn(connection, "command");
+    connection.start();
+    await waitFor(() => connection.status === "connected");
+    expect(await connection.getImage("sound-a")).toBeNull();
+    expect(connection.peekImage("sound-a")).toBeNull();
+    expect(await connection.getImage("sound-a")).toBeNull();
+    expect(commands).toHaveBeenCalledOnce();
+    expect((await connection.command("sound.play", { soundId: "sound-a" })).ok).toBe(true);
+    expect(upgrades).toHaveLength(1);
+    bridge.updateLibrary(library);
+    await waitFor(() => connection.peekImage("sound-a") === undefined);
+    expect(await connection.getImage("sound-a")).toBe(library.boards[0].sounds[0].image);
+  });
+
+  it("suppresses in-flight artwork after an older server's oversized frame across reconnects", async () => {
+    const image = "data:image/png;base64," + "A".repeat(16 * 1024 * 1024);
+    let sendOversized = true;
+    const imageResponses = vi.fn();
+    const { bridge, connection, upgrades } = await realServer({
+      createWebSocketServer: (options) => {
+        const server = new WebSocketServer(options);
+        server.on("connection", (socket) => {
+          const send = socket.send.bind(socket);
+          socket.send = ((data: string) => {
+            const message = JSON.parse(data);
+            if (message.type === "result" && message.data && "image" in message.data) {
+              imageResponses();
+              if (sendOversized) message.data.image = image;
+            }
+            send(JSON.stringify(message));
+          }) as typeof socket.send;
+        });
+        return server;
+      }
+    });
+    // Model a visible Play Sound key requesting artwork whenever it renders.
+    const unsubscribe = connection.subscribe(() => {
+      if (connection.status === "connected" && connection.peekImage("sound-a") === undefined) void connection.getImage("sound-a");
+    });
+    resources.push(unsubscribe);
+    connection.start();
+    await waitFor(() => upgrades.length === 2 && connection.status === "connected");
+    expect(connection.peekImage("sound-a")).toBeNull();
+    expect(await connection.getImage("sound-a")).toBeNull();
+    expect(imageResponses).toHaveBeenCalledOnce();
+    expect((await connection.command("sound.play", { soundId: "sound-a" })).ok).toBe(true);
+    expect(upgrades).toHaveLength(2);
+    sendOversized = false;
+    const replacement = "data:image/png;base64,bmV3";
+    bridge.updateLibrary({ ...library, boards: [{ ...library.boards[0], sounds: [{ ...library.boards[0].sounds[0], image: replacement }] }] });
+    await waitFor(() => connection.peekImage("sound-a") === replacement);
+    expect(imageResponses).toHaveBeenCalledTimes(2);
+    expect(upgrades).toHaveLength(2);
+  });
+
   it("waits for slow command results and settles pending work on disconnect before reconnecting", async () => {
     const { bridge, connection, command } = await realServer();
     connection.start();

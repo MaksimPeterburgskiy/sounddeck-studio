@@ -11,7 +11,7 @@ import rendererModule from "./controlRenderer.cjs";
 import { createAudioControlQueue } from "../src/lib/audioControlQueue.ts";
 import { CONTROL_PROTOCOL_VERSION, CONTROL_DEFAULT_PORT } from "../src/lib/controlProtocol.ts";
 
-const { createExternalControlBridge, launcherPath, PROTOCOL_VERSION, DEFAULT_PORT } = controlModule;
+const { createExternalControlBridge, launcherPath, PROTOCOL_VERSION, DEFAULT_PORT, MAX_IMAGE_DATA_BYTES } = controlModule;
 // Use real HTTP/WS parsers over in-memory sockets so the suite also runs in
 // sandboxes that disallow loopback listeners.
 const listeners = new Map();
@@ -545,6 +545,26 @@ describe("external control protocol and dispatch", () => {
     connection.send({ type: "command", id: "image", command: "sound.image", args: { soundId: "sound-new" } });
     expect(await connection.next()).toMatchObject({ id: "image", ok: true, data: { image: icon } });
     expect(onCommand).not.toHaveBeenCalled();
+  });
+
+  it.each([0, 1])("bounds encoded image data without closing the session (bytes above limit: %s)", async (extra) => {
+    await create();
+    const prefix = "data:image/png;base64,";
+    const overhead = Buffer.byteLength(JSON.stringify({ image: prefix }));
+    const image = prefix + "A".repeat(MAX_IMAGE_DATA_BYTES - overhead + extra);
+    bridge.updateLibrary({ ...library, boards: [{ ...library.boards[0], sounds: [{ ...library.boards[0].sounds[0], image }] }] });
+    const connection = await client({ maxPayload: 16 * 1024 * 1024 });
+    connection.send(hello());
+    expect((await connection.next()).type).toBe("welcome");
+    connection.send({ type: "command", id: "image", command: "sound.image", args: { soundId: "sound-new" } });
+    const result = await connection.next();
+    if (extra) expect(result).toEqual({ type: "result", id: "image", ok: false, code: "payload-too-large" });
+    else {
+      expect(result.ok).toBe(true);
+      expect(result.data.image === image).toBe(true);
+    }
+    connection.send({ type: "command", id: "play", command: "sound.play", args: { soundId: "sound-new" } });
+    expect(await connection.next()).toEqual({ type: "result", id: "play", ok: true });
   });
 
   it("resolves sound id first, then exact board and title, and reports missing bindings", async () => {

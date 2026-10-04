@@ -10,6 +10,9 @@ const MAX_PAYLOAD = 64 * 1024;
 const MAX_CLIENTS = 64;
 const MAX_PENDING_COMMANDS = 32;
 const MAX_BUFFERED = 8 * 1024 * 1024;
+// Bound encoded image data, leaving ample envelope headroom below the plugin's
+// 16 MiB receive limit. Imported artwork is preserved in the app's library.
+const MAX_IMAGE_DATA_BYTES = 8 * 1024 * 1024;
 const SETTING_KEYS = ["micPassthrough", "soundboardToVirtualMic", "noiseSuppressionEnabled", "echoCancellationEnabled", "monitorToHeadphones"];
 const VOLUME_BUSES = ["micVirtual", "micMonitor", "soundboardVirtual", "soundboardMonitor"];
 
@@ -260,7 +263,11 @@ function createExternalControlBridge({
         sound = library.boards.find((board) => board.id === args.boardId)?.sounds.find((candidate) => candidate.title === args.title);
       }
       if (!sound) return { ok: false, code: "not-found" };
-      if (command === "sound.image") return { ok: true, data: { image: images.get(sound.id) || null } };
+      if (command === "sound.image") {
+        const data = { image: images.get(sound.id) || null };
+        if (Buffer.byteLength(JSON.stringify(data)) > MAX_IMAGE_DATA_BYTES) return { ok: false, code: "payload-too-large" };
+        return { ok: true, data };
+      }
       args = { soundId: sound.id };
     }
     if (command === "board.activate" && !library.boards.some((board) => board.id === args.boardId)) return { ok: false, code: "not-found" };
@@ -690,4 +697,4 @@ function createExternalControlBridge({
   return { start, stop, getState, getSettings, setSettings, regenerateToken, beginUpdate, setDocument, updateLibrary, updateLiveState, getSnapshot };
 }
 
-module.exports = { createExternalControlBridge, launcherPath, PROTOCOL_VERSION, DEFAULT_PORT };
+module.exports = { createExternalControlBridge, launcherPath, PROTOCOL_VERSION, DEFAULT_PORT, MAX_IMAGE_DATA_BYTES };
