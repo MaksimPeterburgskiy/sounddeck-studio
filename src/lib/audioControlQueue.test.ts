@@ -354,7 +354,7 @@ describe("external control library persistence", () => {
     expect(saveLibrary).toHaveBeenCalledTimes(2);
   });
 
-  it.each(["reject", "not-ok"])("leaves an unsaved edit eligible for UI persistence after a same-value command's save fails (%s)", async (failure) => {
+  it.each(["reject", "not-ok"])("releases a failed control save for UI persistence (%s)", async (failure) => {
     let library: SoundLibrary = { version: 1, activeBoardId: "edited-board", boards: [], settings: makeAudioSettings({ micPassthrough: false }) };
     const savedLibraries = new WeakSet<SoundLibrary>();
     const save = deferred<{ ok: boolean }>();
@@ -366,15 +366,16 @@ describe("external control library persistence", () => {
       persist: () => persistControlLibrary(library, savedLibraries, saveLibrary),
       waitForConfiguration: async () => {}
     });
-    const failed = queue.enqueue({ command: "setting.set", args: { key: "micPassthrough", value: false } });
+    // No-op commands skip saving, so use a real change that is rolled back on failure.
+    const failed = queue.enqueue({ command: "setting.set", args: { key: "micPassthrough", value: true } });
     await vi.waitFor(() => expect(saveLibrary).toHaveBeenCalledOnce());
     const snapshot = library;
     expect(savedLibraries.has(snapshot)).toBe(true);
     if (failure === "reject") save.reject(new Error("disk full"));
     else save.resolve({ ok: false });
     expect(await failed).toEqual({ ok: false, code: "internal-error" });
-    expect(writeSettings).toHaveBeenCalledOnce();
-    expect(library).toBe(snapshot);
+    expect(writeSettings).toHaveBeenCalledTimes(2);
+    expect(library.settings.micPassthrough).toBe(false);
     expect(library.activeBoardId).toBe("edited-board");
     expect(savedLibraries.has(snapshot)).toBe(false);
   });
