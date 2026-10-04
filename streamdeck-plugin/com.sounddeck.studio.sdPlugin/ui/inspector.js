@@ -12,6 +12,11 @@ let receiving = false;
 let sounds = [];
 let queue = Promise.resolve();
 let latestRevision = 0;
+let connectionLabel = "";
+let saveFailed = false;
+const renderStatus = () => {
+  document.getElementById("status").textContent = saveFailed ? "Could not save. Please retry." : connectionLabel;
+};
 const revisionOf = (value) => Number.isSafeInteger(value.inspectorRevision) && value.inspectorRevision >= 0
   ? value.inspectorRevision : 0;
 
@@ -29,12 +34,19 @@ const save = (value) => {
   // Save complete snapshots in order and update our cache before the next change.
   applySettings({ ...value, inspectorRevision: latestRevision + 1 });
   const snapshot = { ...settings };
-  queue = queue.then(() => client.setSettings(snapshot)).catch(() => {
-    document.getElementById("status").textContent = "Could not save. Please retry.";
+  queue = queue.then(() => client.setSettings(snapshot)).then(() => {
+    saveFailed = false;
+    renderStatus();
+  }).catch(() => {
+    saveFailed = true;
+    renderStatus();
   });
 };
 client.sendToPropertyInspector.subscribe(({ payload }) => {
-  if (payload?.event === "status") document.getElementById("status").textContent = payload.label || "";
+  if (payload?.event === "status") {
+    connectionLabel = payload.label || "";
+    renderStatus();
+  }
   if (payload?.event === "sounds") sounds = payload.items || [];
 });
 if (board || key) {

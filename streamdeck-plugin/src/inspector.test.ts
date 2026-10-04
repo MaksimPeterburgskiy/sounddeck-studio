@@ -81,7 +81,7 @@ describe("play sound inspector", () => {
       boardId: "d", soundId: "", title: "", inspectorRevision: 10,
     });
   });
-  it("keeps protection on save failure and lets the next edit retry", async () => {
+  it.each(["", "Offline"])("clears a save failure after retry while keeping the current connection label (%j)", async (label) => {
     const ui = inspector({ boardId: "a" }); await flush();
     ui.client.setSettings.mockRejectedValueOnce(new Error("Disconnected"));
     ui.elements.board.value = "b";
@@ -89,11 +89,15 @@ describe("play sound inspector", () => {
     ui.receive({ boardId: "a" });
     expect(ui.elements.board.value).toBe("b");
     expect(ui.elements.status.textContent).toBe("Could not save. Please retry.");
+    ui.message({ event: "status", label });
+    expect(ui.elements.status.textContent).toBe("Could not save. Please retry.");
     ui.elements.board.value = "c";
     await flush();
     expect(ui.client.setSettings).toHaveBeenLastCalledWith({
       boardId: "c", soundId: "", title: "", inspectorRevision: 2,
     });
+    // No settings echo or further status message is needed to clear the error.
+    expect(ui.elements.status.textContent).toBe(label);
   });
 });
 
