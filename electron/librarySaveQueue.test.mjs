@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
@@ -12,6 +12,74 @@ function deferred() {
   const promise = new Promise((done, fail) => { resolve = done; reject = fail; });
   return { promise, resolve, reject };
 }
+
+afterEach(() => vi.useRealTimers());
+
+function fakeFileSystem() {
+  return { mkdir: vi.fn().mockResolvedValue(), writeFile: vi.fn().mockResolvedValue(), unlink: vi.fn().mockResolvedValue() };
+}
+
+describe("atomic library replacement", () => {
+  it.each(["EPERM", "EACCES", "EBUSY"])("retries transient Windows %s failures before committing", async (code) => {
+    vi.useFakeTimers();
+    const fileSystem = fakeFileSystem();
+    const error = Object.assign(new Error("File locked"), { code });
+    const replace = vi.fn().mockImplementationOnce(() => { throw error; })
+      .mockImplementationOnce(() => { throw error; }).mockReturnValue(undefined);
+    const save = createAtomicLibrarySave("library.json", { fileSystem, replace, platform: "win32" });
+    const result = Promise.allSettled([save({ volume: 0.9 }, new AbortController().signal)]);
+    await vi.runAllTimersAsync();
+    expect(await result).toEqual([{ status: "fulfilled", value: { ok: true } }]);
+    expect(replace).toHaveBeenCalledTimes(3);
+    expect(new Set(replace.mock.calls.map(([temporary]) => temporary)).size).toBe(1);
+    expect(fileSystem.unlink).toHaveBeenCalledOnce();
+  });
+
+  it("bounds Windows lock retries to one second and leaves other failures immediate", async () => {
+    vi.useFakeTimers();
+    const error = Object.assign(new Error("File locked"), { code: "EBUSY" });
+    const replace = vi.fn(() => { throw error; });
+    const save = createAtomicLibrarySave("library.json", { fileSystem: fakeFileSystem(), replace, platform: "win32" });
+    const settled = vi.fn();
+    const result = Promise.allSettled([save({}, new AbortController().signal)]).then(settled);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1000);
+    await result;
+    expect(settled).toHaveBeenCalledWith([{ status: "rejected", reason: error }]);
+    const attempts = replace.mock.calls.length;
+    expect(attempts).toBeGreaterThan(1);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(replace).toHaveBeenCalledTimes(attempts);
+    for (const [platform, code] of [["linux", "EPERM"], ["darwin", "EACCES"], ["win32", "ENOSPC"]]) {
+      const failure = Object.assign(new Error("Cannot rename"), { code });
+      const replace = vi.fn(() => { throw failure; });
+      const save = createAtomicLibrarySave("library.json", { fileSystem: fakeFileSystem(), replace, platform });
+      await expect(save({}, new AbortController().signal)).rejects.toBe(failure);
+      expect(replace).toHaveBeenCalledOnce();
+    }
+  });
+
+  it("never retries a cancelled Windows save over the newer queued snapshot", async () => {
+    vi.useFakeTimers();
+    const fileSystem = fakeFileSystem();
+    const error = Object.assign(new Error("File locked"), { code: "EPERM" });
+    const replace = vi.fn().mockImplementationOnce(() => { throw error; });
+    const atomicSave = createAtomicLibrarySave("library.json", { fileSystem, replace, platform: "win32" });
+    const queue = createLibrarySaveQueue({ load: vi.fn(), save: atomicSave, timeoutMs: 5 });
+    const first = Promise.allSettled([queue.save({ volume: 0.3 })]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(replace).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(5);
+    expect(await first).toMatchObject([{ status: "rejected", reason: { message: "Library save timed out" } }]);
+    expect(await queue.save({ volume: 0.9 })).toEqual({ ok: true });
+    await vi.runAllTimersAsync();
+    expect(replace).toHaveBeenCalledTimes(2);
+    expect(fileSystem.writeFile.mock.calls.map(([, data]) => JSON.parse(data))).toEqual([{ volume: 0.3 }, { volume: 0.9 }]);
+    expect(replace.mock.calls[1][0]).toBe(fileSystem.writeFile.mock.calls[1][0]);
+    expect(fileSystem.unlink).toHaveBeenCalledTimes(2);
+  });
+});
 
 describe("library save queue", () => {
   it("releases a hung write for the newest retry and prevents a late stale write from replacing it", async () => {
