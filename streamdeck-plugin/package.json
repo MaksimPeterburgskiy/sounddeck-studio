@@ -15,7 +15,7 @@
     "restart": "streamdeck restart com.sounddeck.studio"
   },
   "dependencies": {
-    "@elgato/streamdeck": "^2.1.2",
+    "@elgato/streamdeck": "^3.0.1",
     "ws": "^8.22.0"
   },
   "devDependencies": {
