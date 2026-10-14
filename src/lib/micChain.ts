@@ -23,8 +23,8 @@ interface FilterUnit {
   dispose(): void;
 }
 
-const FADE_TIME_CONSTANT = 0.003;
-const REWIRE_DELAY_MS = 15;
+const CROSSFADE_SEC = 0.02;
+const REWIRE_FADE_SEC = 0.006;
 const PARAM_TIME_CONSTANT = 0.015;
 const SILENCE_DB = -100;
 
@@ -48,9 +48,23 @@ function dbToGain(db: number) {
 }
 
 /**
- * The live mic filter chain: one 48 kHz context holding every enabled filter in user order.
- * Parameter edits go straight to the running nodes; toggles, reorders, adds, and removes
- * rewire behind a short fade so they never click or reopen the microphone.
+ * One position in the chain. The dry path is always wired, so switching a filter on or off is a
+ * crossfade between dry and wet with no rewiring. The filter itself only exists while it's on.
+ */
+interface ChainSlot {
+  input: GainNode;
+  output: GainNode;
+  dry: GainNode;
+  wet: GainNode;
+  enabled: boolean;
+  unit?: FilterUnit;
+  releaseTimer?: ReturnType<typeof setTimeout>;
+}
+
+/**
+ * The live mic filter chain: one 48 kHz context holding every filter in user order. Parameter
+ * edits go straight to the running nodes and on/off switches crossfade in place. Adding,
+ * removing, or reordering rewires behind a short fade. None of it reopens the microphone.
  */
 export class MicChain {
   readonly destination: MediaStreamAudioDestinationNode;
@@ -61,11 +75,11 @@ export class MicChain {
   private readonly meterBuffer: Float32Array<ArrayBuffer>;
   private source?: MediaStreamAudioSourceNode;
   private sourceStream?: MediaStream;
-  private units = new Map<string, FilterUnit>();
-  private wired: FilterUnit[] = [];
+  private slots = new Map<string, ChainSlot>();
+  private wired: ChainSlot[] = [];
   private edges: Array<[AudioNode, AudioNode]> = [];
-  private pending?: FilterUnit[];
-  private retired: FilterUnit[] = [];
+  private pending?: ChainSlot[];
+  private retired: ChainSlot[] = [];
   private rewireTimer?: ReturnType<typeof setTimeout>;
   private metering = false;
   private disposed = false;
@@ -110,7 +124,7 @@ export class MicChain {
   /** Total delay the enabled filters add, in milliseconds. */
   get latencyMs() {
     let total = 0;
-    for (const unit of this.units.values()) total += unit.latencyMs;
+    for (const slot of this.slots.values()) if (slot.enabled && slot.unit) total += slot.unit.latencyMs;
     return total;
   }
 
@@ -126,29 +140,25 @@ export class MicChain {
 
   apply(settings: ChainSettings) {
     if (this.disposed) return;
-    const next: FilterUnit[] = [];
+    const next: ChainSlot[] = [];
     const keep = new Set<string>();
     for (const entry of settings.micChain) {
-      if (!micChainEntryEnabled(entry, settings)) continue;
       const key = `${entry.type}:${entry.id}`;
-      let unit = this.units.get(key);
-      if (unit) unit.update(entry, settings);
-      else {
-        unit = this.createUnit(entry, settings);
-        unit.setMetering(this.metering);
-        this.units.set(key, unit);
+      let slot = this.slots.get(key);
+      const created = !slot;
+      if (!slot) {
+        slot = this.createSlot();
+        this.slots.set(key, slot);
       }
+      // New slots are silent until the rewire fade brings them in, so they switch on at once.
+      this.setSlotEnabled(slot, entry, settings, created || !this.applied);
       keep.add(key);
-      next.push(unit);
+      next.push(slot);
     }
-    for (const [key, unit] of this.units) {
+    for (const [key, slot] of this.slots) {
       if (keep.has(key)) continue;
-      this.units.delete(key);
-      if (unit === this.noiseSuppressionUnit) {
-        this.noiseSuppressionUnit = undefined;
-        this.noiseSuppression = undefined;
-      }
-      this.retired.push(unit);
+      this.slots.delete(key);
+      this.retired.push(slot);
     }
     if (!this.applied) {
       this.applied = true;
@@ -156,18 +166,18 @@ export class MicChain {
       return;
     }
     const current = this.pending ?? this.wired;
-    if (next.length !== current.length || next.some((unit, index) => unit !== current[index])) this.rewire(next);
+    if (next.length !== current.length || next.some((slot, index) => slot !== current[index])) this.rewire(next);
   }
 
   setMetering(enabled: boolean) {
     this.metering = enabled;
-    for (const unit of this.units.values()) unit.setMetering(enabled);
+    for (const slot of this.slots.values()) slot.unit?.setMetering(enabled);
   }
 
   readMeters(): MicMeterReading {
     const gainReductionDb: Record<string, number> = {};
-    for (const [key, unit] of this.units) {
-      if (unit.gainReductionDb !== undefined) gainReductionDb[key.slice(key.indexOf(":") + 1)] = unit.gainReductionDb;
+    for (const [key, slot] of this.slots) {
+      if (slot.enabled && slot.unit?.gainReductionDb !== undefined) gainReductionDb[key.slice(key.indexOf(":") + 1)] = slot.unit.gainReductionDb;
     }
     return {
       inputDb: analyserPeakDb(this.inputAnalyser, this.meterBuffer),
@@ -181,31 +191,106 @@ export class MicChain {
     this.disposed = true;
     if (this.rewireTimer !== undefined) clearTimeout(this.rewireTimer);
     this.source?.disconnect();
-    for (const unit of [...this.units.values(), ...this.retired]) unit.dispose();
-    this.units.clear();
+    for (const slot of [...this.slots.values(), ...this.retired]) this.disposeSlot(slot);
+    this.slots.clear();
     this.retired = [];
     this.destination.stream.getTracks().forEach((track) => track.stop());
     void this.context.close().catch(() => undefined);
   }
 
+  private createSlot(): ChainSlot {
+    const slot: ChainSlot = {
+      input: this.context.createGain(),
+      output: this.context.createGain(),
+      dry: this.context.createGain(),
+      wet: this.context.createGain(),
+      enabled: false
+    };
+    slot.wet.gain.value = 0;
+    slot.input.connect(slot.dry).connect(slot.output);
+    slot.wet.connect(slot.output);
+    return slot;
+  }
+
+  private setSlotEnabled(slot: ChainSlot, entry: MicChainEntry, settings: ChainSettings, immediate: boolean) {
+    const enabled = micChainEntryEnabled(entry, settings);
+    if (enabled) {
+      if (slot.releaseTimer !== undefined) clearTimeout(slot.releaseTimer);
+      slot.releaseTimer = undefined;
+      if (slot.unit) slot.unit.update(entry, settings);
+      else {
+        const unit = this.createUnit(entry, settings);
+        unit.setMetering(this.metering);
+        slot.input.connect(unit.input);
+        unit.output.connect(slot.wet);
+        slot.unit = unit;
+      }
+    }
+    if (enabled === slot.enabled) return;
+    slot.enabled = enabled;
+    this.crossfade(slot.wet.gain, enabled ? 1 : 0, immediate);
+    this.crossfade(slot.dry.gain, enabled ? 0 : 1, immediate);
+    // Keep a switched-off filter running until its fade-out finishes, then free it.
+    if (!enabled && slot.unit) slot.releaseTimer = setTimeout(() => this.releaseUnit(slot), CROSSFADE_SEC * 1000 + 20);
+  }
+
+  private crossfade(param: AudioParam, target: number, immediate: boolean) {
+    const now = this.context.currentTime;
+    param.cancelScheduledValues(now);
+    if (immediate) {
+      param.setValueAtTime(target, now);
+      return;
+    }
+    param.setValueAtTime(param.value, now);
+    param.linearRampToValueAtTime(target, now + CROSSFADE_SEC);
+  }
+
+  private releaseUnit(slot: ChainSlot) {
+    slot.releaseTimer = undefined;
+    const unit = slot.unit;
+    if (!unit || slot.enabled) return;
+    slot.unit = undefined;
+    try {
+      slot.input.disconnect(unit.input);
+    } catch {
+      // Already disconnected.
+    }
+    unit.dispose();
+    if (unit === this.noiseSuppressionUnit) {
+      this.noiseSuppressionUnit = undefined;
+      this.noiseSuppression = undefined;
+    }
+  }
+
+  private disposeSlot(slot: ChainSlot) {
+    if (slot.releaseTimer !== undefined) clearTimeout(slot.releaseTimer);
+    slot.enabled = false;
+    this.releaseUnit(slot);
+    for (const node of [slot.input, slot.dry, slot.wet, slot.output]) node.disconnect();
+  }
+
   /** Fade out, swap the wiring, fade back in. */
-  private rewire(next: FilterUnit[]) {
+  private rewire(next: ChainSlot[]) {
     this.pending = next;
     if (this.rewireTimer !== undefined) return;
     const fade = this.fade.gain;
-    fade.cancelScheduledValues(this.context.currentTime);
-    fade.setTargetAtTime(0, this.context.currentTime, FADE_TIME_CONSTANT);
+    const now = this.context.currentTime;
+    fade.cancelScheduledValues(now);
+    fade.setValueAtTime(fade.value, now);
+    fade.linearRampToValueAtTime(0, now + REWIRE_FADE_SEC);
     this.rewireTimer = setTimeout(() => {
       this.rewireTimer = undefined;
       if (this.disposed || !this.pending) return;
       this.connect(this.pending);
       this.pending = undefined;
-      fade.cancelScheduledValues(this.context.currentTime);
-      fade.setTargetAtTime(1, this.context.currentTime, FADE_TIME_CONSTANT);
-    }, REWIRE_DELAY_MS);
+      const resume = this.context.currentTime;
+      fade.cancelScheduledValues(resume);
+      fade.setValueAtTime(0, resume);
+      fade.linearRampToValueAtTime(1, resume + REWIRE_FADE_SEC);
+    }, REWIRE_FADE_SEC * 1000 + 2);
   }
 
-  private connect(units: FilterUnit[]) {
+  private connect(slots: ChainSlot[]) {
     for (const [from, to] of this.edges) {
       try {
         from.disconnect(to);
@@ -215,15 +300,15 @@ export class MicChain {
     }
     this.edges = [];
     let tail: AudioNode = this.input;
-    for (const unit of units) {
-      tail.connect(unit.input);
-      this.edges.push([tail, unit.input]);
-      tail = unit.output;
+    for (const slot of slots) {
+      tail.connect(slot.input);
+      this.edges.push([tail, slot.input]);
+      tail = slot.output;
     }
     tail.connect(this.fade);
     this.edges.push([tail, this.fade]);
-    this.wired = units;
-    for (const unit of this.retired) unit.dispose();
+    this.wired = slots;
+    for (const slot of this.retired) this.disposeSlot(slot);
     this.retired = [];
   }
 

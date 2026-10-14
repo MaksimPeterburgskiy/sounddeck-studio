@@ -60,7 +60,7 @@ describe("MicChain", () => {
     });
     chain.apply(chainSettings(edited, { noiseSuppressionAttenuationDb: 24 }));
     expect(context.biquads[2].gain.setTargetAtTime).toHaveBeenLastCalledWith(0, 0, expect.any(Number));
-    expect(context.gains[2].gain.setTargetAtTime).toHaveBeenLastCalledWith(expect.closeTo(0.501, 2), 0, expect.any(Number));
+    expect(context.gains.some((node) => node.gain.setTargetAtTime.mock.lastCall?.[0] === 10 ** (-6 / 20))).toBe(true);
     expect(worker.postMessage).toHaveBeenCalledWith({ type: "attenuation", value: 24 });
     expect(chain.latencyMs).toBe(35);
 

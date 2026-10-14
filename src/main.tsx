@@ -1369,6 +1369,7 @@ function App() {
                 ...current,
                 boards: current.boards.map((board) => board.id === activeBoard.id ? { ...board, sounds: [...board.sounds, sound], updatedAt: now() } : board)
               }));
+              engineRef.current?.preload(sound).then((buffer) => updateSound(sound.id, { duration: buffer.duration, waveform: makeWaveform(buffer) })).catch(() => undefined);
               setView("board");
             }}
           />

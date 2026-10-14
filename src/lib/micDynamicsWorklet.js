@@ -199,6 +199,20 @@ class DeesserProcessor extends DynamicsProcessor {
   }
 }
 
+// Intersample peaks are estimated at 4x by a Hann-windowed sinc over 8 neighbouring samples,
+// so the ceiling holds once the signal is reconstructed, not just at the sample points.
+const TRUE_PEAK_TAPS = 8;
+const TRUE_PEAK_DELAY = TRUE_PEAK_TAPS / 2;
+const TRUE_PEAK_PHASES = [0.25, 0.5, 0.75].map((fraction) => {
+  const weights = Array.from({ length: TRUE_PEAK_TAPS }, (_, tap) => {
+    const distance = tap - (TRUE_PEAK_DELAY - 1) - fraction;
+    const sinc = distance === 0 ? 1 : Math.sin(Math.PI * distance) / (Math.PI * distance);
+    return sinc * 0.5 * (1 + Math.cos((Math.PI * distance) / TRUE_PEAK_DELAY));
+  });
+  const sum = weights.reduce((total, weight) => total + weight, 0);
+  return Float64Array.from(weights, (weight) => weight / sum);
+});
+
 class LimiterProcessor extends DynamicsProcessor {
   constructor(options) {
     super();
@@ -207,6 +221,9 @@ class LimiterProcessor extends DynamicsProcessor {
     this.delay = new Float32Array(this.capacity);
     this.dequeGains = new Float64Array(this.capacity);
     this.dequeIndices = new Float64Array(this.capacity);
+    this.history = new Float64Array(TRUE_PEAK_TAPS);
+    this.historyPosition = 0;
+    this.previousSegmentPeak = 0;
     this.setParams(options?.processorOptions?.params);
   }
 
@@ -226,7 +243,26 @@ class LimiterProcessor extends DynamicsProcessor {
       this.head = 0;
       this.count = 0;
       this.gain = 1;
+      this.history.fill(0);
+      this.previousSegmentPeak = 0;
     }
+  }
+
+  /** Peak of the sample TRUE_PEAK_DELAY back and the reconstructed signal on either side of it. */
+  detectPeak(input) {
+    const history = this.history;
+    history[this.historyPosition] = input;
+    this.historyPosition = (this.historyPosition + 1) % TRUE_PEAK_TAPS;
+    let segmentPeak = 0;
+    for (const weights of TRUE_PEAK_PHASES) {
+      let value = 0;
+      for (let tap = 0; tap < TRUE_PEAK_TAPS; tap += 1) value += weights[tap] * history[(this.historyPosition + tap) % TRUE_PEAK_TAPS];
+      segmentPeak = Math.max(segmentPeak, Math.abs(value));
+    }
+    const sample = Math.abs(history[(this.historyPosition + TRUE_PEAK_DELAY - 1) % TRUE_PEAK_TAPS]);
+    const peak = Math.max(sample, segmentPeak, this.previousSegmentPeak);
+    this.previousSegmentPeak = segmentPeak;
+    return peak;
   }
 
   processSample(input) {
@@ -238,7 +274,8 @@ class LimiterProcessor extends DynamicsProcessor {
       this.head = (this.head + 1) % this.capacity;
       this.count -= 1;
     }
-    const required = Math.min(1, this.ceiling / Math.max(1e-12, Math.abs(input)));
+    // Detection runs TRUE_PEAK_DELAY samples behind the input, still well ahead of the output.
+    const required = Math.min(1, this.ceiling / Math.max(1e-12, this.detectPeak(input)));
     while (this.count > 0) {
       const tail = (this.head + this.count - 1) % this.capacity;
       if (this.dequeGains[tail] <= required) break;
@@ -252,7 +289,7 @@ class LimiterProcessor extends DynamicsProcessor {
     if (target < this.gain) {
       // A fixed slope reaches each target within the delay, even if a later,
       // stronger peak replaces it at the front of the deque.
-      this.gain = Math.max(target, this.gain - (1 - target) / (this.lookahead + 1));
+      this.gain = Math.max(target, this.gain - (1 - target) / (this.lookahead - TRUE_PEAK_DELAY + 1));
     } else {
       this.gain = Math.min(target, 1 + this.releaseCoefficient * (this.gain - 1));
     }

@@ -93,6 +93,16 @@ describe("Microphone dynamics audio worklets", () => {
     expect(output[656]).toBeCloseTo(amplitude(-1), 6);
   });
 
+  it("keeps reconstructed peaks between samples under the ceiling", async () => {
+    const create = await loadProcessors();
+    const processor = create("limiter", { ceilingDb: -6, lookaheadMs: 3 });
+    // A quarter-sample-rate tone sampled 45° off its crest: samples sit 3 dB under the true peak.
+    const truePeak = amplitude(-4);
+    const output = render(processor, 9600, (index) => truePeak * Math.sin((Math.PI / 2) * index + Math.PI / 4));
+    const settled = Math.max(...output.slice(4800).map(Math.abs));
+    expect(settled * Math.SQRT2).toBeLessThanOrEqual(amplitude(-6) * 1.01);
+  });
+
   it("passes quiet audio through with the exact delay, including a lookahead update", async () => {
     const create = await loadProcessors();
     const processor = create("limiter", { lookaheadMs: 3 });

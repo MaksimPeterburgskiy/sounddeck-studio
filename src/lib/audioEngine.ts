@@ -942,6 +942,8 @@ export class AudioEngine {
     }
     this.updateEchoCancellationStatus(stream);
 
+    // Reopening already interrupts the audio, so a chain nothing needs can go now.
+    if (!this.chainWanted()) this.disposeMicChain();
     await this.syncMicChain();
     if (generation !== this.micConfigureGeneration || configureGeneration !== this.configureGeneration || this.disposed || !this.needsMicrophone()) return;
     this.markMicApplied(configureGeneration);
@@ -1030,8 +1032,9 @@ export class AudioEngine {
 
   /**
    * Bring the filter chain and the mic routes in line with the current settings: build the chain
-   * the first time a filter is switched on, update it in place afterwards, and drop it (routing
-   * the raw mic again) once nothing needs it.
+   * the first time a filter is switched on and update it in place afterwards. Once built it stays
+   * up while the mic is open, so switching the last filter off and on again (say, noise
+   * suppression from a Stream Deck key) never reroutes the mic. It's dropped when the mic closes.
    */
   private async syncMicChain() {
     if (this.micStream && this.chainWanted() && !this.micChain) {
@@ -1043,7 +1046,7 @@ export class AudioEngine {
     }
     if (this.disposed) return;
     const chain = this.micChain;
-    if (chain && (!this.chainWanted() || (!this.micStream && this.recorderLeases === 0))) {
+    if (chain && !this.micStream && this.recorderLeases === 0) {
       this.micChain = undefined;
       this.connectMicRoutes();
       chain.dispose();

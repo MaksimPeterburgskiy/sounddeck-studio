@@ -1207,7 +1207,7 @@ describe("AudioEngine mic filter chain", () => {
     vi.restoreAllMocks();
   });
 
-  it("builds, updates, and drops the chain as filters switch on and off without reopening the mic", async () => {
+  it("builds the chain on demand, updates it in place, and drops it when the mic closes", async () => {
     const captured = fakeStream();
     const getUserMedia = vi.fn().mockResolvedValue(captured.stream);
     vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
@@ -1237,47 +1237,59 @@ describe("AudioEngine mic filter chain", () => {
     expect(chainContext.workletNodes.map((node) => node.name)).toEqual(["sounddeck-deep-filter"]);
     expect(FakeWorker.instances).toHaveLength(1);
 
+    // Switching everything off keeps the routes on the chain, so turning a filter back on is gapless.
     await engine.configure(off, "cable-device");
-    expect(chainContext.close).toHaveBeenCalledOnce();
-    expect(FakeWorker.instances[0].terminate).toHaveBeenCalledOnce();
-    expect(liveStreams(monitor)).toEqual([captured.stream]);
+    await vi.waitFor(() => expect(FakeWorker.instances[0].terminate).toHaveBeenCalledOnce());
+    expect(chainContext.close).not.toHaveBeenCalled();
+    expect(liveStreams(monitor)).toEqual([processed]);
     expect(processingStatus).toHaveBeenLastCalledWith(expect.objectContaining({ filterChain: "disabled", noiseSuppression: "disabled", latencyMs: 0 }));
     expect(getUserMedia).toHaveBeenCalledOnce();
+
+    await engine.configure({ ...off, monitorMicToHeadphones: false, micPassthrough: false }, "cable-device");
+    expect(chainContext.close).toHaveBeenCalledOnce();
+    expect(captured.track.stop).toHaveBeenCalled();
     await engine.dispose();
   });
 
-  it("reorders behind a short fade and sends parameter edits to running worklets", async () => {
+  it("crossfades on/off switches in place and reorders behind a short fade", async () => {
     vi.useFakeTimers();
     vi.stubGlobal("navigator", { mediaDevices: { getUserMedia: vi.fn().mockResolvedValue(fakeStream().stream) } });
     const initial = { ...routed, micChain: [noiseSlot, highPass, gain, compressor] };
     const engine = new AudioEngine(initial, vi.fn());
     await engine.configure(initial, "cable-device");
     const chainContext = FakeAudioContext.instances[3];
-    const [input, fade, trim] = chainContext.gains;
+    const [input, fade] = chainContext.gains;
     const [first, second] = chainContext.biquads;
+    const trim = chainContext.gains.find((node) => Math.abs(node.gain.value - 10 ** (6 / 20)) < 1e-9)!;
     const worklet = chainContext.workletNodes[0];
-    expect(input.connections).toContain(first);
-    expect(second.connections).toContain(trim);
-    expect(trim.connections).toContain(worklet);
-    expect(worklet.connections).toContain(fade);
+    // Each filter sits in a slot: slot input → (dry | filter → wet) → slot output.
+    const slotInput = (node: unknown) => chainContext.gains.find((candidate) => candidate !== node && candidate.connections.includes(node))!;
+    const wetOf = (node: { connections: unknown[] }) => node.connections[0] as FakeGainNode;
+    const slotOutput = (node: { connections: unknown[] }) => wetOf(node).connections[0] as FakeGainNode;
     expect(worklet.options?.processorOptions).toEqual({ params: compressor.params });
+    expect(slotOutput(second).connect).toHaveBeenLastCalledWith(slotInput(trim));
+    expect(slotOutput(trim).connect).toHaveBeenLastCalledWith(slotInput(worklet));
+    expect(slotOutput(worklet).connect).toHaveBeenLastCalledWith(fade);
+
+    const rewires = input.connect.mock.calls.length;
+    await engine.configure({ ...initial, micChain: [noiseSlot, highPass, gain, { ...compressor, enabled: false }] }, "cable-device");
+    expect(wetOf(worklet).gain.linearRampToValueAtTime).toHaveBeenLastCalledWith(0, expect.any(Number));
+    expect(input.connect).toHaveBeenCalledTimes(rewires);
+    vi.advanceTimersByTime(60);
+    expect(worklet.disconnect).toHaveBeenCalled();
 
     await engine.configure({ ...initial, micChain: [noiseSlot, gain, highPass, compressor] }, "cable-device");
-    expect(fade.gain.setTargetAtTime).toHaveBeenLastCalledWith(0, 0, expect.any(Number));
-    expect(input.connect).not.toHaveBeenCalledWith(trim);
+    const revived = chainContext.workletNodes[1];
+    expect(fade.gain.linearRampToValueAtTime).toHaveBeenLastCalledWith(0, expect.any(Number));
+    expect(slotOutput(trim).connect).not.toHaveBeenCalledWith(slotInput(first));
     vi.advanceTimersByTime(20);
-    expect(input.disconnect).toHaveBeenCalledWith(first);
-    expect(input.connect).toHaveBeenLastCalledWith(trim);
-    expect(trim.connect).toHaveBeenLastCalledWith(first);
-    expect(second.connect).toHaveBeenLastCalledWith(worklet);
-    expect(fade.gain.setTargetAtTime).toHaveBeenLastCalledWith(1, 0, expect.any(Number));
+    expect(slotOutput(trim).connect).toHaveBeenLastCalledWith(slotInput(first));
+    expect(slotOutput(second).connect).toHaveBeenLastCalledWith(slotInput(revived));
+    expect(fade.gain.linearRampToValueAtTime).toHaveBeenLastCalledWith(1, expect.any(Number));
 
-    const connectCalls = input.connect.mock.calls.length;
     const louder = { ...compressor, params: { ...compressor.params, thresholdDb: -24 } };
     await engine.configure({ ...initial, micChain: [noiseSlot, gain, highPass, louder] }, "cable-device");
-    expect(worklet.port.postMessage).toHaveBeenLastCalledWith({ type: "params", params: louder.params });
-    vi.advanceTimersByTime(20);
-    expect(input.connect).toHaveBeenCalledTimes(connectCalls);
+    expect(revived.port.postMessage).toHaveBeenLastCalledWith({ type: "params", params: louder.params });
     await engine.dispose();
   });
 

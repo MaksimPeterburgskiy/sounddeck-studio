@@ -10,6 +10,9 @@ export class FakeAudioParam {
   exponentialRampToValueAtTime = vi.fn((value: number) => {
     this.value = value;
   });
+  linearRampToValueAtTime = vi.fn((value: number) => {
+    this.value = value;
+  });
   setTargetAtTime = vi.fn((value: number) => {
     this.value = value;
   });
