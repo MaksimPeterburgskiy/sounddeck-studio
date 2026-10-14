@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { createRoot } from "react-dom/client";
 import {
-  Activity,
   AlertCircle,
   ArrowRightLeft,
   AudioLines,
@@ -17,6 +17,7 @@ import {
   Image as ImageIcon,
   Keyboard,
   Link,
+  Lock,
   Mic,
   OctagonX,
   Pause,
@@ -33,7 +34,6 @@ import {
   Scissors,
   Settings,
   ShieldCheck,
-  SlidersHorizontal,
   Speaker,
   Square,
   Trash2,
@@ -41,27 +41,29 @@ import {
   Volume2,
   VolumeX,
   Wand2,
-  Waves,
   X
 } from "lucide-react";
 import { createAudioControlQueue, persistControlLibrary } from "./lib/audioControlQueue";
-import { AudioEngine } from "./lib/audioEngine";
+import { AudioEngine, disabledMicrophoneProcessingStatus } from "./lib/audioEngine";
 import { CONTROL_DEFAULT_PORT } from "./lib/controlProtocol";
 import { beginAudioConfiguration, trackAudioConfiguration, waitForAudioConfiguration, watchAudioDeviceChanges } from "./lib/controlReadiness";
 import { createControlCancellation } from "./lib/controlCancellation";
 import { SoundTriggers } from "./lib/soundTriggers";
 import type { ControlPlaybackResult, ControlPlaybackVoice, ControlSettingsPatch, ControlStatus } from "./lib/controlProtocol";
-import type { AudioDeviceStatus, MicrophoneProcessingStatus } from "./lib/audioEngine";
-import { findVirtualAudioCandidates, getDefaultDeviceLabel, isSelectableMediaDevice, makeMicrophoneConstraints, normalizeMonitorDeviceId, normalizeSelectableDeviceId } from "./lib/devices";
+import type { AudioDeviceStatus, MicrophoneProcessingStatus, ProcessedMicLease } from "./lib/audioEngine";
+import { findVirtualAudioCandidates, getDefaultDeviceLabel, isSelectableMediaDevice, normalizeMonitorDeviceId, normalizeSelectableDeviceId } from "./lib/devices";
 import type { VirtualAudioCandidate } from "./lib/devices";
 import { acceleratorLooksReserved, formatBytes, formatDuration, getDefaultSoundEffects, makeBoard, nextBoard, normalizeLibrary, normalizeSoundEffects, now, RETRIGGER_MODES, retriggerModeLabel, soundEffectsAreActive, soundEffectsAreDefault, soundFromImport } from "./lib/model";
 import { hotkeyFallsBackToTap, claimCaptureSlot, eventToToken, formatAccelerator, MODIFIER_TOKENS, normalizeAccelerator, orderTokens } from "./lib/hotkeys";
 import { fitPeaks, makeWaveform } from "./lib/waveform";
+import { compressorCurveDb, eqResponseDb, expanderCurveDb, highPassResponseDb, limiterCurveDb } from "./lib/micCurves";
+import { activeMicChainCount, addMicFilter, EQ_BAND_FIELDS, EQ_BAND_KINDS, EQ_BAND_LABELS, formatDb, formatParamValue, MIC_FILTER_TYPES, micChainEntryEnabled, micFilterDefinition, micFilterSummary, moveMicChainEntry, removeMicFilter, updateMicFilter } from "./lib/micFilters";
+import type { MicParamField } from "./lib/micFilters";
 import { installDevBridge } from "./lib/devBridge";
 import { dismissPluginUpdate, isPluginUpdateDismissed, pluginInstallError } from "./lib/streamdeckPrompts";
 import { TitleBar } from "./titleBar";
 import { cancelTopLevelDrag } from "./lib/drop";
-import type { AppCapabilities, CorsairState, HotkeyBinding, HotkeyResult, MediaImportResult, RetriggerMode, SoundBoard, SoundDeckPlatform, SoundEffects, SoundLibrary, SoundSlot, StartupSettings, StreamDeckStatus, UpdateChannel, UpdateChannelState, UpdateStatus, VirtualBackend } from "./types";
+import type { AppCapabilities, AudioSettings, CorsairState, HotkeyBinding, HotkeyResult, MediaImportResult, MicChainEntry, MicEqBand, MicFilter, RetriggerMode, SoundBoard, SoundDeckPlatform, SoundEffects, SoundLibrary, SoundSlot, StartupSettings, StreamDeckStatus, UpdateChannel, UpdateChannelState, UpdateStatus, VirtualBackend } from "./types";
 import "./styles.css";
 
 installDevBridge();
@@ -70,7 +72,6 @@ type View = "board" | "devices" | "settings" | "hotkeys" | "recorder";
 type EngineStatus = "idle" | "playing" | "paused";
 type UpdateCheckStatus = "idle" | "checking" | "up-to-date" | "error";
 type StartupUpdateStatus = "idle" | "saving" | "error";
-const defaultMicrophoneProcessingStatus: MicrophoneProcessingStatus = { echoCancellation: "disabled", noiseSuppression: "disabled" };
 const defaultAudioDeviceStatus: AudioDeviceStatus = {
   microphone: { state: "closed", requestedDeviceId: "", activeDeviceId: "" },
   monitor: { state: "selected", requestedDeviceId: "", activeDeviceId: "" }
@@ -104,7 +105,7 @@ function App() {
   const [engineStatus, setEngineStatus] = useState<EngineStatus>("idle");
   const [playingIds, setPlayingIds] = useState<string[]>([]);
   const [controlPlayback, setControlPlayback] = useState<ControlPlaybackVoice[]>([]);
-  const [microphoneProcessingStatus, setMicrophoneProcessingStatus] = useState<MicrophoneProcessingStatus>(defaultMicrophoneProcessingStatus);
+  const [microphoneProcessingStatus, setMicrophoneProcessingStatus] = useState<MicrophoneProcessingStatus>(disabledMicrophoneProcessingStatus);
   const [deviceStatus, setDeviceStatus] = useState<AudioDeviceStatus>(defaultAudioDeviceStatus);
   const [editingClipId, setEditingClipId] = useState<string>("");
   const [urlImportOpen, setUrlImportOpen] = useState(false);
@@ -1309,6 +1310,7 @@ function App() {
         {view === "devices" && (
           <DevicePanel
             library={library}
+            engine={engineRef.current}
             inputDevices={inputDevices}
             outputDevices={outputDevices}
             defaultInputLabel={defaultInputLabel}
@@ -1356,8 +1358,8 @@ function App() {
 
         {view === "recorder" && (
           <RecorderPanel
+            engine={engineRef.current}
             inputDevices={inputDevices}
-            micDeviceId={library.settings.microphoneDeviceId}
             preferredMicrophoneLabel={recorderMicrophoneLabel}
             onNotice={setMessage}
             onImport={async (result) => {
@@ -2815,8 +2817,641 @@ function useIconSpin() {
   return [spinning, spin] as const;
 }
 
-function DevicePanel({ library, inputDevices, outputDevices, defaultInputLabel, defaultOutputLabel, virtualOutputLabel, platform, candidate, processingStatus, deviceStatus, preferredMicrophoneLabel, activeMicrophoneLabel, preferredMonitorLabel, activeMonitorLabel, onRefresh, onChange }: {
+const MIC_METER_FLOOR_DB = -60;
+const MIC_GR_RANGE_DB = 24;
+
+function micMeterFill(db: number) {
+  return Math.min(1, Math.max(0, (db - MIC_METER_FLOOR_DB) / -MIC_METER_FLOOR_DB));
+}
+
+function micDbText(db: number) {
+  return db <= MIC_METER_FLOOR_DB ? "−∞" : formatDb(db, 0).replace(" dB", "");
+}
+
+const noiseSuppressionStatusText: Record<MicrophoneProcessingStatus["noiseSuppression"], string> = {
+  disabled: "Off",
+  standby: "Waiting for mic",
+  loading: "Loading model",
+  active: "Active",
+  unavailable: "Unavailable"
+};
+
+function MicFilterChain({ settings, processingStatus, engine, onChange }: {
+  settings: AudioSettings;
+  processingStatus: MicrophoneProcessingStatus;
+  engine: AudioEngine | null;
+  onChange: (patch: Partial<AudioSettings>) => void;
+}) {
+  const chain = settings.micChain;
+  const [editingId, setEditingId] = useState("");
+  const [addMenuOpen, setAddMenuOpen] = useState(false);
+  const [drag, setDrag] = useState<{ from: number; over: number; offset: number; slot: number } | null>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLOListElement>(null);
+  const addButtonRef = useRef<HTMLButtonElement>(null);
+  const gearRefs = useRef(new Map<string, HTMLButtonElement>());
+  const focusGripId = useRef("");
+  const activeCount = activeMicChainCount(settings);
+  const editing = chain.find((entry) => entry.id === editingId);
+  const echoSupported = navigator.mediaDevices?.getSupportedConstraints?.().echoCancellation === true;
+  const echoStatus = processingStatus.echoCancellation === "active" ? "Active" : processingStatus.echoCancellation === "unavailable" ? "Unavailable" : "Waiting for mic";
+  const canBypass = processingStatus.filterChain === "active" && settings.monitorMicToHeadphones && !settings.micMonitorMuted && settings.micMonitorVolume > 0;
+  const setChain = (micChain: MicChainEntry[]) => onChange({ micChain });
+
+  useEffect(() => {
+    if (!engine) return;
+    return engine.subscribeMicMeters((reading) => {
+      const root = rootRef.current;
+      if (!root) return;
+      for (const element of root.querySelectorAll<HTMLElement>("[data-meter]")) {
+        const key = element.dataset.meter!;
+        const level = key === "in" || key === "out";
+        const db = level
+          ? (reading ? (key === "in" ? reading.inputDb : reading.outputDb) : MIC_METER_FLOOR_DB)
+          : reading?.gainReductionDb[key] ?? 0;
+        if (element.dataset.meterText === undefined) element.style.transform = `scaleX(${level ? micMeterFill(db) : Math.min(1, -db / MIC_GR_RANGE_DB)})`;
+        else element.textContent = level ? micDbText(db) : Math.abs(db) < 0.05 ? "0.0" : `−${Math.abs(db).toFixed(1)}`;
+      }
+    });
+  }, [engine]);
+
+  useEffect(() => {
+    if (editingId && !editing) setEditingId("");
+  }, [editing, editingId]);
+
+  useLayoutEffect(() => {
+    if (!focusGripId.current) return;
+    listRef.current?.querySelector<HTMLButtonElement>(`[data-grip-id="${CSS.escape(focusGripId.current)}"]`)?.focus();
+    focusGripId.current = "";
+  }, [chain]);
+
+  function toggle(entry: MicChainEntry, enabled: boolean) {
+    if (entry.type === "noiseSuppression") onChange({ noiseSuppressionEnabled: enabled });
+    else setChain(updateMicFilter(chain, entry.id, (filter) => ({ ...filter, enabled })));
+  }
+
+  function moveWithKeys(event: React.KeyboardEvent, index: number) {
+    const step = event.key === "ArrowUp" ? -1 : event.key === "ArrowDown" ? 1 : 0;
+    if (!step) return;
+    event.preventDefault();
+    const target = index + step;
+    if (target < 0 || target >= chain.length) return;
+    focusGripId.current = chain[index].id;
+    setChain(moveMicChainEntry(chain, index, target));
+  }
+
+  // Pointer drag keeps the DOM order fixed: the grabbed card follows the pointer and its
+  // neighbours slide aside. The new order is committed once, on release, so the audio
+  // chain rewires a single time.
+  function startDrag(event: React.PointerEvent<HTMLButtonElement>, index: number) {
+    if (event.button !== 0 || !listRef.current) return;
+    const items = Array.from(listRef.current.querySelectorAll<HTMLElement>("[data-chain-index]"));
+    const item = items[index];
+    if (!item) return;
+    event.preventDefault();
+    const handle = event.currentTarget;
+    capturePointer(handle, event.pointerId);
+    const neighbour = items[index + 1] ?? items[index - 1];
+    const slot = neighbour ? Math.abs(neighbour.getBoundingClientRect().top - item.getBoundingClientRect().top) : item.offsetHeight;
+    const startY = event.clientY;
+    let state = { from: index, over: index, offset: 0, slot };
+    setEditingId("");
+    setDrag(state);
+    const move = (moveEvent: PointerEvent) => {
+      const offset = Math.min((chain.length - 1 - index) * slot, Math.max(-index * slot, moveEvent.clientY - startY));
+      state = { ...state, offset, over: index + Math.round(offset / slot) };
+      setDrag(state);
+    };
+    const finish = (commit: boolean) => {
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", drop);
+      handle.removeEventListener("pointercancel", cancel);
+      setDrag(null);
+      if (commit && state.over !== state.from) setChain(moveMicChainEntry(chain, state.from, state.over));
+    };
+    const drop = () => finish(true);
+    const cancel = () => finish(false);
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", drop);
+    handle.addEventListener("pointercancel", cancel);
+  }
+
+  function dragTransform(index: number) {
+    if (!drag) return undefined;
+    if (index === drag.from) return `translateY(${drag.offset}px)`;
+    if (drag.from < drag.over && index > drag.from && index <= drag.over) return `translateY(${-drag.slot}px)`;
+    if (drag.over < drag.from && index >= drag.over && index < drag.from) return `translateY(${drag.slot}px)`;
+    return undefined;
+  }
+
+  const chipText = activeCount
+    ? `${activeCount} on · ${Math.round(processingStatus.latencyMs)} ms`
+    : "All off";
+
+  return (
+    <div className="micChain" ref={rootRef}>
+      <div className="micChainHead">
+        <div className="micChainTitle">
+          <strong>Filter chain</strong>
+          <small>{processingStatus.filterChain === "standby" ? "Filters run whenever your mic is in use." : "Runs top to bottom. Drag to reorder."}</small>
+        </div>
+        <span className="micChainChip" data-active={activeCount > 0}>{chipText}</span>
+        <HoldToBypassButton engine={engine} disabled={!canBypass} />
+      </div>
+      <div className="micMeters" aria-hidden="true">
+        <span>In</span><div className="micMeter"><i data-meter="in" /></div><output data-meter="in" data-meter-text="">−∞</output>
+        <span>Out</span><div className="micMeter"><i data-meter="out" /></div><output data-meter="out" data-meter-text="">−∞</output>
+      </div>
+      {processingStatus.filterChain === "unavailable" && (
+        <SettingsNotice tone="warning" icon={<AlertCircle size={16} />} title="Filters couldn't start">
+          Your mic is going out unfiltered. Switch a filter off and on again to retry.
+        </SettingsNotice>
+      )}
+      <ol className="micFilterList" ref={listRef} data-dragging={drag ? "true" : undefined}>
+        <li className="micFilter">
+          <span className="micFilterIndex" title="Echo cancellation runs while the mic is captured, before every other filter."><Lock size={12} /></span>
+          <span />
+          <div className="micFilterCard" data-pinned="true" data-enabled={settings.echoCancellationEnabled && echoSupported}>
+            <span className="micLed" />
+            <div className="micFilterName">
+              <strong>Echo cancellation</strong>
+              <small>{echoSupported ? "Capture stage · always first" : "Not supported on this system"}</small>
+            </div>
+            {settings.echoCancellationEnabled && echoSupported && <StatusBadge state={processingStatus.echoCancellation}>{echoStatus}</StatusBadge>}
+            <Switch label="Echo cancellation" checked={settings.echoCancellationEnabled} disabled={!echoSupported} onChange={(echoCancellationEnabled) => onChange({ echoCancellationEnabled })} />
+            <span className="micIconSpacer" />
+            <span className="micIconSpacer" />
+          </div>
+        </li>
+        {chain.map((entry, index) => {
+          const isNoiseSuppression = entry.type === "noiseSuppression";
+          const enabled = micChainEntryEnabled(entry, settings);
+          const label = isNoiseSuppression ? "Noise suppression" : micFilterDefinition(entry.type).label;
+          const summary = isNoiseSuppression ? `DeepFilterNet · up to ${settings.noiseSuppressionAttenuationDb} dB` : micFilterSummary(entry);
+          const showsGainReduction = !isNoiseSuppression && enabled && micFilterDefinition(entry.type).reducesGain;
+          return (
+            <li
+              key={entry.id}
+              className="micFilter"
+              data-chain-index={index}
+              data-dragged={drag?.from === index ? "true" : undefined}
+              style={{ transform: dragTransform(index) }}
+            >
+              <span className="micFilterIndex">{index + 1}</span>
+              <button
+                type="button"
+                className="micGrip"
+                data-grip-id={entry.id}
+                aria-label={`Move ${label}. Use the up and down arrow keys.`}
+                onPointerDown={(event) => startDrag(event, index)}
+                onKeyDown={(event) => moveWithKeys(event, index)}
+              >
+                <GripVertical size={14} />
+              </button>
+              <div className="micFilterCard" data-enabled={enabled} data-editing={editingId === entry.id ? "true" : undefined}>
+                <span className="micLed" />
+                <div className="micFilterName">
+                  <strong>{label}</strong>
+                  <small>{summary}</small>
+                </div>
+                {isNoiseSuppression && enabled && (
+                  <StatusBadge state={processingStatus.noiseSuppression}>{noiseSuppressionStatusText[processingStatus.noiseSuppression]}</StatusBadge>
+                )}
+                {showsGainReduction && (
+                  <span className="micGainReduction" title="Gain reduction">
+                    <span>GR <output data-meter={entry.id} data-meter-text="">0.0</output></span>
+                    <span className="micGainReductionBar"><i data-meter={entry.id} /></span>
+                  </span>
+                )}
+                <Switch label={label} checked={enabled} onChange={(checked) => toggle(entry, checked)} />
+                <button
+                  type="button"
+                  className="micIconButton"
+                  aria-label={`${label} settings`}
+                  aria-expanded={editingId === entry.id}
+                  data-active={editingId === entry.id ? "true" : undefined}
+                  ref={(element) => {
+                    if (element) gearRefs.current.set(entry.id, element);
+                    else gearRefs.current.delete(entry.id);
+                  }}
+                  onClick={() => setEditingId(editingId === entry.id ? "" : entry.id)}
+                >
+                  <Settings size={14} />
+                </button>
+                {isNoiseSuppression ? (
+                  <span className="micIconSpacer" />
+                ) : (
+                  <button type="button" className="micIconButton" aria-label={`Remove ${label}`} onClick={() => setChain(removeMicFilter(chain, entry.id))}>
+                    <X size={14} />
+                  </button>
+                )}
+              </div>
+            </li>
+          );
+        })}
+      </ol>
+      <button type="button" className="micAddFilter" ref={addButtonRef} aria-expanded={addMenuOpen} onClick={() => setAddMenuOpen((open) => !open)}>
+        <Plus size={15} /> Add filter
+      </button>
+      {addMenuOpen && addButtonRef.current && (
+        <MicPopover anchor={addButtonRef.current} align="start" label="Add filter" onClose={() => setAddMenuOpen(false)}>
+          <div className="micAddMenu" role="menu">
+            {MIC_FILTER_TYPES.map((type) => {
+              const definition = micFilterDefinition(type);
+              return (
+                <button
+                  key={type}
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setChain(addMicFilter(chain, type));
+                    setAddMenuOpen(false);
+                  }}
+                >
+                  <strong>{definition.label}</strong>
+                  <small>{definition.description}</small>
+                </button>
+              );
+            })}
+          </div>
+        </MicPopover>
+      )}
+      {editing && gearRefs.current.get(editing.id) && (
+        <MicPopover anchor={gearRefs.current.get(editing.id)!} align="end" label={`${editing.type === "noiseSuppression" ? "Noise suppression" : micFilterDefinition(editing.type).label} settings`} onClose={() => setEditingId("")}>
+          <MicFilterEditor
+            entry={editing}
+            settings={settings}
+            onChange={onChange}
+            onClose={() => setEditingId("")}
+          />
+        </MicPopover>
+      )}
+    </div>
+  );
+}
+
+function capturePointer(element: Element, pointerId: number) {
+  try {
+    element.setPointerCapture?.(pointerId);
+  } catch {
+    // The pointer is already gone; the release handlers still run.
+  }
+}
+
+function HoldToBypassButton({ engine, disabled }: { engine: AudioEngine | null; disabled: boolean }) {
+  const [held, setHeld] = useState(false);
+  const heldRef = useRef(false);
+  const setBypass = useCallback((next: boolean) => {
+    if (heldRef.current === next) return;
+    heldRef.current = next;
+    setHeld(next);
+    engine?.setMonitorBypass(next);
+  }, [engine]);
+
+  useEffect(() => {
+    const release = () => setBypass(false);
+    window.addEventListener("blur", release);
+    return () => {
+      window.removeEventListener("blur", release);
+      release();
+    };
+  }, [setBypass]);
+
+  useEffect(() => {
+    if (disabled) setBypass(false);
+  }, [disabled, setBypass]);
+
+  return (
+    <button
+      type="button"
+      className="settingsButton micBypass"
+      data-held={held ? "true" : undefined}
+      aria-pressed={held}
+      disabled={disabled}
+      title={disabled ? "Turn on Monitor microphone and at least one filter to compare by ear." : "Hold to hear your raw mic in your headphones. Others keep hearing the filtered mic."}
+      onPointerDown={(event) => {
+        if (event.button !== 0) return;
+        capturePointer(event.currentTarget, event.pointerId);
+        setBypass(true);
+      }}
+      onPointerUp={() => setBypass(false)}
+      onPointerCancel={() => setBypass(false)}
+      onLostPointerCapture={() => setBypass(false)}
+      onKeyDown={(event) => {
+        if ((event.key === " " || event.key === "Enter") && !event.repeat) {
+          event.preventDefault();
+          setBypass(true);
+        }
+      }}
+      onKeyUp={(event) => {
+        if (event.key === " " || event.key === "Enter") setBypass(false);
+      }}
+      onBlur={() => setBypass(false)}
+    >
+      <Ear size={14} /> {held ? "Hearing raw mic" : "Hold to bypass"}
+    </button>
+  );
+}
+
+/** A popover pinned to a button, rendered above everything and flipped upward when it would run off screen. */
+function MicPopover({ anchor, align, label, onClose, children }: {
+  anchor: HTMLElement;
+  align: "start" | "end";
+  label: string;
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [position, setPosition] = useState<{ top: number; left: number; above: boolean } | null>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
+  useLayoutEffect(() => {
+    const place = () => {
+      const popover = ref.current;
+      if (!popover) return;
+      const box = anchor.getBoundingClientRect();
+      const width = popover.offsetWidth;
+      const height = popover.offsetHeight;
+      const left = align === "end" ? box.right + 6 - width : box.left;
+      const below = box.bottom + 8;
+      const above = below + height > window.innerHeight - 8 && box.top - 8 - height >= 8;
+      setPosition({
+        top: above ? box.top - 8 - height : Math.max(8, Math.min(below, window.innerHeight - 8 - height)),
+        left: Math.max(8, Math.min(left, window.innerWidth - 8 - width)),
+        above
+      });
+    };
+    place();
+    const observer = new ResizeObserver(place);
+    if (ref.current) observer.observe(ref.current);
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+    };
+  }, [anchor, align]);
+
+  useEffect(() => {
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (ref.current?.contains(target) || anchor.contains(target)) return;
+      onCloseRef.current();
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      onCloseRef.current();
+      anchor.focus();
+    };
+    document.addEventListener("pointerdown", onPointerDown, true);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown, true);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [anchor]);
+
+  return createPortal(
+    <div
+      ref={ref}
+      className="micPopover"
+      role="dialog"
+      aria-label={label}
+      data-placement={position?.above ? "above" : "below"}
+      style={position ? { top: position.top, left: position.left } : { visibility: "hidden" }}
+    >
+      {children}
+    </div>,
+    document.body
+  );
+}
+
+function MicFilterEditor({ entry, settings, onChange, onClose }: {
+  entry: MicChainEntry;
+  settings: AudioSettings;
+  onChange: (patch: Partial<AudioSettings>) => void;
+  onClose: () => void;
+}) {
+  const [band, setBand] = useState(3);
+  if (entry.type === "noiseSuppression") {
+    return (
+      <>
+        <MicEditorHeader title="Noise suppression" onClose={onClose} />
+        <p className="micEditorNote">Removes background noise with an on-device model. Higher limits remove more noise but can thin out your voice.</p>
+        <MicParamSlider
+          field={{ label: "Max cut", min: 6, max: 30, step: 1, unit: "dB" }}
+          value={settings.noiseSuppressionAttenuationDb}
+          onChange={(noiseSuppressionAttenuationDb) => onChange({ noiseSuppressionAttenuationDb })}
+        />
+        <MicEditorFooter onReset={() => onChange({ noiseSuppressionAttenuationDb: 18 })} onClose={onClose} />
+      </>
+    );
+  }
+  const definition = micFilterDefinition(entry.type);
+  const update = (params: MicFilter["params"]) => onChange({
+    micChain: updateMicFilter(settings.micChain, entry.id, (filter) => ({ ...filter, params } as MicFilter))
+  });
+  const setParam = (key: string, value: number) => update({ ...entry.params, [key]: value } as MicFilter["params"]);
+  const sliders = (definition.fields as MicParamField[]).map((field) => (
+    <MicParamSlider key={field.key} field={field} value={(entry.params as unknown as Record<string, number>)[field.key]} onChange={(value) => setParam(field.key, value)} />
+  ));
+  let body: React.ReactNode = sliders;
+  if (entry.type === "highPass") {
+    const params = entry.params;
+    body = (
+      <>
+        <MicFrequencyGraph minDb={-36} maxDb={6} response={(frequency) => highPassResponseDb(params, frequency)} />
+        {sliders}
+        <div className="micEditorRow">
+          <span>Slope</span>
+          <SegmentedRadioGroup
+            label="High-pass slope"
+            value={String(params.slope) as "12" | "24"}
+            options={[{ value: "12", label: "12 dB/oct" }, { value: "24", label: "24 dB/oct" }]}
+            onChange={(slope) => update({ ...params, slope: Number(slope) as 12 | 24 })}
+          />
+        </div>
+      </>
+    );
+  } else if (entry.type === "eq") {
+    const params = entry.params;
+    const selected = params.bands[band];
+    const setBandValue = (patch: Partial<MicEqBand>) => update({ bands: params.bands.map((candidate, index) => index === band ? { ...candidate, ...patch } : candidate) });
+    body = (
+      <>
+        <MicFrequencyGraph
+          minDb={-12}
+          maxDb={12}
+          response={(frequency) => eqResponseDb(params, frequency)}
+          handles={params.bands.map((candidate, index) => ({ frequencyHz: candidate.frequencyHz, gainDb: candidate.enabled ? candidate.gainDb : 0, active: index === band, enabled: candidate.enabled }))}
+          onSelectHandle={setBand}
+        />
+        <div className="micBandTabs" role="tablist" aria-label="EQ band">
+          {EQ_BAND_LABELS.map((bandLabel, index) => (
+            <button key={bandLabel} type="button" role="tab" aria-selected={index === band} data-enabled={params.bands[index].enabled} onClick={() => setBand(index)}>
+              {bandLabel}
+            </button>
+          ))}
+        </div>
+        <div className="micEditorRow">
+          <span>{EQ_BAND_LABELS[band]} band</span>
+          <Switch label={`${EQ_BAND_LABELS[band]} band`} checked={selected.enabled} onChange={(enabled) => setBandValue({ enabled })} />
+        </div>
+        <MicParamSlider field={EQ_BAND_FIELDS.frequencyHz} value={selected.frequencyHz} onChange={(frequencyHz) => setBandValue({ frequencyHz })} />
+        <MicParamSlider field={EQ_BAND_FIELDS.gainDb} value={selected.gainDb} onChange={(gainDb) => setBandValue({ gainDb })} />
+        {EQ_BAND_KINDS[band] === "peaking" && <MicParamSlider field={EQ_BAND_FIELDS.q} value={selected.q} onChange={(q) => setBandValue({ q })} />}
+      </>
+    );
+  } else if (entry.type === "compressor" || entry.type === "expander" || entry.type === "limiter") {
+    const filter = entry;
+    const curve = (input: number) => filter.type === "compressor"
+      ? compressorCurveDb(filter.params, input)
+      : filter.type === "expander" ? expanderCurveDb(filter.params, input) : limiterCurveDb(filter.params, input);
+    const threshold = filter.type === "limiter" ? filter.params.ceilingDb : filter.params.thresholdDb;
+    body = (
+      <>
+        <MicTransferGraph floorDb={filter.type === "expander" ? -80 : -60} thresholdDb={threshold} curve={curve} />
+        {sliders}
+      </>
+    );
+  } else if (entry.type === "deEsser") {
+    const params = entry.params;
+    body = (
+      <>
+        {sliders}
+        <div className="micEditorRow">
+          <span>Mode</span>
+          <SegmentedRadioGroup
+            label="De-esser mode"
+            value={params.mode}
+            options={[{ value: "split", label: "Highs only" }, { value: "wide", label: "Whole voice" }]}
+            onChange={(mode) => update({ ...params, mode })}
+          />
+        </div>
+      </>
+    );
+  }
+  return (
+    <>
+      <MicEditorHeader title={definition.label} onClose={onClose} />
+      {body}
+      <MicEditorFooter onReset={() => update(definition.defaults())} onClose={onClose} />
+    </>
+  );
+}
+
+function MicEditorHeader({ title, onClose }: { title: string; onClose: () => void }) {
+  return (
+    <header className="micEditorHead">
+      <strong>{title}</strong>
+      <button type="button" className="micIconButton" aria-label="Close" onClick={onClose}><X size={14} /></button>
+    </header>
+  );
+}
+
+function MicEditorFooter({ onReset, onClose }: { onReset: () => void; onClose: () => void }) {
+  return (
+    <footer className="micEditorFoot">
+      <button type="button" className="settingsButton" onClick={onReset}><RotateCcw size={13} /> Reset</button>
+      <button type="button" className="settingsButton micDone" onClick={onClose}>Done</button>
+    </footer>
+  );
+}
+
+function MicParamSlider({ field, value, onChange }: {
+  field: { label: string; min: number; max: number; step: number; unit: string; log?: boolean };
+  value: number;
+  onChange: (value: number) => void;
+}) {
+  const { min, max, step, log } = field;
+  const position = log ? Math.log(value / min) / Math.log(max / min) : (value - min) / (max - min);
+  const fromPosition = (raw: number) => {
+    const exact = log ? min * (max / min) ** raw : min + raw * (max - min);
+    return Math.min(max, Math.max(min, Number((Math.round(exact / step) * step).toFixed(4))));
+  };
+  return (
+    <label className="micSlider">
+      <span>{field.label}</span>
+      <input
+        type="range"
+        min={0}
+        max={1000}
+        step={1}
+        value={Math.round(position * 1000)}
+        aria-valuetext={formatParamValue(field, value)}
+        onChange={(event) => onChange(fromPosition(Number(event.target.value) / 1000))}
+      />
+      <output>{formatParamValue(field, value)}</output>
+    </label>
+  );
+}
+
+const MIC_GRAPH_WIDTH = 300;
+const MIC_GRAPH_HEIGHT = 96;
+
+function micGraphX(frequencyHz: number) {
+  return (Math.log10(frequencyHz / 20) / 3) * MIC_GRAPH_WIDTH;
+}
+
+function MicFrequencyGraph({ minDb, maxDb, response, handles, onSelectHandle }: {
+  minDb: number;
+  maxDb: number;
+  response: (frequencyHz: number) => number;
+  handles?: { frequencyHz: number; gainDb: number; active: boolean; enabled: boolean }[];
+  onSelectHandle?: (index: number) => void;
+}) {
+  const y = (db: number) => MIC_GRAPH_HEIGHT - ((Math.min(maxDb, Math.max(minDb, db)) - minDb) / (maxDb - minDb)) * MIC_GRAPH_HEIGHT;
+  let path = "";
+  for (let step = 0; step <= 120; step += 1) {
+    const frequency = 20 * 1000 ** (step / 120);
+    path += `${step ? "L" : "M"}${micGraphX(frequency).toFixed(1)} ${y(response(frequency)).toFixed(1)}`;
+  }
+  return (
+    <svg className="micGraph" viewBox={`0 0 ${MIC_GRAPH_WIDTH} ${MIC_GRAPH_HEIGHT}`} role="img" aria-label="Frequency response">
+      {[100, 1000, 10000].map((frequency) => <path key={frequency} className="micGraphGrid" d={`M${micGraphX(frequency)} 0V${MIC_GRAPH_HEIGHT}`} />)}
+      <path className="micGraphZero" d={`M0 ${y(0)}H${MIC_GRAPH_WIDTH}`} />
+      <path className="micGraphArea" d={`${path}L${MIC_GRAPH_WIDTH} ${y(0)}L0 ${y(0)}Z`} />
+      <path className="micGraphCurve" d={path} />
+      {handles?.map((handle, index) => (
+        <circle
+          key={index}
+          className="micGraphHandle"
+          data-active={handle.active ? "true" : undefined}
+          data-enabled={handle.enabled ? "true" : undefined}
+          cx={micGraphX(handle.frequencyHz)}
+          cy={y(response(handle.frequencyHz))}
+          r={handle.active ? 5 : 3.5}
+          onPointerDown={() => onSelectHandle?.(index)}
+        />
+      ))}
+    </svg>
+  );
+}
+
+function MicTransferGraph({ floorDb, thresholdDb, curve }: { floorDb: number; thresholdDb: number; curve: (inputDb: number) => number }) {
+  const size = MIC_GRAPH_HEIGHT;
+  const width = MIC_GRAPH_WIDTH;
+  const x = (db: number) => ((db - floorDb) / -floorDb) * width;
+  const y = (db: number) => size - ((Math.min(0, Math.max(floorDb, db)) - floorDb) / -floorDb) * size;
+  let path = "";
+  for (let input = floorDb; input <= 0; input += 0.5) path += `${input === floorDb ? "M" : "L"}${x(input).toFixed(1)} ${y(curve(input)).toFixed(1)}`;
+  const grid = [];
+  for (let db = floorDb + 20; db < 0; db += 20) grid.push(<path key={db} className="micGraphGrid" d={`M${x(db)} 0V${size}M0 ${y(db)}H${width}`} />);
+  return (
+    <svg className="micGraph" viewBox={`0 0 ${width} ${size}`} role="img" aria-label="Input to output level">
+      {grid}
+      <path className="micGraphZero" d={`M0 ${size}L${width} 0`} />
+      <path className="micGraphThreshold" d={`M${x(thresholdDb)} 0V${size}`} />
+      <path className="micGraphCurve" d={path} />
+    </svg>
+  );
+}
+
+function DevicePanel({ library, engine, inputDevices, outputDevices, defaultInputLabel, defaultOutputLabel, virtualOutputLabel, platform, candidate, processingStatus, deviceStatus, preferredMicrophoneLabel, activeMicrophoneLabel, preferredMonitorLabel, activeMonitorLabel, onRefresh, onChange }: {
   library: SoundLibrary;
+  engine: AudioEngine | null;
   inputDevices: MediaDeviceInfo[];
   outputDevices: MediaDeviceInfo[];
   defaultInputLabel: string;
@@ -2858,13 +3493,6 @@ function DevicePanel({ library, inputDevices, outputDevices, defaultInputLabel, 
     : outputSelected
       ? `${candidate?.outputLabel || route.title} is selected, but ${route.inputLabel} is not visible as an input yet.`
       : route.missing;
-  const echoCancellationSupported = navigator.mediaDevices?.getSupportedConstraints?.().echoCancellation === true;
-  const echoStatus = settings.echoCancellationEnabled
-    ? processingStatus.echoCancellation === "active" ? "Active" : processingStatus.echoCancellation === "unavailable" ? "Unavailable" : "Waiting for mic"
-    : "Off";
-  const suppressionStatus = settings.noiseSuppressionEnabled
-    ? processingStatus.noiseSuppression === "active" ? "Active" : processingStatus.noiseSuppression === "unavailable" ? "Unavailable" : processingStatus.noiseSuppression === "loading" ? "Loading model" : "Waiting for mic"
-    : "Off";
   const handleMicrophoneChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
     const microphoneDeviceId = normalizeSelectableDeviceId(event.currentTarget.value);
     const selectedOption = event.currentTarget.selectedOptions[0];
@@ -2918,7 +3546,7 @@ function DevicePanel({ library, inputDevices, outputDevices, defaultInputLabel, 
         </SettingsRow>
       </SettingsCard>
 
-      <SettingsCard title="Microphone" description="Choose which microphone SoundDeck captures and how it is cleaned up.">
+      <SettingsCard title="Microphone" description="Choose which microphone SoundDeck captures and how it's processed.">
         <SettingsRow icon={<Mic size={16} />} title="Input device" description="Used for the virtual mic and for monitoring.">
           <select className="settingsSelect" aria-label="Microphone" value={settings.microphoneDeviceId} onChange={handleMicrophoneChange}>
             <option value="" data-device-label="">{defaultInputOption}</option>
@@ -2945,25 +3573,7 @@ function DevicePanel({ library, inputDevices, outputDevices, defaultInputLabel, 
               : "The system default microphone could not be opened. Check the device, then refresh."}
           </SettingsNotice>
         )}
-        <SettingsRow
-          icon={<Waves size={16} />}
-          title="Echo cancellation"
-          description={echoCancellationSupported ? "Keep sound from your speakers out of your mic." : "Not supported on this system."}
-          disabled={!echoCancellationSupported}
-        >
-          <StatusBadge state={processingStatus.echoCancellation}>{echoCancellationSupported ? echoStatus : "Unsupported"}</StatusBadge>
-          <Switch label="Echo cancellation" checked={settings.echoCancellationEnabled} disabled={!echoCancellationSupported} onChange={(echoCancellationEnabled) => onChange({ echoCancellationEnabled })} />
-        </SettingsRow>
-        <SettingsRow icon={<Activity size={16} />} title="Noise suppression" description="Filter background noise out of your mic with an on-device model.">
-          <StatusBadge state={processingStatus.noiseSuppression}>{suppressionStatus}</StatusBadge>
-          <Switch label="Noise suppression" checked={settings.noiseSuppressionEnabled} onChange={(noiseSuppressionEnabled) => onChange({ noiseSuppressionEnabled })} />
-        </SettingsRow>
-        <SettingsRow icon={<SlidersHorizontal size={16} />} title="Maximum attenuation" description="How much noise suppression is allowed to cut." disabled={!settings.noiseSuppressionEnabled}>
-          <div className="settingsSlider">
-            <input type="range" aria-label="Maximum attenuation" min="6" max="30" step="1" disabled={!settings.noiseSuppressionEnabled} value={settings.noiseSuppressionAttenuationDb} onChange={(event) => onChange({ noiseSuppressionAttenuationDb: Number(event.target.value) })} />
-            <output>{settings.noiseSuppressionAttenuationDb} dB</output>
-          </div>
-        </SettingsRow>
+        <MicFilterChain settings={settings} processingStatus={processingStatus} engine={engine} onChange={onChange} />
       </SettingsCard>
 
       <SettingsCard title="Headphones" description="Where you hear the soundboard and your own mic.">
@@ -3152,9 +3762,9 @@ function HotkeyCapture({ value, onChange }: { value: string; onChange: (value: s
   );
 }
 
-function RecorderPanel({ inputDevices, micDeviceId, preferredMicrophoneLabel, onNotice, onImport }: {
+function RecorderPanel({ engine, inputDevices, preferredMicrophoneLabel, onNotice, onImport }: {
+  engine: AudioEngine | null;
   inputDevices: MediaDeviceInfo[];
-  micDeviceId: string;
   preferredMicrophoneLabel: string;
   onNotice?: (message: string) => void;
   onImport: (result: Awaited<ReturnType<typeof window.sounddeck.saveRecording>>) => void;
@@ -3163,22 +3773,29 @@ function RecorderPanel({ inputDevices, micDeviceId, preferredMicrophoneLabel, on
   const [recorder, setRecorder] = useState<MediaRecorder | null>(null);
   const chunks = useRef<BlobPart[]>([]);
 
+  useEffect(() => () => {
+    if (recorder?.state === "recording") recorder.stop();
+  }, [recorder]);
+
   async function start() {
+    if (!engine) return;
     chunks.current = [];
-    const selectedMicId = normalizeSelectableDeviceId(micDeviceId);
-    let stream: MediaStream;
+    // Recordings go through the mic filter chain, so they sound like what others hear.
+    let lease: ProcessedMicLease;
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: makeMicrophoneConstraints(selectedMicId) });
+      lease = await engine.acquireProcessedMic();
     } catch (error) {
-      if (!selectedMicId) throw error;
-      console.warn("Selected recording microphone failed; retrying with system default", error);
-      stream = await navigator.mediaDevices.getUserMedia({ audio: makeMicrophoneConstraints("") });
+      console.warn("Recording microphone could not be opened", error);
+      onNotice?.(`Couldn't open ${preferredMicrophoneLabel} for recording.`);
+      return;
+    }
+    if (engine.getDeviceStatus().microphone.state === "fallback") {
       onNotice?.(`Couldn't open ${preferredMicrophoneLabel}. Recording with the system default microphone.`);
     }
-    const next = new MediaRecorder(stream, { mimeType: "audio/webm" });
+    const next = new MediaRecorder(lease.stream, { mimeType: "audio/webm" });
     next.ondataavailable = (event) => chunks.current.push(event.data);
     next.onstop = async () => {
-      stream.getTracks().forEach((track) => track.stop());
+      lease.release();
       const blob = new Blob(chunks.current, { type: "audio/webm" });
       const bytes = await blob.arrayBuffer();
       const result = await window.sounddeck.saveRecording({ title: `Recording ${new Date().toLocaleTimeString()}`, ext: ".webm", bytes });
@@ -3199,7 +3816,7 @@ function RecorderPanel({ inputDevices, micDeviceId, preferredMicrophoneLabel, on
     <div className="panel recorderPanel">
       <section>
         <h2>Recorder</h2>
-        <p>{inputDevices.length ? "Record a quick clip from the selected microphone and add it to the current board." : "Microphone permission may be needed before devices appear."}</p>
+        <p>{inputDevices.length ? "Record a quick clip from the selected microphone, through your mic filters, and add it to the current board." : "Microphone permission may be needed before devices appear."}</p>
         <button className={recording ? "recording" : ""} onClick={recording ? stop : () => void start()}>{recording ? <Square size={18} /> : <Mic size={18} />}{recording ? "Stop recording" : "Start recording"}</button>
       </section>
     </div>
