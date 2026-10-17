@@ -1,6 +1,7 @@
 import type { MediaImportResult, OutputTarget, RetriggerMode, SoundBoard, SoundEffects, SoundLibrary, SoundSlot } from "../types";
 import { normalizeMonitorDeviceId, normalizeSelectableDeviceId } from "./devices";
 import { normalizeAccelerator } from "./hotkeys";
+import { defaultMicChain, normalizeMicChain } from "./micFilters";
 
 export function nextBoard(library: Pick<SoundLibrary, "boards" | "activeBoardId">, direction: 1 | -1 = 1) {
   if (library.boards.length < 2) return undefined;
@@ -15,6 +16,7 @@ const defaultSettings: SoundLibrary["settings"] = {
   echoCancellationEnabled: false,
   noiseSuppressionEnabled: false,
   noiseSuppressionAttenuationDb: 18,
+  micChain: defaultMicChain(),
   soundboardToVirtualMic: false,
   monitorToHeadphones: true,
   monitorMicToHeadphones: false,
@@ -235,7 +237,8 @@ export function normalizeLibrary(library: SoundLibrary): SoundLibrary {
     soundboardMonitorMuted: boolOr(currentSettings.soundboardMonitorMuted),
     echoCancellationEnabled: boolOr(currentSettings.echoCancellationEnabled, defaultSettings.echoCancellationEnabled),
     noiseSuppressionEnabled: boolOr(currentSettings.noiseSuppressionEnabled, defaultSettings.noiseSuppressionEnabled),
-    noiseSuppressionAttenuationDb: Math.round(numberIn(currentSettings.noiseSuppressionAttenuationDb, defaultSettings.noiseSuppressionAttenuationDb, 6, 30))
+    noiseSuppressionAttenuationDb: Math.round(numberIn(currentSettings.noiseSuppressionAttenuationDb, defaultSettings.noiseSuppressionAttenuationDb, 6, 30)),
+    micChain: normalizeMicChain(currentSettings.micChain)
   };
   settings.defaultRetriggerMode = normalizeRetriggerMode(settings.defaultRetriggerMode, defaultSettings.defaultRetriggerMode);
   settings.stopAllHotkey = normalizeAccelerator(settings.stopAllHotkey);

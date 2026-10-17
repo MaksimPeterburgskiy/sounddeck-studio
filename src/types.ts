@@ -74,11 +74,93 @@ export interface SoundBoard {
   sounds: SoundSlot[];
 }
 
+export interface MicHighPassParams {
+  frequencyHz: number;
+  slope: 12 | 24;
+}
+
+export interface MicExpanderParams {
+  thresholdDb: number;
+  ratio: number;
+  attackMs: number;
+  holdMs: number;
+  releaseMs: number;
+  rangeDb: number;
+  hysteresisDb: number;
+}
+
+export interface MicDeEsserParams {
+  frequencyHz: number;
+  thresholdDb: number;
+  maxReductionDb: number;
+  mode: "split" | "wide";
+}
+
+export interface MicEqBand {
+  enabled: boolean;
+  frequencyHz: number;
+  gainDb: number;
+  q: number;
+}
+
+/** Five fixed bands: low shelf, three peaks, high shelf. */
+export interface MicEqParams {
+  bands: MicEqBand[];
+}
+
+export interface MicCompressorParams {
+  thresholdDb: number;
+  ratio: number;
+  kneeDb: number;
+  attackMs: number;
+  releaseMs: number;
+  makeupDb: number;
+}
+
+export interface MicLimiterParams {
+  ceilingDb: number;
+  releaseMs: number;
+  lookaheadMs: number;
+}
+
+export interface MicGainParams {
+  gainDb: number;
+}
+
+export interface MicFilterParamsByType {
+  highPass: MicHighPassParams;
+  expander: MicExpanderParams;
+  deEsser: MicDeEsserParams;
+  eq: MicEqParams;
+  compressor: MicCompressorParams;
+  limiter: MicLimiterParams;
+  gain: MicGainParams;
+}
+
+export type MicFilterType = keyof MicFilterParamsByType;
+
+export type MicFilter = {
+  [Type in MicFilterType]: { id: string; type: Type; enabled: boolean; params: MicFilterParamsByType[Type] };
+}[MicFilterType];
+
+/**
+ * Noise suppression keeps its on/off and attenuation in the top-level settings (the Control API
+ * and Stream Deck toggle them), so its chain entry only records where it sits.
+ */
+export interface MicNoiseSuppressionSlot {
+  id: "noise-suppression";
+  type: "noiseSuppression";
+}
+
+export type MicChainEntry = MicFilter | MicNoiseSuppressionSlot;
+
 export interface AudioSettings {
   micPassthrough: boolean;
   echoCancellationEnabled: boolean;
   noiseSuppressionEnabled: boolean;
   noiseSuppressionAttenuationDb: number;
+  /** Mic filters in processing order. Echo cancellation always runs first, during capture. */
+  micChain: MicChainEntry[];
   soundboardToVirtualMic: boolean;
   monitorToHeadphones: boolean;
   monitorMicToHeadphones: boolean;

@@ -2,6 +2,8 @@ import type { ControlPlaybackVoice } from "./controlProtocol";
 import type { AudioSettings, OutputTarget, SoundEffects, SoundSlot } from "../types";
 import { makeMicrophoneConstraints, normalizeSelectableDeviceId } from "./devices";
 import { normalizeSoundEffects } from "./model";
+import { MicChain, analyserPeakDb, type MicMeterReading } from "./micChain";
+import { activeMicChainCount } from "./micFilters";
 
 interface ActiveEffectChain {
   source: AudioBufferSourceNode;
@@ -58,12 +60,12 @@ interface PreviewVoice {
   cleanedUp?: boolean;
 }
 
-interface NoiseSuppressionGraph {
-  context: AudioContext;
+interface MicRoute {
   source: MediaStreamAudioSourceNode;
-  node: AudioWorkletNode;
-  destination: MediaStreamAudioDestinationNode;
-  worker: Worker;
+  gain: GainNode;
+  context: AudioContext;
+  /** Unprocessed mic for hold-to-bypass, added to the monitor route the first time it's used. */
+  raw?: { source: MediaStreamAudioSourceNode; gain: GainNode };
 }
 
 type EngineStatus = "idle" | "playing";
@@ -71,6 +73,15 @@ type EngineStatus = "idle" | "playing";
 export interface MicrophoneProcessingStatus {
   echoCancellation: "disabled" | "active" | "unavailable";
   noiseSuppression: "disabled" | "standby" | "loading" | "active" | "unavailable";
+  /** "disabled" when no filter in the chain is switched on. */
+  filterChain: "disabled" | "standby" | "loading" | "active" | "unavailable";
+  /** Delay the enabled filters add, in milliseconds. */
+  latencyMs: number;
+}
+
+export interface ProcessedMicLease {
+  stream: MediaStream;
+  release: () => void;
 }
 
 export interface DeviceRouteStatus {
@@ -84,10 +95,14 @@ export interface AudioDeviceStatus {
   monitor: DeviceRouteStatus;
 }
 
-const disabledMicrophoneProcessingStatus: MicrophoneProcessingStatus = {
+export const disabledMicrophoneProcessingStatus: MicrophoneProcessingStatus = {
   echoCancellation: "disabled",
-  noiseSuppression: "disabled"
+  noiseSuppression: "disabled",
+  filterChain: "disabled",
+  latencyMs: 0
 };
+
+const METER_INTERVAL_MS = 33;
 
 export class AudioEngine {
   private monitorContext: AudioContext;
@@ -103,8 +118,16 @@ export class AudioEngine {
   private previewOffset = 0;
   private previewGeneration = 0;
   private micStream?: MediaStream;
-  private micNodes: Array<{ source: MediaStreamAudioSourceNode; gain: GainNode; context: AudioContext }> = [];
-  private noiseSuppressionGraph?: NoiseSuppressionGraph;
+  private micNodes: MicRoute[] = [];
+  private micRoutedStream?: MediaStream;
+  private micChain?: MicChain;
+  private micChainCreating?: Promise<void>;
+  private micChainFailed = false;
+  private recorderLeases = 0;
+  private monitorBypass = false;
+  private meterSubscribers = new Set<(reading: MicMeterReading | null) => void>();
+  private meterTimer?: ReturnType<typeof setInterval>;
+  private meterFallback?: { analyser: AnalyserNode; route: MicRoute; buffer: Float32Array<ArrayBuffer> };
   private micConfigureGeneration = 0;
   private configureGeneration = 0;
   private micAppliedSettings?: AudioSettings;
@@ -160,8 +183,12 @@ export class AudioEngine {
     if (this.disposed) return;
     const generation = this.configureGeneration + 1;
     this.configureGeneration = generation;
-    const echoCancellationChanged = this.micAppliedSettings?.echoCancellationEnabled !== settings.echoCancellationEnabled;
-    const attenuationChanged = this.micAppliedSettings?.noiseSuppressionAttenuationDb !== settings.noiseSuppressionAttenuationDb;
+    const applied = this.micAppliedSettings;
+    const echoCancellationChanged = applied?.echoCancellationEnabled !== settings.echoCancellationEnabled;
+    const chainChanged =
+      applied?.micChain !== settings.micChain ||
+      applied?.noiseSuppressionEnabled !== settings.noiseSuppressionEnabled ||
+      applied?.noiseSuppressionAttenuationDb !== settings.noiseSuppressionAttenuationDb;
     const shouldConfigureMicForSettings = this.shouldConfigureMic(settings);
     this.settings = settings;
     this.virtualSinkId = virtualSinkId;
@@ -194,12 +221,13 @@ export class AudioEngine {
       if (!updatedInPlace) await this.configureMic(generation);
       else {
         this.applyMicVolumes();
-        if (attenuationChanged) this.noiseSuppressionGraph?.worker.postMessage({ type: "attenuation", value: this.settings.noiseSuppressionAttenuationDb });
+        if (chainChanged) await this.syncMicChain();
         this.markMicApplied(generation);
       }
     } else {
       this.applyMicVolumes();
-      if (attenuationChanged) this.noiseSuppressionGraph?.worker.postMessage({ type: "attenuation", value: this.settings.noiseSuppressionAttenuationDb });
+      // Filter changes rewire the running chain; they never reopen the microphone.
+      if (chainChanged) await this.syncMicChain();
       this.markMicApplied(generation);
     }
   }
@@ -475,7 +503,9 @@ export class AudioEngine {
     this.stopPreviewSources();
     this.stopAll();
     this.micConfigureGeneration += 1;
+    this.stopMeters();
     this.stopMic();
+    this.disposeMicChain();
     await Promise.allSettled([this.monitorContext.close(), this.virtualContext.close(), this.decodeContext.close()]);
   }
 
@@ -499,6 +529,58 @@ export class AudioEngine {
 
   getDeviceStatus(): AudioDeviceStatus {
     return this.deviceStatus;
+  }
+
+  /** Hold-to-bypass: while held, only the headphones hear the unprocessed mic. */
+  setMonitorBypass(held: boolean) {
+    if (this.monitorBypass === held) return;
+    this.monitorBypass = held;
+    this.applyMonitorBypass();
+  }
+
+  /** Level and gain-reduction readings at ~30 Hz while subscribed; null when the mic is closed. */
+  subscribeMicMeters(callback: (reading: MicMeterReading | null) => void) {
+    this.meterSubscribers.add(callback);
+    this.micChain?.setMetering(true);
+    this.meterTimer ??= setInterval(() => this.emitMeters(), METER_INTERVAL_MS);
+    return () => {
+      this.meterSubscribers.delete(callback);
+      if (this.meterSubscribers.size) return;
+      this.micChain?.setMetering(false);
+      if (this.meterTimer !== undefined) clearInterval(this.meterTimer);
+      this.meterTimer = undefined;
+    };
+  }
+
+  /**
+   * The mic after the filter chain, for recording. Opens the mic if no route has it open and keeps
+   * the chain (and so the stream) alive until released, even across device switches.
+   */
+  async acquireProcessedMic(): Promise<ProcessedMicLease> {
+    if (this.disposed) throw new Error("Audio engine has stopped.");
+    this.recorderLeases += 1;
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      this.recorderLeases -= 1;
+      void this.reconcileMicDemand();
+    };
+    try {
+      await this.reconcileMicDemand();
+      const stream = this.micStream && this.micChain?.destination.stream;
+      if (!stream) throw new Error("The microphone could not be opened.");
+      return { stream, release };
+    } catch (error) {
+      release();
+      throw error;
+    }
+  }
+
+  private async reconcileMicDemand() {
+    if (this.disposed) return;
+    if (this.needsMicrophone() !== Boolean(this.micStream)) await this.configureMic(this.configureGeneration);
+    else await this.syncMicChain();
   }
 
   private connectEffectChain(context: AudioContext, source: AudioBufferSourceNode, output: AudioNode, effects: SoundEffects, baseRate: number): ActiveEffectChain {
@@ -685,7 +767,7 @@ export class AudioEngine {
   }
 
   private needsMicrophone(settings: AudioSettings = this.settings) {
-    return settings.micPassthrough || settings.monitorMicToHeadphones;
+    return settings.micPassthrough || settings.monitorMicToHeadphones || this.recorderLeases > 0;
   }
 
   private shouldConfigureMic(nextSettings: AudioSettings) {
@@ -695,7 +777,6 @@ export class AudioEngine {
       (this.needsMicrophone(nextSettings) && !this.micStream) ||
       applied.micPassthrough !== nextSettings.micPassthrough ||
       applied.microphoneDeviceId !== nextSettings.microphoneDeviceId ||
-      applied.noiseSuppressionEnabled !== nextSettings.noiseSuppressionEnabled ||
       applied.monitorMicToHeadphones !== nextSettings.monitorMicToHeadphones
     );
   }
@@ -715,8 +796,25 @@ export class AudioEngine {
 
   private applyMicVolumes() {
     for (const node of this.micNodes) {
-      this.setBusGain(node.gain, this.micVolumeFor(node.context));
+      const volume = this.micVolumeFor(node.context);
+      if (!node.raw) {
+        this.setBusGain(node.gain, volume);
+        continue;
+      }
+      this.setMixGain(node.gain, this.monitorBypass ? 0 : volume, volume);
+      this.setMixGain(node.raw.gain, this.monitorBypass ? volume : 0, volume);
     }
+  }
+
+  /** Crossfade for hold-to-bypass; a muted route still drops to zero at once. */
+  private setMixGain(gain: GainNode, target: number, volume: number) {
+    if (volume <= 0) {
+      this.setBusGain(gain, 0);
+      return;
+    }
+    const now = gain.context.currentTime;
+    gain.gain.cancelScheduledValues(now);
+    gain.gain.setTargetAtTime(target, now, 0.01);
   }
 
   private micVolumeFor(context: AudioContext) {
@@ -780,10 +878,9 @@ export class AudioEngine {
     this.stopMic(generation);
     if (!this.needsMicrophone()) {
       preacquired?.getTracks().forEach((track) => track.stop());
-      this.setProcessingStatus({
-        echoCancellation: "disabled",
-        noiseSuppression: this.settings.noiseSuppressionEnabled ? "standby" : "disabled"
-      });
+      this.disposeMicChain();
+      this.setProcessingStatus({ echoCancellation: "disabled" });
+      this.refreshChainStatus();
       this.markMicApplied(configureGeneration);
       return;
     }
@@ -845,26 +942,11 @@ export class AudioEngine {
     }
     this.updateEchoCancellationStatus(stream);
 
-    try {
-      const routedStream = this.settings.noiseSuppressionEnabled
-        ? await this.createNoiseSuppressionStream(stream, generation)
-        : stream;
-      if (generation !== this.micConfigureGeneration || configureGeneration !== this.configureGeneration || this.disposed || !this.needsMicrophone()) return;
-      // Microphone routes are independent of the soundboard's output toggles.
-      const contexts: AudioContext[] = [];
-      if (this.settings.monitorMicToHeadphones) contexts.push(this.monitorContext);
-      if (this.settings.micPassthrough && this.virtualSinkReady) contexts.push(this.virtualContext);
-      for (const context of contexts) {
-        const source = context.createMediaStreamSource(routedStream);
-        const gain = context.createGain();
-        gain.gain.value = this.micVolumeFor(context);
-        source.connect(gain).connect(context.destination);
-        this.micNodes.push({ source, gain, context });
-      }
-      this.markMicApplied(configureGeneration);
-    } catch (error) {
-      if (generation === this.micConfigureGeneration) console.warn("Microphone passthrough failed", error);
-    }
+    // Reopening already interrupts the audio, so a chain nothing needs can go now.
+    if (!this.chainWanted()) this.disposeMicChain();
+    await this.syncMicChain();
+    if (generation !== this.micConfigureGeneration || configureGeneration !== this.configureGeneration || this.disposed || !this.needsMicrophone()) return;
+    this.markMicApplied(configureGeneration);
   }
 
   private async retryPreferredMicrophone() {
@@ -900,15 +982,13 @@ export class AudioEngine {
   }
 
   private stopMic(generation = this.micConfigureGeneration) {
-    for (const node of this.micNodes) {
-      node.source.disconnect();
-      node.gain.disconnect();
-    }
-    this.micNodes = [];
-    this.stopNoiseSuppression();
+    this.disconnectMicRoutes();
+    // The chain outlives a reopen so a recording keeps a stable stream across device changes.
+    this.micChain?.setSource(undefined);
     this.micStream?.getTracks().forEach((track) => track.stop());
     this.micStream = undefined;
     this.setProcessingStatus({ echoCancellation: "disabled" });
+    this.refreshChainStatus();
     if (generation === this.micConfigureGeneration) {
       this.setMicrophoneDeviceStatus({
         state: "closed",
@@ -946,103 +1026,170 @@ export class AudioEngine {
     this.setProcessingStatus({ echoCancellation: actual === false ? "unavailable" : "active" });
   }
 
-  private async createNoiseSuppressionStream(stream: MediaStream, generation: number) {
-    this.setProcessingStatus({ noiseSuppression: "loading" });
-    let context: AudioContext | undefined;
-    try {
-      context = new AudioContext({ latencyHint: "interactive", sampleRate: 48000 });
-      await context.audioWorklet.addModule(new URL("./deepFilterWorklet.js", import.meta.url));
-      if (generation !== this.micConfigureGeneration || this.disposed) {
-        await context.close();
-        return stream;
-      }
-      const source = context.createMediaStreamSource(stream);
-      const node = new AudioWorkletNode(context, "sounddeck-deep-filter", {
-        channelCount: 1,
-        channelCountMode: "explicit",
-        channelInterpretation: "speakers",
-        numberOfInputs: 1,
-        numberOfOutputs: 1,
-        outputChannelCount: [1]
+  private chainWanted() {
+    return activeMicChainCount(this.settings) > 0 || this.recorderLeases > 0;
+  }
+
+  /**
+   * Bring the filter chain and the mic routes in line with the current settings: build the chain
+   * the first time a filter is switched on and update it in place afterwards. Once built it stays
+   * up while the mic is open, so switching the last filter off and on again (say, noise
+   * suppression from a Stream Deck key) never reroutes the mic. It's dropped when the mic closes.
+   */
+  private async syncMicChain() {
+    if (this.micStream && this.chainWanted() && !this.micChain) {
+      this.micChainCreating ??= this.createMicChain().finally(() => {
+        this.micChainCreating = undefined;
       });
-      const destination = context.createMediaStreamDestination();
-      const worker = new Worker(new URL("./deepFilterWorker.ts", import.meta.url), { type: "module", name: "sounddeck-deep-filter" });
-      const channel = new MessageChannel();
-      node.port.postMessage({ type: "connect", port: channel.port1 }, [channel.port1]);
-      source.connect(node).connect(destination);
-      node.port.onmessage = (event: MessageEvent<{ type: "error" | "underrun" | "recovered"; message?: string }>) => {
-        if (this.noiseSuppressionGraph?.worker !== worker) return;
-        if (event.data?.type === "error") console.warn("DeepFilterNet audio worklet failed", event.data.message);
-        if (event.data?.type === "error" || event.data?.type === "underrun") this.setProcessingStatus({ noiseSuppression: "unavailable" });
-        if (event.data?.type === "recovered") this.setProcessingStatus({ noiseSuppression: "active" });
-      };
-      worker.onmessage = (event: MessageEvent<{ type: "ready" | "error"; message?: string }>) => {
-        if (this.noiseSuppressionGraph?.worker !== worker) return;
-        if (event.data?.type === "ready") this.setProcessingStatus({ noiseSuppression: "active" });
-        if (event.data?.type === "error") {
-          console.warn("DeepFilterNet worker failed", event.data.message);
-          this.setProcessingStatus({ noiseSuppression: "unavailable" });
-        }
-      };
-      worker.onerror = (event) => {
-        if (this.noiseSuppressionGraph?.worker !== worker) return;
-        console.warn("DeepFilterNet worker crashed", event.message);
-        this.setProcessingStatus({ noiseSuppression: "unavailable" });
-      };
-      this.noiseSuppressionGraph = { context, source, node, destination, worker };
-      void window.sounddeck.getNoiseSuppressionAssets().then(({ wasm, model }) => {
-        if (this.noiseSuppressionGraph?.worker !== worker || generation !== this.micConfigureGeneration) {
-          channel.port2.close();
-          return;
-        }
-        worker.postMessage({
-          type: "init",
-          port: channel.port2,
-          wasm,
-          model,
-          attenuationDb: this.settings.noiseSuppressionAttenuationDb
-        }, [channel.port2, wasm, model]);
-      }).catch((error) => {
-        if (this.noiseSuppressionGraph?.worker !== worker) return;
-        console.warn("DeepFilterNet assets could not be loaded", error);
-        this.setProcessingStatus({ noiseSuppression: "unavailable" });
-      });
-      await context.resume();
-      return destination.stream;
-    } catch (error) {
-      console.warn("Noise suppression could not be started", error);
-      this.setProcessingStatus({ noiseSuppression: "unavailable" });
-      const graph = this.noiseSuppressionGraph;
-      if (graph && graph.context === context) {
-        this.noiseSuppressionGraph = undefined;
-        this.disposeNoiseSuppressionGraph(graph);
-      } else if (context) {
-        await context.close().catch(() => undefined);
-      }
-      return stream;
+      this.refreshChainStatus();
+      await this.micChainCreating;
     }
+    if (this.disposed) return;
+    const chain = this.micChain;
+    if (chain && !this.micStream && this.recorderLeases === 0) {
+      this.micChain = undefined;
+      this.connectMicRoutes();
+      chain.dispose();
+    } else if (chain) {
+      chain.setSource(this.micStream);
+      chain.apply(this.settings);
+      this.connectMicRoutes();
+    } else {
+      this.connectMicRoutes();
+    }
+    this.refreshChainStatus();
   }
 
-  private stopNoiseSuppression() {
-    const graph = this.noiseSuppressionGraph;
-    this.noiseSuppressionGraph = undefined;
-    if (graph) this.disposeNoiseSuppressionGraph(graph);
-    this.setProcessingStatus({ noiseSuppression: this.settings.noiseSuppressionEnabled ? "standby" : "disabled" });
+  private async createMicChain() {
+    this.micChainFailed = false;
+    let chain: MicChain;
+    try {
+      chain = await MicChain.create(() => this.refreshChainStatus());
+    } catch (error) {
+      console.warn("Microphone filters could not be started", error);
+      this.micChainFailed = true;
+      return;
+    }
+    if (this.disposed || this.micChain || !this.micStream || !this.chainWanted()) {
+      chain.dispose();
+      return;
+    }
+    chain.setMetering(this.meterSubscribers.size > 0);
+    this.micChain = chain;
   }
 
-  private disposeNoiseSuppressionGraph(graph: NoiseSuppressionGraph) {
-    graph.worker.postMessage({ type: "dispose" });
-    graph.worker.terminate();
-    graph.source.disconnect();
-    graph.node.disconnect();
-    graph.destination.disconnect();
-    graph.destination.stream.getTracks().forEach((track) => track.stop());
-    void graph.context.close().catch(() => undefined);
+  private disposeMicChain() {
+    const chain = this.micChain;
+    this.micChain = undefined;
+    chain?.dispose();
+  }
+
+  private refreshChainStatus() {
+    const open = Boolean(this.micStream);
+    const chain = this.micChain;
+    const chainState: MicrophoneProcessingStatus["filterChain"] = !open
+      ? "standby"
+      : chain
+        ? "active"
+        : this.micChainFailed && !this.micChainCreating
+          ? "unavailable"
+          : "loading";
+    this.setProcessingStatus({
+      filterChain: activeMicChainCount(this.settings) > 0 ? chainState : "disabled",
+      noiseSuppression: !this.settings.noiseSuppressionEnabled
+        ? "disabled"
+        : chainState === "active"
+          ? chain?.noiseSuppressionState ?? "loading"
+          : chainState,
+      latencyMs: open && chain ? Math.round(chain.latencyMs * 10) / 10 : 0
+    });
+  }
+
+  /** Route the processed mic (or the raw mic when no filter is on) to headphones and the virtual mic. */
+  private connectMicRoutes() {
+    const stream = this.micStream ? this.micChain?.destination.stream ?? this.micStream : undefined;
+    // Microphone routes are independent of the soundboard's output toggles.
+    const contexts: AudioContext[] = [];
+    if (stream && this.settings.monitorMicToHeadphones) contexts.push(this.monitorContext);
+    if (stream && this.settings.micPassthrough && this.virtualSinkReady) contexts.push(this.virtualContext);
+    const unchanged =
+      stream === this.micRoutedStream &&
+      contexts.length === this.micNodes.length &&
+      contexts.every((context, index) => this.micNodes[index].context === context);
+    if (unchanged) return;
+    this.disconnectMicRoutes();
+    if (!stream) return;
+    this.micRoutedStream = stream;
+    for (const context of contexts) {
+      const source = context.createMediaStreamSource(stream);
+      const gain = context.createGain();
+      gain.gain.value = this.micVolumeFor(context);
+      source.connect(gain).connect(context.destination);
+      this.micNodes.push({ source, gain, context });
+    }
+    this.applyMonitorBypass();
+  }
+
+  private disconnectMicRoutes() {
+    if (this.meterFallback) {
+      this.meterFallback.route.source.disconnect(this.meterFallback.analyser);
+      this.meterFallback = undefined;
+    }
+    for (const node of this.micNodes) {
+      node.source.disconnect();
+      node.gain.disconnect();
+      node.raw?.source.disconnect();
+      node.raw?.gain.disconnect();
+    }
+    this.micNodes = [];
+    this.micRoutedStream = undefined;
+  }
+
+  private applyMonitorBypass() {
+    const route = this.micNodes.find((node) => node.context === this.monitorContext);
+    if (route && this.monitorBypass && !route.raw && this.micChain && this.micStream) {
+      const source = this.monitorContext.createMediaStreamSource(this.micStream);
+      const gain = this.monitorContext.createGain();
+      gain.gain.value = 0;
+      source.connect(gain).connect(this.monitorContext.destination);
+      route.raw = { source, gain };
+    }
+    this.applyMicVolumes();
+  }
+
+  private emitMeters() {
+    let reading: MicMeterReading | null = null;
+    if (this.micStream && this.micChain) reading = this.micChain.readMeters();
+    else if (this.micStream && this.micNodes[0]) {
+      // Without a chain the mic goes straight to the routes, so in and out are the same signal.
+      const route = this.micNodes[0];
+      if (this.meterFallback?.route !== route) {
+        const analyser = route.context.createAnalyser();
+        analyser.fftSize = 2048;
+        route.source.connect(analyser);
+        this.meterFallback = { analyser, route, buffer: new Float32Array(2048) };
+      }
+      const level = analyserPeakDb(this.meterFallback.analyser, this.meterFallback.buffer);
+      reading = { inputDb: level, outputDb: level, gainReductionDb: {} };
+    }
+    for (const subscriber of this.meterSubscribers) subscriber(reading);
+  }
+
+  private stopMeters() {
+    if (this.meterTimer !== undefined) clearInterval(this.meterTimer);
+    this.meterTimer = undefined;
+    this.meterSubscribers.clear();
   }
 
   private setProcessingStatus(patch: Partial<MicrophoneProcessingStatus>) {
     const next = { ...this.processingStatus, ...patch };
-    if (next.echoCancellation === this.processingStatus.echoCancellation && next.noiseSuppression === this.processingStatus.noiseSuppression) return;
+    const current = this.processingStatus;
+    if (
+      next.echoCancellation === current.echoCancellation &&
+      next.noiseSuppression === current.noiseSuppression &&
+      next.filterChain === current.filterChain &&
+      next.latencyMs === current.latencyMs
+    ) return;
     this.processingStatus = next;
     this.processingStatusCallback(next);
   }

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AudioEngine } from "./audioEngine";
-import type { AudioSettings } from "../types";
-import { FakeAudioContext, FakeAudioWorkletNode, FakeWorker, deferred, fakeStream, makeAudioSettings, makeSound, waitForMockCalls } from "./testing/webAudioFakes";
+import type { AudioSettings, MicFilter } from "../types";
+import { FakeAudioContext, FakeAudioWorkletNode, FakeGainNode, FakeWorker, deferred, fakeStream, makeAudioSettings, makeSound, waitForMockCalls } from "./testing/webAudioFakes";
 
 const settings: AudioSettings = makeAudioSettings();
 
@@ -1138,7 +1138,7 @@ describe("AudioEngine mic routing", () => {
     await engine.dispose();
   });
 
-  it("tears down suppression and routes raw audio when its context cannot start", async () => {
+  it("routes raw audio and reports the filters unavailable when the chain context cannot start", async () => {
     class FailingProcessingAudioContext extends FakeAudioContext {
       constructor(options?: AudioContextOptions) {
         super(options);
@@ -1148,8 +1148,7 @@ describe("AudioEngine mic routing", () => {
     vi.stubGlobal("AudioContext", FailingProcessingAudioContext);
     vi.stubGlobal("AudioWorkletNode", FakeAudioWorkletNode);
     vi.stubGlobal("Worker", FakeWorker);
-    const assets = deferred<{ wasm: ArrayBuffer; model: ArrayBuffer }>();
-    vi.stubGlobal("window", { sounddeck: { getNoiseSuppressionAssets: vi.fn(() => assets.promise) } });
+    vi.stubGlobal("window", { sounddeck: { getNoiseSuppressionAssets: vi.fn() } });
     vi.stubGlobal("navigator", { mediaDevices: { getUserMedia: vi.fn(async () => fakeStream().stream) } });
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const failedSettings = makeAudioSettings({
@@ -1167,17 +1166,205 @@ describe("AudioEngine mic routing", () => {
     const processingContext = FakeAudioContext.instances[3];
     const rawStream = monitorContext.mediaSources[0].stream;
     expect(virtualContext.mediaSources[0].stream).toBe(rawStream);
-    expect(FakeWorker.instances[0].terminate).toHaveBeenCalledOnce();
-    expect(processingContext.mediaSources[0].disconnect).toHaveBeenCalledOnce();
-    expect(processingContext.workletNodes[0].disconnect).toHaveBeenCalledOnce();
     expect(processingContext.close).toHaveBeenCalledOnce();
-    expect(processingStatus).toHaveBeenLastCalledWith(expect.objectContaining({ noiseSuppression: "unavailable" }));
+    expect(FakeWorker.instances).toHaveLength(0);
+    expect(processingStatus).toHaveBeenLastCalledWith(expect.objectContaining({ noiseSuppression: "unavailable", filterChain: "unavailable" }));
 
-    assets.resolve({ wasm: new ArrayBuffer(8), model: new ArrayBuffer(8) });
-    await assets.promise;
-    await Promise.resolve();
-    expect(FakeWorker.instances[0].postMessage).not.toHaveBeenCalledWith(expect.objectContaining({ type: "init" }), expect.anything());
+    await engine.dispose();
+  });
+});
 
+describe("AudioEngine mic filter chain", () => {
+  const highPass: MicFilter = { id: "hp", type: "highPass", enabled: true, params: { frequencyHz: 80, slope: 24 } };
+  const gain: MicFilter = { id: "trim", type: "gain", enabled: true, params: { gainDb: 6 } };
+  const compressor: MicFilter = {
+    id: "comp",
+    type: "compressor",
+    enabled: true,
+    params: { thresholdDb: -18, ratio: 3, kneeDb: 6, attackMs: 5, releaseMs: 120, makeupDb: 3 }
+  };
+  const noiseSlot = { id: "noise-suppression", type: "noiseSuppression" } as const;
+  const routed = makeAudioSettings({ monitorMicToHeadphones: true });
+
+  function liveStreams(context: FakeAudioContext) {
+    return liveMediaSources(context).map((source) => source.stream);
+  }
+
+  beforeEach(() => {
+    FakeAudioContext.instances = [];
+    FakeWorker.instances = [];
+    vi.stubGlobal("AudioContext", FakeAudioContext);
+    vi.stubGlobal("AudioWorkletNode", FakeAudioWorkletNode);
+    vi.stubGlobal("Worker", FakeWorker);
+    vi.stubGlobal("window", {
+      sounddeck: { getNoiseSuppressionAssets: vi.fn(async () => ({ wasm: new ArrayBuffer(8), model: new ArrayBuffer(8) })) }
+    });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("builds the chain on demand, updates it in place, and drops it when the mic closes", async () => {
+    const captured = fakeStream();
+    const getUserMedia = vi.fn().mockResolvedValue(captured.stream);
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+    const processingStatus = vi.fn();
+    const off = { ...routed, micChain: [noiseSlot, { ...highPass, enabled: false }] };
+    const engine = new AudioEngine(off, vi.fn(), processingStatus);
+    await engine.configure(off, "cable-device");
+    const [monitor, virtual] = FakeAudioContext.instances;
+    expect(FakeAudioContext.instances).toHaveLength(3);
+    expect(liveStreams(monitor)).toEqual([captured.stream]);
+
+    await engine.configure({ ...off, micChain: [noiseSlot, highPass] }, "cable-device");
+    const chainContext = FakeAudioContext.instances[3];
+    const processed = chainContext.mediaDestinations[0].stream;
+    expect(chainContext.options).toEqual({ latencyHint: "interactive", sampleRate: 48000 });
+    expect(chainContext.mediaSources.map((source) => source.stream)).toEqual([captured.stream]);
+    expect(chainContext.biquads.map((filter) => filter.type)).toEqual(["highpass", "highpass"]);
+    expect(liveStreams(monitor)).toEqual([processed]);
+    expect(liveStreams(virtual)).toEqual([processed]);
+    expect(processingStatus).toHaveBeenLastCalledWith(expect.objectContaining({ filterChain: "active", noiseSuppression: "disabled" }));
+
+    await engine.configure({ ...off, micChain: [noiseSlot, { ...highPass, params: { frequencyHz: 120, slope: 12 } }] }, "cable-device");
+    expect(chainContext.biquads[0].frequency.setTargetAtTime).toHaveBeenLastCalledWith(120, 0, expect.any(Number));
+    expect(chainContext.biquads[1].type).toBe("allpass");
+
+    await engine.configure({ ...off, noiseSuppressionEnabled: true, micChain: [noiseSlot, { ...highPass, enabled: false }] }, "cable-device");
+    expect(chainContext.workletNodes.map((node) => node.name)).toEqual(["sounddeck-deep-filter"]);
+    expect(FakeWorker.instances).toHaveLength(1);
+
+    // Switching everything off keeps the routes on the chain, so turning a filter back on is gapless.
+    await engine.configure(off, "cable-device");
+    await vi.waitFor(() => expect(FakeWorker.instances[0].terminate).toHaveBeenCalledOnce());
+    expect(chainContext.close).not.toHaveBeenCalled();
+    expect(liveStreams(monitor)).toEqual([processed]);
+    expect(processingStatus).toHaveBeenLastCalledWith(expect.objectContaining({ filterChain: "disabled", noiseSuppression: "disabled", latencyMs: 0 }));
+    expect(getUserMedia).toHaveBeenCalledOnce();
+
+    await engine.configure({ ...off, monitorMicToHeadphones: false, micPassthrough: false }, "cable-device");
+    expect(chainContext.close).toHaveBeenCalledOnce();
+    expect(captured.track.stop).toHaveBeenCalled();
+    await engine.dispose();
+  });
+
+  it("crossfades on/off switches in place and reorders behind a short fade", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia: vi.fn().mockResolvedValue(fakeStream().stream) } });
+    const initial = { ...routed, micChain: [noiseSlot, highPass, gain, compressor] };
+    const engine = new AudioEngine(initial, vi.fn());
+    await engine.configure(initial, "cable-device");
+    const chainContext = FakeAudioContext.instances[3];
+    const [input, fade] = chainContext.gains;
+    const [first, second] = chainContext.biquads;
+    const trim = chainContext.gains.find((node) => Math.abs(node.gain.value - 10 ** (6 / 20)) < 1e-9)!;
+    const worklet = chainContext.workletNodes[0];
+    // Each filter sits in a slot: slot input → (dry | filter → wet) → slot output.
+    const slotInput = (node: unknown) => chainContext.gains.find((candidate) => candidate !== node && candidate.connections.includes(node))!;
+    const wetOf = (node: { connections: unknown[] }) => node.connections[0] as FakeGainNode;
+    const slotOutput = (node: { connections: unknown[] }) => wetOf(node).connections[0] as FakeGainNode;
+    expect(worklet.options?.processorOptions).toEqual({ params: compressor.params });
+    expect(slotOutput(second).connect).toHaveBeenLastCalledWith(slotInput(trim));
+    expect(slotOutput(trim).connect).toHaveBeenLastCalledWith(slotInput(worklet));
+    expect(slotOutput(worklet).connect).toHaveBeenLastCalledWith(fade);
+
+    const rewires = input.connect.mock.calls.length;
+    await engine.configure({ ...initial, micChain: [noiseSlot, highPass, gain, { ...compressor, enabled: false }] }, "cable-device");
+    expect(wetOf(worklet).gain.linearRampToValueAtTime).toHaveBeenLastCalledWith(0, expect.any(Number));
+    expect(input.connect).toHaveBeenCalledTimes(rewires);
+    vi.advanceTimersByTime(60);
+    expect(worklet.disconnect).toHaveBeenCalled();
+
+    await engine.configure({ ...initial, micChain: [noiseSlot, gain, highPass, compressor] }, "cable-device");
+    const revived = chainContext.workletNodes[1];
+    expect(fade.gain.linearRampToValueAtTime).toHaveBeenLastCalledWith(0, expect.any(Number));
+    expect(slotOutput(trim).connect).not.toHaveBeenCalledWith(slotInput(first));
+    vi.advanceTimersByTime(20);
+    expect(slotOutput(trim).connect).toHaveBeenLastCalledWith(slotInput(first));
+    expect(slotOutput(second).connect).toHaveBeenLastCalledWith(slotInput(revived));
+    expect(fade.gain.linearRampToValueAtTime).toHaveBeenLastCalledWith(1, expect.any(Number));
+
+    const louder = { ...compressor, params: { ...compressor.params, thresholdDb: -24 } };
+    await engine.configure({ ...initial, micChain: [noiseSlot, gain, highPass, louder] }, "cable-device");
+    expect(revived.port.postMessage).toHaveBeenLastCalledWith({ type: "params", params: louder.params });
+    await engine.dispose();
+  });
+
+  it("crossfades only the headphones to the raw mic while bypass is held", async () => {
+    const captured = fakeStream();
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia: vi.fn().mockResolvedValue(captured.stream) } });
+    const filtered = { ...routed, micMonitorVolume: 0.5, micChain: [noiseSlot, gain] };
+    const engine = new AudioEngine(filtered, vi.fn());
+    await engine.configure(filtered, "cable-device");
+    const [monitor, virtual] = FakeAudioContext.instances;
+    const processed = FakeAudioContext.instances[3].mediaDestinations[0].stream;
+    const processedGain = monitor.mediaSources[0].connections[0] as FakeGainNode;
+
+    engine.setMonitorBypass(true);
+    const rawSource = monitor.mediaSources[1];
+    const rawGain = rawSource.connections[0] as FakeGainNode;
+    expect(rawSource.stream).toBe(captured.stream);
+    expect(processedGain.gain.value).toBe(0);
+    expect(rawGain.gain.value).toBe(0.5);
+    expect(liveStreams(virtual)).toEqual([processed]);
+
+    engine.setMonitorBypass(false);
+    expect(processedGain.gain.value).toBe(0.5);
+    expect(rawGain.gain.value).toBe(0);
+    await engine.dispose();
+  });
+
+  it("opens the mic for a recording lease and records the chain output", async () => {
+    const captured = fakeStream();
+    const getUserMedia = vi.fn().mockResolvedValue(captured.stream);
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+    const closed = makeAudioSettings({ micPassthrough: false, micChain: [noiseSlot] });
+    const engine = new AudioEngine(closed, vi.fn());
+    await engine.configure(closed, "cable-device");
+    expect(getUserMedia).not.toHaveBeenCalled();
+
+    const lease = await engine.acquireProcessedMic();
+    const chainContext = FakeAudioContext.instances[3];
+    expect(getUserMedia).toHaveBeenCalledOnce();
+    expect(lease.stream).toBe(chainContext.mediaDestinations[0].stream);
+
+    lease.release();
+    await vi.waitFor(() => expect(captured.track.stop).toHaveBeenCalled());
+    expect(chainContext.close).toHaveBeenCalledOnce();
+    await engine.dispose();
+  });
+
+  it("reports levels and gain reduction to meter subscribers", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia: vi.fn().mockResolvedValue(fakeStream().stream) } });
+    const filtered = { ...routed, micChain: [noiseSlot, compressor] };
+    const engine = new AudioEngine(filtered, vi.fn());
+    await engine.configure(filtered, "cable-device");
+    const chainContext = FakeAudioContext.instances[3];
+    const [inputAnalyser, outputAnalyser] = chainContext.analysers;
+    inputAnalyser.level = 0.5;
+    outputAnalyser.level = 0.25;
+    const worklet = chainContext.workletNodes[0];
+    const readings = vi.fn();
+
+    const unsubscribe = engine.subscribeMicMeters(readings);
+    expect(worklet.port.postMessage).toHaveBeenLastCalledWith({ type: "meter", enabled: true });
+    worklet.port.onmessage?.({ data: { type: "gr", db: -4.5 } } as MessageEvent);
+    vi.advanceTimersByTime(40);
+    expect(readings).toHaveBeenLastCalledWith({
+      inputDb: expect.closeTo(-6.02, 1),
+      outputDb: expect.closeTo(-12.04, 1),
+      gainReductionDb: { comp: -4.5 }
+    });
+
+    unsubscribe();
+    expect(worklet.port.postMessage).toHaveBeenLastCalledWith({ type: "meter", enabled: false });
+    const count = readings.mock.calls.length;
+    vi.advanceTimersByTime(100);
+    expect(readings).toHaveBeenCalledTimes(count);
     await engine.dispose();
   });
 });

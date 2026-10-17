@@ -10,6 +10,9 @@ export class FakeAudioParam {
   exponentialRampToValueAtTime = vi.fn((value: number) => {
     this.value = value;
   });
+  linearRampToValueAtTime = vi.fn((value: number) => {
+    this.value = value;
+  });
   setTargetAtTime = vi.fn((value: number) => {
     this.value = value;
   });
@@ -159,6 +162,23 @@ export class FakeAudioWorkletNode {
   disconnect = vi.fn();
 }
 
+export class FakeAnalyserNode {
+  fftSize = 2048;
+  level = 0;
+  connections: unknown[] = [];
+
+  constructor(public context: FakeAudioContext) {}
+
+  getFloatTimeDomainData = vi.fn((buffer: Float32Array) => {
+    buffer.fill(this.level);
+  });
+  connect = vi.fn((destination: unknown) => {
+    this.connections.push(destination);
+    return destination;
+  });
+  disconnect = vi.fn();
+}
+
 export class FakeWorker {
   static instances: FakeWorker[] = [];
   onmessage: ((event: MessageEvent) => void) | null = null;
@@ -184,6 +204,7 @@ export class FakeAudioContext {
   mediaSources: FakeMediaStreamAudioSourceNode[] = [];
   mediaDestinations: FakeMediaStreamAudioDestinationNode[] = [];
   workletNodes: FakeAudioWorkletNode[] = [];
+  analysers: FakeAnalyserNode[] = [];
   audioWorklet = { addModule: vi.fn(async () => undefined) };
   sinkId = "";
   setSinkId = vi.fn(async (sinkId: string) => {
@@ -232,6 +253,12 @@ export class FakeAudioContext {
     const source = new FakeMediaStreamAudioSourceNode(this, stream);
     this.mediaSources.push(source);
     return source as unknown as MediaStreamAudioSourceNode;
+  }
+
+  createAnalyser() {
+    const analyser = new FakeAnalyserNode(this);
+    this.analysers.push(analyser);
+    return analyser as unknown as AnalyserNode;
   }
 
   createMediaStreamDestination() {
@@ -315,6 +342,7 @@ const baseSettings: AudioSettings = {
   echoCancellationEnabled: false,
   noiseSuppressionEnabled: false,
   noiseSuppressionAttenuationDb: 18,
+  micChain: [{ id: "noise-suppression", type: "noiseSuppression" }],
   soundboardToVirtualMic: true,
   monitorToHeadphones: false,
   monitorMicToHeadphones: false,

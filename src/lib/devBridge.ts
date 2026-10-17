@@ -19,6 +19,7 @@ export function installDevBridge() {
           echoCancellationEnabled: false,
           noiseSuppressionEnabled: false,
           noiseSuppressionAttenuationDb: 18,
+          micChain: [{ id: "noise-suppression", type: "noiseSuppression" }],
           soundboardToVirtualMic: false,
           monitorToHeadphones: true,
           monitorMicToHeadphones: false,

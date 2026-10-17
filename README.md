@@ -61,6 +61,7 @@ A new beta is published every night whenever `main` has changed, as a prerelease
 ### Microphone processing
 - Live AI noise suppression powered by [DeepFilterNet3](https://github.com/Rikorose/DeepFilterNet)
 - Echo cancellation to keep speaker output from feeding back into your mic
+- A drag-to-reorder mic filter chain: high-pass, downward expander, de-esser, 5-band EQ, compressor, limiter, and gain, placed before or after noise suppression
 
 ### Hotkeys
 - Global OS-level hotkeys that work while you're in-game
