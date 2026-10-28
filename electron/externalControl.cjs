@@ -3,6 +3,8 @@ const fs = require("node:fs/promises");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const { WebSocketServer } = require("ws");
+const { TOGGLE_SETTING_KEYS, validControlSettingValue, normalizeAttenuation } = require("./controlSettingValues.cjs");
+const { MODEL_IDS } = require("./noiseSuppression.cjs");
 
 const PROTOCOL_VERSION = 1;
 const DEFAULT_PORT = 41730;
@@ -20,11 +22,12 @@ const MAX_SUMMARY_TITLE_LENGTH = 256;
 const MAX_SUMMARY_COLOR_LENGTH = 32;
 const HTTP_PRESS_TIMEOUT_MS = 5 * 60 * 1000;
 const MAX_PRESSES = 4096;
-const SETTING_KEYS = ["micPassthrough", "soundboardToVirtualMic", "noiseSuppressionEnabled", "echoCancellationEnabled", "monitorToHeadphones"];
 const VOLUME_BUSES = ["micVirtual", "micMonitor", "soundboardVirtual", "soundboardMonitor"];
 
 function audioState(value) {
-  const settings = Object.fromEntries(SETTING_KEYS.map((key) => [key, typeof value?.[key] === "boolean" ? value[key] : key === "monitorToHeadphones"]));
+  const settings = Object.fromEntries(TOGGLE_SETTING_KEYS.map((key) => [key, typeof value?.[key] === "boolean" ? value[key] : key === "monitorToHeadphones"]));
+  settings.noiseSuppressionModel = MODEL_IDS.includes(value?.noiseSuppressionModel) ? value.noiseSuppressionModel : "dfn3";
+  settings.noiseSuppressionAttenuationDb = normalizeAttenuation(value?.noiseSuppressionAttenuationDb);
   const volumes = Object.fromEntries(VOLUME_BUSES.map((bus) => [bus, {
     value: Number.isFinite(value?.[`${bus}Volume`]) ? Math.min(1, Math.max(0, value[`${bus}Volume`])) : 1,
     muted: value?.[`${bus}Muted`] === true
@@ -73,9 +76,9 @@ function validateCommand(command, args) {
     case "board.cycle":
       return fields(args, ["direction"]) && (args.direction === undefined || args.direction === 1 || args.direction === -1) ? null : "invalid-args";
     case "setting.set":
-      return fields(args, ["key", "value"]) && SETTING_KEYS.includes(args.key) && typeof args.value === "boolean" ? null : "invalid-args";
+      return fields(args, ["key", "value"]) && validControlSettingValue(args.key, args.value) ? null : "invalid-args";
     case "setting.toggle":
-      return fields(args, ["key"]) && SETTING_KEYS.includes(args.key) ? null : "invalid-args";
+      return fields(args, ["key"]) && TOGGLE_SETTING_KEYS.includes(args.key) ? null : "invalid-args";
     case "volume.set":
       return fields(args, ["bus", "value"]) && VOLUME_BUSES.includes(args.bus) && Number.isFinite(args.value) && args.value >= 0 && args.value <= 1 ? null : "invalid-args";
     case "volume.adjust":

@@ -1,3 +1,5 @@
+import { connectNoiseFrames } from "./noiseFrameQueue";
+import { noiseSuppressionModelInfo } from "./noiseSuppressionModels";
 import initDeepFilter, {
   df_create,
   df_destroy,
@@ -27,6 +29,8 @@ let inputView: Float32Array;
 let outputView: Float32Array;
 let framePort: MessagePort | undefined;
 let attenuationDb: number | undefined;
+let modelBytes: Uint8Array;
+let frames: ReturnType<typeof connectNoiseFrames> | undefined;
 
 function refreshViews() {
   inputView = new Float32Array(memory.buffer, inputPointer, frameLength);
@@ -43,6 +47,20 @@ function reportError(error: unknown) {
   self.postMessage({ type: "error", message });
 }
 
+// The bundled binding has no reset export. Recreate the native model state
+// only on discontinuity; retain WASM, model bytes, and the current attenuation.
+function resetState() {
+  if (state) df_destroy(state);
+  state = 0;
+  state = df_create(modelBytes, attenuationDb!);
+  frameLength = df_get_frame_length(state);
+  inputPointer = df_get_input_ptr(state);
+  outputPointer = df_get_output_ptr(state);
+  memory = df_memory() as WebAssembly.Memory;
+  df_set_post_filter_beta(state, 0);
+  refreshViews();
+}
+
 self.onmessage = async (event: MessageEvent<InitMessage | { type: "attenuation"; value: number } | { type: "dispose" }>) => {
   const message = event.data;
   if (message.type === "attenuation") {
@@ -51,6 +69,7 @@ self.onmessage = async (event: MessageEvent<InitMessage | { type: "attenuation";
     return;
   }
   if (message.type === "dispose") {
+    await frames?.dispose();
     if (state) df_destroy(state);
     state = 0;
     framePort?.close();
@@ -61,29 +80,21 @@ self.onmessage = async (event: MessageEvent<InitMessage | { type: "attenuation";
     framePort = message.port;
     attenuationDb ??= message.attenuationDb;
     await initDeepFilter({ module_or_path: message.wasm });
-    state = df_create(new Uint8Array(message.model), attenuationDb);
-    frameLength = df_get_frame_length(state);
-    inputPointer = df_get_input_ptr(state);
-    outputPointer = df_get_output_ptr(state);
-    memory = df_memory() as WebAssembly.Memory;
-    df_set_post_filter_beta(state, 0);
-    refreshViews();
-    framePort.onmessage = (frameEvent: MessageEvent<{ type: "process"; sequence: number; buffer: ArrayBuffer }>) => {
-      const frameMessage = frameEvent.data;
-      if (frameMessage.type !== "process") return;
-      try {
+    modelBytes = new Uint8Array(message.model);
+    resetState();
+    frames = connectNoiseFrames(framePort, {
+      frameLength,
+      latencySamples: noiseSuppressionModelInfo("dfn3").latencySamples,
+      reset: resetState,
+      process: (samples) => {
         ensureViews();
-        const samples = new Float32Array(frameMessage.buffer);
         inputView.set(samples);
         df_process_frame(state);
         ensureViews();
-        samples.set(outputView);
-        framePort?.postMessage({ type: "processed", sequence: frameMessage.sequence, buffer: frameMessage.buffer }, [frameMessage.buffer]);
-      } catch (error) {
-        reportError(error);
-      }
-    };
-    framePort.start();
+        return outputView;
+      },
+      onError: reportError
+    });
     framePort.postMessage({ type: "ready", frameLength });
     self.postMessage({ type: "ready", frameLength });
   } catch (error) {

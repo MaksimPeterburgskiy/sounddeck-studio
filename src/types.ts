@@ -1,4 +1,6 @@
+import type { NoiseSuppressionModelId } from "./lib/noiseSuppressionModels";
 import type { ControlLiveState, ControlSettingsPatch, ControlStatus, RendererControlCommand, RendererControlResult } from "./lib/controlProtocol";
+export type { NoiseSuppressionModelId } from "./lib/noiseSuppressionModels";
 
 export type OutputTarget = "monitor" | "virtual" | "both";
 export type RetriggerMode = "restart" | "overlap" | "stop";
@@ -157,6 +159,7 @@ export type MicChainEntry = MicFilter | MicNoiseSuppressionSlot;
 export interface AudioSettings {
   micPassthrough: boolean;
   echoCancellationEnabled: boolean;
+  noiseSuppressionModel: NoiseSuppressionModelId;
   noiseSuppressionEnabled: boolean;
   noiseSuppressionAttenuationDb: number;
   /** Mic filters in processing order. Echo cancellation always runs first, during capture. */
@@ -303,7 +306,7 @@ declare global {
       importMedia: (paths: string[]) => Promise<MediaImportResult[]>;
       downloadMedia: (urls: string[]) => Promise<MediaImportResult[]>;
       readMedia: (mediaPath: string) => Promise<ArrayBuffer>;
-      getNoiseSuppressionAssets: () => Promise<{ wasm: ArrayBuffer; model: ArrayBuffer }>;
+      getNoiseSuppressionAssets: (model: NoiseSuppressionModelId) => Promise<{ wasm: ArrayBuffer; model: ArrayBuffer }>;
       deleteMedia: (mediaPath: string) => Promise<{ ok: boolean; reason?: string }>;
       cropMedia: (payload: { mediaPath: string; ext: string; startSec: number; endSec: number; rate: number; sampleRate?: number }) => Promise<MediaCropResult>;
       saveRecording: (payload: { title: string; ext: string; bytes: ArrayBuffer }) => Promise<MediaImportResult>;

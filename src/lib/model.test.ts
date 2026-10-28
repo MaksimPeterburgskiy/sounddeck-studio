@@ -73,7 +73,7 @@ describe("model helpers", () => {
     expect(library.settings.virtualBackend).toBe("windows-vbcable");
     expect(library.settings.echoCancellationEnabled).toBe(false);
     expect(library.settings.noiseSuppressionEnabled).toBe(false);
-    expect(library.settings.noiseSuppressionAttenuationDb).toBe(18);
+    expect(library.settings.noiseSuppressionAttenuationDb).toBe(100);
     expect(library.settings.monitorDeviceLabel).toBe("");
     expect(library.settings.microphoneDeviceLabel).toBe("");
     expect(library.settings.defaultRetriggerMode).toBe("stop");
@@ -130,7 +130,18 @@ describe("model helpers", () => {
 
     expect(library.settings.echoCancellationEnabled).toBe(true);
     expect(library.settings.noiseSuppressionEnabled).toBe(false);
-    expect(library.settings.noiseSuppressionAttenuationDb).toBe(30);
+    expect(library.settings.noiseSuppressionAttenuationDb).toBe(100);
+  });
+
+  it.each(["dpdfnet8", "unknown", undefined])("normalizes noise model %s and preserves saved attenuation", (model) => {
+    const library = normalizeLibrary({ version: 1, activeBoardId: "", boards: [], settings: { noiseSuppressionModel: model, noiseSuppressionAttenuationDb: 18 } } as unknown as SoundLibrary);
+    expect(library.settings.noiseSuppressionModel).toBe(model && model !== "unknown" ? model : "dfn3");
+    expect(library.settings.noiseSuppressionAttenuationDb).toBe(18);
+  });
+
+  it.each([[6, 6], [30, 30], [31, 100], [100, 100], [150, 100], [0, 6], [NaN, 100], [undefined, 100]])("normalizes attenuation %s to %s", (value, expected) => {
+    const library = normalizeLibrary({ version: 1, activeBoardId: "", boards: [], settings: { noiseSuppressionAttenuationDb: value } } as unknown as SoundLibrary);
+    expect(library.settings.noiseSuppressionAttenuationDb).toBe(expected);
   });
 
   it("normalizes the saved audio device labels", () => {

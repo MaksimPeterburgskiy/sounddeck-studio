@@ -59,7 +59,7 @@ A new beta is published every night whenever `main` has changed, as a prerelease
 - Choose the output device for each audio bus
 
 ### Microphone processing
-- Live AI noise suppression powered by [DeepFilterNet3](https://github.com/Rikorose/DeepFilterNet)
+- Live AI noise suppression with four on-device models: DPDFNet-8, DPDFNet-2, FastEnhancer Medium, and DeepFilterNet 3 (default)
 - Echo cancellation to keep speaker output from feeding back into your mic
 - A drag-to-reorder mic filter chain: high-pass, downward expander, de-esser, 5-band EQ, compressor, limiter, and gain, placed before or after noise suppression
 

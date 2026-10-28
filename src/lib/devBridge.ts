@@ -1,3 +1,4 @@
+import { NOISE_SUPPRESSION_UNLIMITED_DB } from "./noiseSuppressionModels";
 import { CONTROL_DEFAULT_PORT } from "./controlProtocol";
 import type { HotkeyBinding, MediaImportResult, SoundLibrary, UpdateChannel } from "../types";
 
@@ -17,8 +18,9 @@ export function installDevBridge() {
         settings: {
           micPassthrough: false,
           echoCancellationEnabled: false,
+          noiseSuppressionModel: "dfn3",
           noiseSuppressionEnabled: false,
-          noiseSuppressionAttenuationDb: 18,
+          noiseSuppressionAttenuationDb: NOISE_SUPPRESSION_UNLIMITED_DB,
           micChain: [{ id: "noise-suppression", type: "noiseSuppression" }],
           soundboardToVirtualMic: false,
           monitorToHeadphones: true,

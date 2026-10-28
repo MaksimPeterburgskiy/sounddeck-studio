@@ -7,6 +7,8 @@ const https = require("node:https");
 const crypto = require("node:crypto");
 const os = require("node:os");
 const { spawn } = require("node:child_process");
+const { loadNoiseSuppressionAssets } = require("./noiseSuppression.cjs");
+const { NOISE_SUPPRESSION_UNLIMITED_DB } = require("./controlSettingValues.cjs");
 const { createCorsairBridge, createCorsairPressTracker, isCorsairSupportedPlatform, isGKeyAccelerator } = require("./corsair.cjs");
 const { createExternalControlBridge, launcherPath } = require("./externalControl.cjs");
 const { createStreamDeckInstaller } = require("./streamdeckInstall.cjs");
@@ -207,11 +209,6 @@ function appSettingsFile() {
 
 function mediaRoot() {
   return path.join(appRoot(), "media");
-}
-
-function deepFilterResourcePath(fileName) {
-  const root = app.isPackaged ? process.resourcesPath : path.join(__dirname, "..");
-  return path.join(root, "deepfilter", fileName);
 }
 
 function bundledYtDlpCandidates() {
@@ -464,8 +461,9 @@ async function initializeLibrary() {
         settings: {
           micPassthrough: false,
           echoCancellationEnabled: false,
+          noiseSuppressionModel: "dfn3",
           noiseSuppressionEnabled: false,
-          noiseSuppressionAttenuationDb: 18,
+          noiseSuppressionAttenuationDb: NOISE_SUPPRESSION_UNLIMITED_DB,
           soundboardToVirtualMic: false,
           monitorToHeadphones: true,
           monitorMicToHeadphones: false,
@@ -1287,15 +1285,9 @@ handleTrustedIpc("media:read", async (_event, mediaPath) => {
   return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
 });
 
-handleTrustedIpc("audio:getNoiseSuppressionAssets", async () => {
-  const [wasm, model] = await Promise.all([
-    fs.readFile(deepFilterResourcePath("deep_filter_bg.wasm")),
-    fs.readFile(deepFilterResourcePath("DeepFilterNet3_onnx.tar.gz"))
-  ]);
-  return {
-    wasm: wasm.buffer.slice(wasm.byteOffset, wasm.byteOffset + wasm.byteLength),
-    model: model.buffer.slice(model.byteOffset, model.byteOffset + model.byteLength)
-  };
+handleTrustedIpc("audio:getNoiseSuppressionAssets", async (_event, modelId) => {
+  const root = app.isPackaged ? process.resourcesPath : path.join(__dirname, "..");
+  return loadNoiseSuppressionAssets(root, modelId);
 });
 
 handleTrustedIpc("media:saveRecording", async (_event, payload) => {

@@ -13,6 +13,16 @@ describe("external audio controls", () => {
     expect(toggled.settings).toEqual({ ...initial, [key]: true });
   });
 
+  it("sets a model and numeric Unlimited while preserving unrelated audio settings", () => {
+    const initial = makeAudioSettings({ noiseSuppressionAttenuationDb: 18 });
+    const model = applyAudioControlCommand(initial, { command: "setting.set", args: { key: "noiseSuppressionModel", value: "dpdfnet8" } });
+    expect(model.settings).toEqual({ ...initial, noiseSuppressionModel: "dpdfnet8" });
+    expect(model.data).toEqual({ key: "noiseSuppressionModel", value: "dpdfnet8" });
+    const unlimited = applyAudioControlCommand(model.settings, { command: "setting.set", args: { key: "noiseSuppressionAttenuationDb", value: 100 } });
+    expect(unlimited.settings).toEqual({ ...model.settings, noiseSuppressionAttenuationDb: 100 });
+    expect(unlimited.data).toEqual({ key: "noiseSuppressionAttenuationDb", value: 100 });
+  });
+
   it.each<ControlVolumeBus>(["micVirtual", "micMonitor", "soundboardVirtual", "soundboardMonitor"])("preserves %s volume across mute and unmutes on volume changes", (bus) => {
     const initial = makeAudioSettings({ [`${bus}Volume`]: 0.4 });
     const muted = applyAudioControlCommand(initial, { command: "volume.mute", args: { bus } });

@@ -1,17 +1,17 @@
 import type { AudioSettings } from "../types";
-import type { ControlSettingResult, ControlVolumeResult, RendererControlCommand } from "./controlProtocol";
+import type { ControlSettingValue, ControlVolumeResult, RendererControlCommand } from "./controlProtocol";
 
 type WithoutRequestId<Command> = Command extends { requestId: string } ? Omit<Command, "requestId"> : Command;
 export type AudioControlCommand = WithoutRequestId<Extract<RendererControlCommand, { command: `setting.${string}` | `volume.${string}` }>>;
 
 export function applyAudioControlCommand(settings: AudioSettings, message: AudioControlCommand): {
   settings: AudioSettings;
-  data: ControlSettingResult | ControlVolumeResult;
+  data: ControlSettingValue | ControlVolumeResult;
 } {
   if (message.command === "setting.set" || message.command === "setting.toggle") {
     const { key } = message.args;
-    const value = message.command === "setting.set" ? message.args.value : !settings[key];
-    return { settings: { ...settings, [key]: value }, data: { key, value } };
+    const data: ControlSettingValue = message.command === "setting.set" ? message.args : { key: message.args.key, value: !settings[message.args.key] };
+    return { settings: { ...settings, [key]: data.value }, data };
   }
   const { bus } = message.args;
   const volumeKey = `${bus}Volume` as const;

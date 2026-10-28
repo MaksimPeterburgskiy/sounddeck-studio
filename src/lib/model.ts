@@ -2,6 +2,7 @@ import type { MediaImportResult, OutputTarget, RetriggerMode, SoundBoard, SoundE
 import { normalizeMonitorDeviceId, normalizeSelectableDeviceId } from "./devices";
 import { normalizeAccelerator } from "./hotkeys";
 import { defaultMicChain, normalizeMicChain } from "./micFilters";
+import { NOISE_SUPPRESSION_UNLIMITED_DB, normalizeNoiseSuppressionAttenuation, normalizeNoiseSuppressionModel } from "./noiseSuppressionModels";
 
 export function nextBoard(library: Pick<SoundLibrary, "boards" | "activeBoardId">, direction: 1 | -1 = 1) {
   if (library.boards.length < 2) return undefined;
@@ -14,8 +15,9 @@ const icons = ["zap", "radio", "music", "mic", "laugh", "siren", "sparkles", "ga
 const defaultSettings: SoundLibrary["settings"] = {
   micPassthrough: false,
   echoCancellationEnabled: false,
+  noiseSuppressionModel: "dfn3",
   noiseSuppressionEnabled: false,
-  noiseSuppressionAttenuationDb: 18,
+  noiseSuppressionAttenuationDb: NOISE_SUPPRESSION_UNLIMITED_DB,
   micChain: defaultMicChain(),
   soundboardToVirtualMic: false,
   monitorToHeadphones: true,
@@ -236,8 +238,9 @@ export function normalizeLibrary(library: SoundLibrary): SoundLibrary {
     soundboardVirtualMuted: boolOr(currentSettings.soundboardVirtualMuted),
     soundboardMonitorMuted: boolOr(currentSettings.soundboardMonitorMuted),
     echoCancellationEnabled: boolOr(currentSettings.echoCancellationEnabled, defaultSettings.echoCancellationEnabled),
+    noiseSuppressionModel: normalizeNoiseSuppressionModel(currentSettings.noiseSuppressionModel),
     noiseSuppressionEnabled: boolOr(currentSettings.noiseSuppressionEnabled, defaultSettings.noiseSuppressionEnabled),
-    noiseSuppressionAttenuationDb: Math.round(numberIn(currentSettings.noiseSuppressionAttenuationDb, defaultSettings.noiseSuppressionAttenuationDb, 6, 30)),
+    noiseSuppressionAttenuationDb: normalizeNoiseSuppressionAttenuation(currentSettings.noiseSuppressionAttenuationDb),
     micChain: normalizeMicChain(currentSettings.micChain)
   };
   settings.defaultRetriggerMode = normalizeRetriggerMode(settings.defaultRetriggerMode, defaultSettings.defaultRetriggerMode);

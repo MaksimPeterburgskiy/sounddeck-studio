@@ -1,3 +1,5 @@
+import type { NoiseSuppressionModelId } from "../types";
+
 export const CONTROL_PROTOCOL_VERSION = 1;
 export const CONTROL_DEFAULT_PORT = 41730;
 export const CONTROL_MAX_TITLE_LENGTH = 256;
@@ -5,8 +7,12 @@ export const CONTROL_MAX_TITLE_LENGTH = 256;
 export type ControlSettingKey = "micPassthrough" | "soundboardToVirtualMic" | "noiseSuppressionEnabled" | "echoCancellationEnabled" | "monitorToHeadphones";
 export type ControlVolumeBus = "micVirtual" | "micMonitor" | "soundboardVirtual" | "soundboardMonitor";
 export type ControlToggleSettings = Record<ControlSettingKey, boolean>;
+export type ControlAudioSettings = ControlToggleSettings & { noiseSuppressionModel: NoiseSuppressionModelId; noiseSuppressionAttenuationDb: number };
 export type ControlVolumes = Record<ControlVolumeBus, { value: number; muted: boolean }>;
-export interface ControlSettingResult { key: ControlSettingKey; value: boolean }
+export type ControlSettingValue =
+  | { key: ControlSettingKey; value: boolean }
+  | { key: "noiseSuppressionModel"; value: NoiseSuppressionModelId }
+  | { key: "noiseSuppressionAttenuationDb"; value: number };
 export interface ControlVolumeResult { bus: ControlVolumeBus; value: number; muted: boolean }
 
 export interface ControlPlaybackVoice {
@@ -37,7 +43,7 @@ export interface ControlLibrary {
 
 export interface ControlSnapshot extends ControlLiveState {
   library: ControlLibrary;
-  settings: ControlToggleSettings;
+  settings: ControlAudioSettings;
   volumes: ControlVolumes;
 }
 
@@ -51,7 +57,7 @@ export interface ControlCommandArgs {
   "board.cycle": { direction?: 1 | -1 };
   "library.get": Record<string, never>;
   "sound.image": { soundId: string };
-  "setting.set": { key: ControlSettingKey; value: boolean };
+  "setting.set": ControlSettingValue;
   "setting.toggle": { key: ControlSettingKey };
   "volume.set": { bus: ControlVolumeBus; value: number };
   "volume.adjust": { bus: ControlVolumeBus; delta: number };
@@ -78,19 +84,19 @@ export interface ControlHello {
 
 export type ControlErrorCode = "unauthorized" | "forbidden" | "disabled" | "protocol-mismatch" | "invalid-message" | "invalid-args" | "unknown-command" | "not-found" | "rate-limited" | "payload-too-large" | "busy" | "unavailable" | "internal-error";
 export type ControlResult =
-  | { type: "result"; id: string; ok: true; data?: ControlLibrary | { image: string | null } | ControlSettingResult | ControlVolumeResult }
+  | { type: "result"; id: string; ok: true; data?: ControlLibrary | { image: string | null } | ControlSettingValue | ControlVolumeResult }
   | { type: "result"; id: string; ok: false; code: ControlErrorCode };
 
 export type RendererControlResult =
   | ControlPlaybackResult
-  | { ok: true; data: ControlSettingResult | ControlVolumeResult }
+  | { ok: true; data: ControlSettingValue | ControlVolumeResult }
   | { ok: false; code: ControlErrorCode };
 
 export interface ControlEventData {
   "library.changed": ControlLibrary;
   "board.changed": { activeBoardId: string };
   "playback.changed": ControlPlaybackVoice[];
-  "settings.changed": ControlToggleSettings;
+  "settings.changed": ControlAudioSettings;
   "volumes.changed": ControlVolumes;
 }
 

@@ -62,10 +62,10 @@ The server retains the marker in its connected-client metadata. Older clients ma
 The server replies:
 
 ```json
-{"type":"welcome","protocol":1,"app":{"version":"0.1.22"},"state":{"activeBoardId":"board-a","playback":[],"library":{"activeBoardId":"board-a","boards":[]},"settings":{"micPassthrough":false,"soundboardToVirtualMic":false,"noiseSuppressionEnabled":false,"echoCancellationEnabled":false,"monitorToHeadphones":true},"volumes":{"micVirtual":{"value":1,"muted":false},"micMonitor":{"value":1,"muted":false},"soundboardVirtual":{"value":1,"muted":false},"soundboardMonitor":{"value":1,"muted":false}}}}
+{"type":"welcome","protocol":1,"app":{"version":"0.1.22"},"state":{"activeBoardId":"board-a","playback":[],"library":{"activeBoardId":"board-a","boards":[]},"settings":{"micPassthrough":false,"soundboardToVirtualMic":false,"noiseSuppressionEnabled":false,"noiseSuppressionModel":"dfn3","noiseSuppressionAttenuationDb":100,"echoCancellationEnabled":false,"monitorToHeadphones":true},"volumes":{"micVirtual":{"value":1,"muted":false},"micMonitor":{"value":1,"muted":false},"soundboardVirtual":{"value":1,"muted":false},"soundboardMonitor":{"value":1,"muted":false}}}}
 ```
 
-A snapshot contains `activeBoardId`, `playback`, `library`, `settings` (the five audio toggles), and `volumes` (each bus's stored level and mute state). Library data is:
+A snapshot contains `activeBoardId`, `playback`, `library`, `settings` (audio toggles, noise model, and attenuation limit), and `volumes` (each bus's stored level and mute state). Library data is:
 
 ```json
 {"activeBoardId":"board-a","boards":[{"id":"board-a","name":"Main","color":"#1db7a6","sounds":[{"id":"sound-a","title":"Airhorn","color":"#1db7a6","hasImage":true}]}]}
@@ -103,7 +103,7 @@ Commands that change app state return `busy` while a hotkey is being captured (e
 | `board.cycle` | Optional `direction`: `1` (default) or `-1` | — |
 | `library.get` | `{}` | Library summary in `data` |
 | `sound.image` | `soundId` | `data: {"image":"data:image/png;base64,..."}`; `image: null` if no custom image; `payload-too-large` if encoded data exceeds 8 MiB |
-| `setting.set` | `key`, `value`: boolean | `data: {key,value}` |
+| `setting.set` | `key`, `value` (see setting values below) | `data: {key,value}` |
 | `setting.toggle` | `key` | `data: {key,value}` |
 | `volume.set` | `bus`, `value`: number from 0 to 1 | `data: {bus,value,muted}` |
 | `volume.adjust` | `bus`, `delta`: finite number | `data: {bus,value,muted}` |
@@ -122,7 +122,16 @@ WebSocket press IDs belong to their session: clients may use the same ID indepen
 {"type":"command","id":"up","command":"sound.release","args":{"pressId":"key-1"}}
 ```
 
-Setting keys are `micPassthrough`, `soundboardToVirtualMic`, `noiseSuppressionEnabled`, `echoCancellationEnabled`, and `monitorToHeadphones`. Volume buses map to the app's controls as follows:
+Boolean setting keys are `micPassthrough`, `soundboardToVirtualMic`, `noiseSuppressionEnabled`, `echoCancellationEnabled`, and `monitorToHeadphones`. They accept `setting.set` and `setting.toggle`.
+
+Two additional keys accept `setting.set` (or HTTP `POST /v1/settings/<key>` with `{"value": ...}`):
+
+- `noiseSuppressionModel`: `"dfn3"` (default), `"dpdfnet2"`, `"fastenhancer-m"`, or `"dpdfnet8"`.
+- `noiseSuppressionAttenuationDb`: integer 6–30, or `100` for Unlimited (default). This affects only DeepFilterNet 3; the ONNX models always run at full strength. Switching models preserves the saved attenuation value.
+
+Both keys appear in settings snapshots and `settings.changed` events. They cannot be toggled.
+
+Volume buses map to the app's controls as follows:
 
 | Bus | App control |
 | --- | --- |
@@ -152,7 +161,7 @@ Events go to every authenticated WebSocket client:
 | `library.changed` | Full library summary; also sent when an image changes, so clients can invalidate image caches |
 | `board.changed` | `{activeBoardId}` |
 | `playback.changed` | Array of `{soundId, startedAt, duration, loop}`; an empty array means playback stopped |
-| `settings.changed` | Full object of the five audio toggle values, matching snapshot `settings` |
+| `settings.changed` | Full audio settings object, matching snapshot `settings` |
 | `volumes.changed` | Full object of the four buses, each `{value,muted}`, matching snapshot `volumes` |
 
 Audio settings and volume events are emitted whenever their values change through the API, app UI, or library load. Unchanged values do not emit duplicate events. Clients should use command correlation IDs independently of events; an event can arrive before the corresponding result.

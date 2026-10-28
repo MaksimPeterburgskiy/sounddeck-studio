@@ -9,6 +9,14 @@ const command = { command: "volume.adjust", args: { bus: "micVirtual", delta: 0.
 afterEach(() => vi.useRealTimers());
 
 describe("renderer control acknowledgements", () => {
+  it.each([{ key: "noiseSuppressionModel", value: "dpdfnet8" }, { key: "noiseSuppressionAttenuationDb", value: 100 }])("accepts the typed acknowledgement for $key", async (args) => {
+    const send = vi.fn();
+    const bridge = createControlRenderer({ send });
+    const result = bridge.dispatch({ command: "setting.set", args });
+    bridge.complete(send.mock.calls[0][0].requestId, { ok: true, data: args });
+    expect(await result).toEqual({ ok: true, data: args });
+  });
+
   it.each(["play", "tap press", "hold press"].flatMap((operation) =>
     ["sound", "all"].map((stop) => ({ operation, stop }))
   ))("acknowledges a stalled $operation at its deadline after stopping $stop and releases later plays", async ({ operation, stop }) => {
