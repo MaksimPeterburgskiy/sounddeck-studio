@@ -80,7 +80,16 @@ describe("DeepFilter worker", () => {
     const frame = new Float32Array(480).fill(0.25).buffer;
     port.onmessage!({ data: { type: "process", sequence: 7, buffer: frame } } as MessageEvent<{ type: "process"; sequence: number; buffer: ArrayBuffer }>);
     expect(deepFilter.processFrame).toHaveBeenCalledWith(1);
-    expect(port.postMessage).toHaveBeenCalledWith({ type: "processed", sequence: 7, buffer: frame }, [frame]);
+    // Three fresh hops refill DFN3's algorithmic delay before output is usable.
+    for (let sequence = 8; sequence <= 10; sequence += 1) {
+      port.onmessage!({ data: { type: "process", sequence, buffer: frame } } as MessageEvent<{ type: "process"; sequence: number; buffer: ArrayBuffer }>);
+      await Promise.resolve();
+    }
+    await vi.waitFor(() => expect(port.postMessage).toHaveBeenCalledWith({ type: "processed", sequence: 10, buffer: frame }, [frame]));
+    port.onmessage!({ data: { type: "process", sequence: 20, buffer: frame } } as MessageEvent<{ type: "process"; sequence: number; buffer: ArrayBuffer }>);
+    await vi.waitFor(() => expect(deepFilter.create).toHaveBeenCalledTimes(2));
+    expect(deepFilter.create).toHaveBeenLastCalledWith(expect.any(Uint8Array), 24);
+    expect(deepFilter.destroy).toHaveBeenCalledWith(1);
 
     await workerScope.onmessage!({ data: { type: "attenuation", value: 12 } } as MessageEvent);
     expect(deepFilter.setAttenuation).toHaveBeenCalledWith(1, 12);

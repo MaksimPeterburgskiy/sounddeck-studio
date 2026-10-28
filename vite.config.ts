@@ -4,6 +4,9 @@ import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   base: "./",
+  // Keep ORT's JS module external to its library bundle; its WASM is served by IPC.
+  resolve: { conditions: ["onnxruntime-web-use-extern-wasm", "module", "browser", "development|production"] },
+  worker: { format: "es" },
   plugins: [react(), streamDeckTestTransform()],
   server: {
     port: 5173,

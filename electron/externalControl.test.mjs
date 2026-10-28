@@ -1653,6 +1653,27 @@ describe("external control protocol and dispatch", () => {
     }
   });
 
+  it("sets model IDs and numeric Unlimited through HTTP and WebSocket and rejects toggling them", async () => {
+    await create();
+    const connection = await session();
+    for (const args of [
+      ...["dfn3", "dpdfnet8"].map((value) => ({ key: "noiseSuppressionModel", value })),
+      ...[6, 30, 100].map((value) => ({ key: "noiseSuppressionAttenuationDb", value }))
+    ]) {
+      onCommand.mockReturnValueOnce({ ok: true, data: args });
+      connection.send({ type: "command", id: "model", command: "setting.set", args });
+      expect(await connection.next()).toEqual({ type: "result", id: "model", ok: true, data: args });
+      onCommand.mockReturnValueOnce({ ok: true, data: args });
+      expect(await request(`/v1/settings/${args.key}`, { method: "POST", body: { value: args.value } })).toEqual({ status: 200, body: { ok: true, data: args } });
+    }
+    onCommand.mockClear();
+    for (const [key, values] of [["noiseSuppressionModel", ["unknown", true]], ["noiseSuppressionAttenuationDb", [5, 31, 99, 101, "100", 6.5]]]) {
+      for (const value of values) expect((await request(`/v1/settings/${key}`, { method: "POST", body: { value } })).status).toBe(400);
+      expect((await request(`/v1/settings/${key}`, { method: "POST", body: { toggle: true } })).status).toBe(400);
+    }
+    expect(onCommand).not.toHaveBeenCalled();
+  });
+
   it("maps exclusive HTTP setting and volume bodies to the same commands and results", async () => {
     await create();
     for (const [url, body, expected, data] of [
@@ -1709,7 +1730,7 @@ describe("external control protocol and dispatch", () => {
     const connection = await client();
     connection.send(hello());
     const initial = (await connection.next()).state;
-    expect(initial.settings).toEqual({ micPassthrough: false, soundboardToVirtualMic: false, noiseSuppressionEnabled: false, echoCancellationEnabled: false, monitorToHeadphones: true });
+    expect(initial.settings).toEqual({ micPassthrough: false, soundboardToVirtualMic: false, noiseSuppressionEnabled: false, noiseSuppressionModel: "dfn3", noiseSuppressionAttenuationDb: 100, echoCancellationEnabled: false, monitorToHeadphones: true });
     expect(initial.volumes).toEqual({ micVirtual: { value: 1, muted: false }, micMonitor: { value: 1, muted: false }, soundboardVirtual: { value: 1, muted: false }, soundboardMonitor: { value: 1, muted: false } });
     expect((await request()).body).toEqual(initial);
     const changed = { ...library, settings: { ...audioSettings, micPassthrough: true, micVirtualVolume: 0.3, micVirtualMuted: true } };

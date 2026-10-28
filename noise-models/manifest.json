@@ -1,0 +1,27 @@
+{
+  "models": [
+    {
+      "id": "dpdfnet2",
+      "file": "dpdfnet2_48khz_hr.onnx",
+      "url": "https://huggingface.co/Ceva-IP/DPDFNet/resolve/dd6818d00f50c836fed43a6243ebe49116de5964/onnx/dpdfnet2_48khz_hr.onnx",
+      "sha256": "7f0575a5cec0ba4ffd8f8bd657e06d007e4ccdd955d76faab922b9d3291dc14b"
+    },
+    {
+      "id": "dpdfnet8",
+      "file": "dpdfnet8_48khz_hr.onnx",
+      "url": "https://huggingface.co/Ceva-IP/DPDFNet/resolve/dd6818d00f50c836fed43a6243ebe49116de5964/onnx/dpdfnet8_48khz_hr.onnx",
+      "sha256": "7b3afbb260a08fe9af3d16e3bda992971be1e7e951d1dee7c2d235f5c43f5631"
+    },
+    {
+      "id": "fastenhancer-m",
+      "file": "fastenhancer_m.onnx",
+      "url": "https://github.com/aask1357/fastenhancer/releases/download/onnx-48khz-v1/fastenhancer_m.onnx",
+      "sha256": "c7da800810b583f4734d757c6e14d235f3eec81476121b595743e5866b66efa2"
+    }
+  ],
+  "ort": {
+    "version": "1.31.1",
+    "file": "ort-wasm-simd-threaded.wasm",
+    "sha256": "4b884c203b0fa48d057be3332c65513ff85aa3c5bddd6946acc0fab7ecda001d"
+  }
+}

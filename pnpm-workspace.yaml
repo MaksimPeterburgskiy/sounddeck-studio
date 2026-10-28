@@ -5,6 +5,7 @@ packages:
 allowBuilds:
   cue-sdk: true
   electron-winstaller: true
+  protobufjs: false
   uiohook-napi: true
 minimumReleaseAgeExclude:
   # Exact versions reviewed for this upgrade; retain the default age gate otherwise.

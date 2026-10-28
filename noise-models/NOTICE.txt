@@ -1,0 +1,25 @@
+SoundDeck Studio microphone noise suppression
+
+DPDFNet-2 / DPDFNet-8 (48 kHz HR)
+Copyright CEVA and the DPDFNet contributors. Licensed under Apache-2.0.
+Source: https://github.com/ceva-ip/DPDFNet
+Source revision: 1333776d470f01ecf4a533f098f4e8aeb3d00b89
+Weights: https://huggingface.co/Ceva-IP/DPDFNet
+Weights revision: dd6818d00f50c836fed43a6243ebe49116de5964
+SoundDeck ports the streaming STFT/iSTFT from real_time_demo.py to TypeScript.
+The neural graph and weights are unmodified. See LICENSE-DPDFNet.
+
+FastEnhancer Medium
+Copyright (c) 2025 AHN Sung Hwan. Licensed under MIT. See LICENSE-FastEnhancer.
+Source: https://github.com/aask1357/fastenhancer
+Source revision: f85223bd546b27f39dc0744e0310dcd246f750a4
+Weights release: onnx-48khz-v1 (unmodified).
+
+ONNX Runtime Web 1.31.1
+Copyright (c) Microsoft Corporation. Licensed under MIT.
+Source: https://github.com/microsoft/onnxruntime/tree/v1.31.1
+See LICENSE-ONNX-Runtime. The runtime JavaScript and its Emscripten module are bundled locally;
+the matching WebAssembly binary is packaged alongside the model weights.
+
+Pinned artifact URLs and SHA-256 checksums: manifest.json.
+DeepFilterNet's existing notices and licenses remain in deepfilter/.

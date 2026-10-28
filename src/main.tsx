@@ -26,14 +26,15 @@ import {
   Plus,
   Power,
   Radio,
-  Repeat,
   RefreshCcw,
   RefreshCw,
+  Repeat,
   RotateCcw,
   Save,
   Scissors,
   Settings,
   ShieldCheck,
+  Sparkles,
   Speaker,
   Square,
   Trash2,
@@ -41,8 +42,10 @@ import {
   Volume2,
   VolumeX,
   Wand2,
-  X
+  X,
+  Zap
 } from "lucide-react";
+import { NOISE_SUPPRESSION_LIMIT_STOPS, NOISE_SUPPRESSION_MODELS, NOISE_SUPPRESSION_UNLIMITED_DB, formatNoiseSuppressionLimit, noiseSuppressionSummary } from "./lib/noiseSuppressionModels";
 import { createAudioControlQueue, persistControlLibrary } from "./lib/audioControlQueue";
 import { AudioEngine, disabledMicrophoneProcessingStatus } from "./lib/audioEngine";
 import { CONTROL_DEFAULT_PORT } from "./lib/controlProtocol";
@@ -2988,7 +2991,7 @@ function MicFilterChain({ settings, processingStatus, engine, onChange }: {
           const isNoiseSuppression = entry.type === "noiseSuppression";
           const enabled = micChainEntryEnabled(entry, settings);
           const label = isNoiseSuppression ? "Noise suppression" : micFilterDefinition(entry.type).label;
-          const summary = isNoiseSuppression ? `DeepFilterNet · up to ${settings.noiseSuppressionAttenuationDb} dB` : micFilterSummary(entry);
+          const summary = isNoiseSuppression ? noiseSuppressionSummary(settings) : micFilterSummary(entry);
           const showsGainReduction = !isNoiseSuppression && enabled && micFilterDefinition(entry.type).reducesGain;
           return (
             <li
@@ -3082,6 +3085,7 @@ function MicFilterChain({ settings, processingStatus, engine, onChange }: {
           <MicFilterEditor
             entry={editing}
             settings={settings}
+            noiseSuppressionStatus={processingStatus.noiseSuppression}
             onChange={onChange}
             onClose={() => setEditingId("")}
           />
@@ -3229,9 +3233,10 @@ function MicPopover({ anchor, align, label, onClose, children }: {
   );
 }
 
-function MicFilterEditor({ entry, settings, onChange, onClose }: {
+function MicFilterEditor({ entry, settings, noiseSuppressionStatus, onChange, onClose }: {
   entry: MicChainEntry;
   settings: AudioSettings;
+  noiseSuppressionStatus: MicrophoneProcessingStatus["noiseSuppression"];
   onChange: (patch: Partial<AudioSettings>) => void;
   onClose: () => void;
 }) {
@@ -3240,13 +3245,52 @@ function MicFilterEditor({ entry, settings, onChange, onClose }: {
     return (
       <>
         <MicEditorHeader title="Noise suppression" onClose={onClose} />
-        <p className="micEditorNote">Removes background noise with an on-device model. Higher limits remove more noise but can thin out your voice.</p>
-        <MicParamSlider
-          field={{ label: "Max cut", min: 6, max: 30, step: 1, unit: "dB" }}
-          value={settings.noiseSuppressionAttenuationDb}
-          onChange={(noiseSuppressionAttenuationDb) => onChange({ noiseSuppressionAttenuationDb })}
-        />
-        <MicEditorFooter onReset={() => onChange({ noiseSuppressionAttenuationDb: 18 })} onClose={onClose} />
+        <div className="noiseModelPicker" role="radiogroup" aria-label="Noise suppression model">
+          <div className="noiseModelColumns" aria-hidden="true"><span /><span>Quality</span><span>CPU</span></div>
+          {NOISE_SUPPRESSION_MODELS.map((model) => {
+            const id = `noise-model-${model.id}`;
+            const selected = settings.noiseSuppressionModel === model.id;
+            return (
+              <div key={model.id} className="noiseModelOption">
+                <input id={id} type="radio" name="noise-suppression-model" value={model.id} checked={selected}
+                  aria-describedby={`${id}-hint ${id}-quality ${id}-cpu`}
+                  onChange={() => onChange({ noiseSuppressionModel: model.id })} />
+                <div className="noiseModelNameRow">
+                  <span className="noiseModelNameCell">
+                    <label className="noiseModelName" htmlFor={id}>{model.name}</label>
+                    {model.id === "dfn3" && <small className="noiseModelDefault">Default</small>}
+                    {selected && (noiseSuppressionStatus === "loading" || noiseSuppressionStatus === "unavailable") && (
+                      <small className="noiseModelStatus" role="status">{noiseSuppressionStatus === "loading" ? "Loading…" : "Unavailable"}</small>
+                    )}
+                  </span>
+                  <span className="noiseModelMeter noiseModelQuality" id={`${id}-quality`} role="img" aria-label={`Quality ${model.quality} of 4`}>
+                    {[1, 2, 3, 4].map((rank) => <Sparkles key={rank} aria-hidden="true" className={rank <= model.quality ? "filled" : ""} />)}
+                  </span>
+                  <span className="noiseModelMeter noiseModelCpu" id={`${id}-cpu`} role="img" aria-label={`CPU use ${model.cpu} of 4`}>
+                    {[1, 2, 3, 4].map((rank) => <Zap key={rank} aria-hidden="true" className={rank <= model.cpu ? "filled" : ""} />)}
+                  </span>
+                </div>
+                <p className="noiseModelHint" id={`${id}-hint`}>{model.hint}</p>
+              </div>
+            );
+          })}
+        </div>
+        <div className="noiseModelLimit">
+          {settings.noiseSuppressionModel === "dfn3" ? (
+            <>
+              <label className="micSlider noiseAttenuationSlider">
+                <span>Max cut</span>
+                <input type="range" min={0} max={NOISE_SUPPRESSION_LIMIT_STOPS.length - 1} step={1}
+                  value={NOISE_SUPPRESSION_LIMIT_STOPS.indexOf(settings.noiseSuppressionAttenuationDb)}
+                  aria-valuetext={formatNoiseSuppressionLimit(settings.noiseSuppressionAttenuationDb)}
+                  onChange={(event) => onChange({ noiseSuppressionAttenuationDb: NOISE_SUPPRESSION_LIMIT_STOPS[Number(event.target.value)] })} />
+                <output>{formatNoiseSuppressionLimit(settings.noiseSuppressionAttenuationDb)}</output>
+              </label>
+              <p className="micEditorNote">Higher limits remove more noise but can thin your voice.</p>
+            </>
+          ) : <p className="micEditorNote">Runs at full strength — no limit to set.</p>}
+        </div>
+        <MicEditorFooter onReset={() => onChange({ noiseSuppressionModel: "dfn3", noiseSuppressionAttenuationDb: NOISE_SUPPRESSION_UNLIMITED_DB })} onClose={onClose} />
       </>
     );
   }

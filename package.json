@@ -23,7 +23,9 @@
     "test:coverage": "vitest run --coverage",
     "validate:security": "node scripts/validate-security.mjs",
     "build:streamdeck": "pnpm --filter @sounddeck/streamdeck-plugin build",
-    "pack:streamdeck": "node scripts/pack-streamdeck.mjs"
+    "pack:streamdeck": "node scripts/pack-streamdeck.mjs",
+    "prebuild": "pnpm run fetch:noise-models",
+    "fetch:noise-models": "node scripts/fetch-noise-models.mjs"
   },
   "build": {
     "appId": "com.sounddeck.studio",
@@ -43,6 +45,17 @@
         {
           "from": "deepfilter",
           "to": "deepfilter"
+        },
+        {
+          "from": "noise-models",
+          "to": "noise-models",
+          "filter": [
+            "*.onnx",
+            "*.wasm",
+            "LICENSE-*",
+            "NOTICE.txt",
+            "manifest.json"
+          ]
         },
         {
           "from": "build/icon.ico",
@@ -77,6 +90,17 @@
         {
           "from": "deepfilter",
           "to": "deepfilter"
+        },
+        {
+          "from": "noise-models",
+          "to": "noise-models",
+          "filter": [
+            "*.onnx",
+            "*.wasm",
+            "LICENSE-*",
+            "NOTICE.txt",
+            "manifest.json"
+          ]
         },
         {
           "from": "build/icon.png",
@@ -172,6 +196,7 @@
     "electron": "^44.7.0",
     "electron-builder": "^26.16.1",
     "lucide-react": "^1.54.0",
+    "onnxruntime-web": "1.31.1",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "typescript": "^7.0.2",

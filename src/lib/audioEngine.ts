@@ -187,6 +187,7 @@ export class AudioEngine {
     const echoCancellationChanged = applied?.echoCancellationEnabled !== settings.echoCancellationEnabled;
     const chainChanged =
       applied?.micChain !== settings.micChain ||
+      applied?.noiseSuppressionModel !== settings.noiseSuppressionModel ||
       applied?.noiseSuppressionEnabled !== settings.noiseSuppressionEnabled ||
       applied?.noiseSuppressionAttenuationDb !== settings.noiseSuppressionAttenuationDb;
     const shouldConfigureMicForSettings = this.shouldConfigureMic(settings);

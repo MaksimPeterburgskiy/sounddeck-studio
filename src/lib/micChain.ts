@@ -1,6 +1,7 @@
-import type { AudioSettings, MicChainEntry, MicFilter, MicFilterParamsByType } from "../types";
+import type { AudioSettings, MicChainEntry, MicFilter, MicFilterParamsByType, NoiseSuppressionModelId } from "../types";
 import { HIGH_PASS_QS, highPassQToDb } from "./micCurves";
-import { EQ_BAND_KINDS, NOISE_SUPPRESSION_LATENCY_MS, isMicFilter, micChainEntryEnabled, micFilterLatencyMs } from "./micFilters";
+import { EQ_BAND_KINDS, isMicFilter, micChainEntryEnabled, micFilterLatencyMs } from "./micFilters";
+import { noiseSuppressionLatencyMs, noiseSuppressionModelInfo } from "./noiseSuppressionModels";
 
 export type NoiseSuppressionState = "loading" | "active" | "unavailable";
 
@@ -11,7 +12,7 @@ export interface MicMeterReading {
   gainReductionDb: Record<string, number>;
 }
 
-type ChainSettings = Pick<AudioSettings, "micChain" | "noiseSuppressionEnabled" | "noiseSuppressionAttenuationDb">;
+type ChainSettings = Pick<AudioSettings, "micChain" | "noiseSuppressionModel" | "noiseSuppressionEnabled" | "noiseSuppressionAttenuationDb">;
 
 interface FilterUnit {
   input: AudioNode;
@@ -143,7 +144,7 @@ export class MicChain {
     const next: ChainSlot[] = [];
     const keep = new Set<string>();
     for (const entry of settings.micChain) {
-      const key = `${entry.type}:${entry.id}`;
+      const key = `${entry.type}:${entry.id}${entry.type === "noiseSuppression" ? `:${settings.noiseSuppressionModel}` : ""}`;
       let slot = this.slots.get(key);
       const created = !slot;
       if (!slot) {
@@ -314,7 +315,7 @@ export class MicChain {
 
   private createUnit(entry: MicChainEntry, settings: ChainSettings): FilterUnit {
     if (!isMicFilter(entry)) {
-      const unit = this.createNoiseSuppressionUnit(settings.noiseSuppressionAttenuationDb);
+      const unit = this.createNoiseSuppressionUnit(settings.noiseSuppressionModel, settings.noiseSuppressionAttenuationDb);
       this.noiseSuppressionUnit = unit;
       return unit;
     }
@@ -457,8 +458,10 @@ export class MicChain {
     return unit;
   }
 
-  private createNoiseSuppressionUnit(attenuationDb: number): FilterUnit {
+  private createNoiseSuppressionUnit(modelId: NoiseSuppressionModelId, attenuationDb: number): FilterUnit {
+    const model = noiseSuppressionModelInfo(modelId);
     const node = new AudioWorkletNode(this.context, "sounddeck-deep-filter", {
+      processorOptions: { frameLength: model.frameLength, latencySamples: model.latencySamples },
       channelCount: 1,
       channelCountMode: "explicit",
       channelInterpretation: "speakers",
@@ -466,7 +469,9 @@ export class MicChain {
       numberOfOutputs: 1,
       outputChannelCount: [1]
     });
-    const worker = new Worker(new URL("./deepFilterWorker.ts", import.meta.url), { type: "module", name: "sounddeck-deep-filter" });
+    const worker = modelId === "dfn3"
+      ? new Worker(new URL("./deepFilterWorker.ts", import.meta.url), { type: "module", name: "sounddeck-deep-filter" })
+      : new Worker(new URL("./onnxNoiseWorker.ts", import.meta.url), { type: "module", name: `sounddeck-${modelId}` });
     const channel = new MessageChannel();
     let disposed = false;
     let appliedAttenuation = attenuationDb;
@@ -475,7 +480,7 @@ export class MicChain {
       output: node,
       latencyMs: 0,
       update: (_entry, settings) => {
-        if (settings.noiseSuppressionAttenuationDb === appliedAttenuation) return;
+        if (modelId !== "dfn3" || settings.noiseSuppressionAttenuationDb === appliedAttenuation) return;
         appliedAttenuation = settings.noiseSuppressionAttenuationDb;
         worker.postMessage({ type: "attenuation", value: appliedAttenuation });
       },
@@ -491,38 +496,37 @@ export class MicChain {
     };
     const setState = (state: NoiseSuppressionState) => {
       if (disposed || this.noiseSuppressionUnit !== unit) return;
-      // The worklet delays its output by three frames as soon as the model is ready.
-      if (state === "active") unit.latencyMs = NOISE_SUPPRESSION_LATENCY_MS;
+      if (state === "active") unit.latencyMs = noiseSuppressionLatencyMs(modelId);
       if (this.noiseSuppression === state) return;
       this.noiseSuppression = state;
       this.onChange();
     };
     node.port.postMessage({ type: "connect", port: channel.port1 }, [channel.port1]);
     node.port.onmessage = (event: MessageEvent<{ type: "error" | "underrun" | "recovered"; message?: string }>) => {
-      if (event.data?.type === "error") console.warn("DeepFilterNet audio worklet failed", event.data.message);
+      if (event.data?.type === "error") console.warn("Noise suppression audio worklet failed", event.data.message);
       if (event.data?.type === "error" || event.data?.type === "underrun") setState("unavailable");
       if (event.data?.type === "recovered") setState("active");
     };
     worker.onmessage = (event: MessageEvent<{ type: "ready" | "error"; message?: string }>) => {
       if (event.data?.type === "ready") setState("active");
       if (event.data?.type === "error") {
-        console.warn("DeepFilterNet worker failed", event.data.message);
+        console.warn("Noise suppression worker failed", event.data.message);
         setState("unavailable");
       }
     };
     worker.onerror = (event) => {
-      console.warn("DeepFilterNet worker crashed", event.message);
+      console.warn("Noise suppression worker crashed", event.message);
       setState("unavailable");
     };
     this.noiseSuppression = "loading";
-    void window.sounddeck.getNoiseSuppressionAssets().then(({ wasm, model }) => {
+    void window.sounddeck.getNoiseSuppressionAssets(modelId).then(({ wasm, model }) => {
       if (disposed) {
         channel.port2.close();
         return;
       }
-      worker.postMessage({ type: "init", port: channel.port2, wasm, model, attenuationDb: appliedAttenuation }, [channel.port2, wasm, model]);
+      worker.postMessage({ type: "init", modelId, port: channel.port2, wasm, model, attenuationDb: appliedAttenuation }, [channel.port2, wasm, model]);
     }).catch((error) => {
-      console.warn("DeepFilterNet assets could not be loaded", error);
+      console.warn("Noise suppression assets could not be loaded", error);
       setState("unavailable");
     });
     return unit;

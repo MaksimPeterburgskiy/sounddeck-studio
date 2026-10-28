@@ -1,4 +1,5 @@
 const { randomUUID } = require("node:crypto");
+const { validControlSettingValue } = require("./controlSettingValues.cjs");
 
 function createControlRenderer({ send, timeoutMs = 5000 }) {
   const pending = new Map();
@@ -85,7 +86,7 @@ function createControlRenderer({ send, timeoutMs = 5000 }) {
     } else {
       const data = result?.data;
       const validData = command.startsWith("setting.")
-        ? data?.key === args.key && typeof data.value === "boolean"
+        ? data?.key === args.key && validControlSettingValue(data.key, data.value)
         : data?.bus === args.bus && Number.isFinite(data.value) && data.value >= 0 && data.value <= 1 && typeof data.muted === "boolean";
       response = result?.ok === true && validData ? { ok: true, data }
         : { ok: false, code: result?.ok === false && result.code === "unavailable" ? "unavailable" : "internal-error" };

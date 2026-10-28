@@ -1105,6 +1105,22 @@ describe("AudioEngine mic routing", () => {
     expect(FakeWorker.instances[0].postMessage).toHaveBeenCalledWith({ type: "attenuation", value: 24 });
     expect(FakeWorker.instances[0].postMessage.mock.calls.filter(([message]) => message.type === "attenuation")).toHaveLength(1);
 
+    await engine.configure({ ...processedSettings, noiseSuppressionModel: "fastenhancer-m" }, "cable-device");
+    expect(getUserMedia).toHaveBeenCalledTimes(1);
+    expect(FakeAudioContext.instances).toHaveLength(4);
+    expect(processingContext.mediaSources).toHaveLength(1);
+    expect(FakeWorker.instances).toHaveLength(2);
+    expect(window.sounddeck.getNoiseSuppressionAssets).toHaveBeenLastCalledWith("fastenhancer-m");
+    expect(processingStatus).toHaveBeenLastCalledWith(expect.objectContaining({ noiseSuppression: "loading" }));
+    FakeWorker.instances[1].onmessage?.({ data: { type: "ready", frameLength: 320 } } as MessageEvent);
+    expect(processingStatus).toHaveBeenLastCalledWith(expect.objectContaining({ noiseSuppression: "active", latencyMs: 41.3 }));
+    // Late messages from the retired model cannot overwrite the new status.
+    FakeWorker.instances[0].onmessage?.({ data: { type: "error", message: "retired" } } as MessageEvent);
+    expect(processingStatus).toHaveBeenLastCalledWith(expect.objectContaining({ noiseSuppression: "active" }));
+    await engine.configure({ ...processedSettings, noiseSuppressionModel: "fastenhancer-m", noiseSuppressionAttenuationDb: 6 }, "cable-device");
+    expect(FakeWorker.instances[1].postMessage.mock.calls.some(([message]) => message.type === "attenuation")).toBe(false);
+    expect(FakeWorker.instances).toHaveLength(2);
+
     await engine.dispose();
   });
 

@@ -39,7 +39,7 @@ contextBridge.exposeInMainWorld("sounddeck", {
   importMedia: (paths) => ipcRenderer.invoke("media:import", paths),
   downloadMedia: (urls) => ipcRenderer.invoke("media:download", urls),
   readMedia: (mediaPath) => ipcRenderer.invoke("media:read", mediaPath),
-  getNoiseSuppressionAssets: () => ipcRenderer.invoke("audio:getNoiseSuppressionAssets"),
+  getNoiseSuppressionAssets: (model) => ipcRenderer.invoke("audio:getNoiseSuppressionAssets", model),
   deleteMedia: (mediaPath) => ipcRenderer.invoke("media:delete", mediaPath),
   cropMedia: (payload) => ipcRenderer.invoke("media:crop", payload),
   saveRecording: (payload) => ipcRenderer.invoke("media:saveRecording", payload),

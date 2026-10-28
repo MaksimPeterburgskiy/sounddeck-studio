@@ -1,3 +1,4 @@
+import { NOISE_SUPPRESSION_UNLIMITED_DB } from "../noiseSuppressionModels";
 // Shared Web Audio fakes and fixtures for AudioEngine tests. Extracted from
 // audioEngine.test.ts so multiple test files can drive the engine without a
 // real AudioContext.
@@ -340,8 +341,9 @@ export async function waitForMockCalls(mock: ReturnType<typeof vi.fn>, count: nu
 const baseSettings: AudioSettings = {
   micPassthrough: true,
   echoCancellationEnabled: false,
+  noiseSuppressionModel: "dfn3",
   noiseSuppressionEnabled: false,
-  noiseSuppressionAttenuationDb: 18,
+  noiseSuppressionAttenuationDb: NOISE_SUPPRESSION_UNLIMITED_DB,
   micChain: [{ id: "noise-suppression", type: "noiseSuppression" }],
   soundboardToVirtualMic: true,
   monitorToHeadphones: false,

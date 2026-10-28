@@ -6,8 +6,8 @@ import { FakeAudioContext, FakeAudioWorkletNode, FakeWorker, fakeStream } from "
 
 const noiseSlot = { id: "noise-suppression", type: "noiseSuppression" } as const;
 
-function chainSettings(micChain: MicChainEntry[], patch: Partial<AudioSettings> = {}) {
-  return { micChain, noiseSuppressionEnabled: true, noiseSuppressionAttenuationDb: 18, ...patch };
+function chainSettings(micChain: MicChainEntry[], patch: Partial<AudioSettings> = {}): Pick<AudioSettings, "micChain" | "noiseSuppressionModel" | "noiseSuppressionEnabled" | "noiseSuppressionAttenuationDb"> {
+  return { noiseSuppressionModel: "dfn3", micChain, noiseSuppressionEnabled: true, noiseSuppressionAttenuationDb: 18, ...patch };
 }
 
 describe("MicChain", () => {
@@ -38,6 +38,7 @@ describe("MicChain", () => {
       "sounddeck-deep-filter", "sounddeck-expander", "sounddeck-deesser", "sounddeck-compressor", "sounddeck-limiter"
     ]);
     expect(context.biquads.map((filter) => filter.type)).toEqual(["highpass", "highpass", "lowshelf", "peaking", "peaking", "peaking", "highshelf"]);
+    expect(context.workletNodes[0].options?.processorOptions).toEqual({ frameLength: 480, latencySamples: 1440 });
     expect(chain.latencyMs).toBe(3);
     expect(chain.noiseSuppressionState).toBe("loading");
 
@@ -45,7 +46,7 @@ describe("MicChain", () => {
     await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: "init", attenuationDb: 18 }), expect.any(Array)));
     worker.onmessage?.({ data: { type: "ready" } } as MessageEvent);
     expect(chain.noiseSuppressionState).toBe("active");
-    expect(chain.latencyMs).toBe(33);
+    expect(chain.latencyMs).toBe(73);
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
     context.workletNodes[0].port.onmessage?.({ data: { type: "error", message: "boom" } } as MessageEvent);
     expect(chain.noiseSuppressionState).toBe("unavailable");
@@ -62,7 +63,7 @@ describe("MicChain", () => {
     expect(context.biquads[2].gain.setTargetAtTime).toHaveBeenLastCalledWith(0, 0, expect.any(Number));
     expect(context.gains.some((node) => node.gain.setTargetAtTime.mock.lastCall?.[0] === 10 ** (-6 / 20))).toBe(true);
     expect(worker.postMessage).toHaveBeenCalledWith({ type: "attenuation", value: 24 });
-    expect(chain.latencyMs).toBe(35);
+    expect(chain.latencyMs).toBe(75);
 
     chain.dispose();
     expect(worker.terminate).toHaveBeenCalledOnce();

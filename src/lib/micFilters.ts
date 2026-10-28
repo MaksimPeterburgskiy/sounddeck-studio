@@ -1,8 +1,6 @@
 import type { AudioSettings, MicChainEntry, MicEqBand, MicFilter, MicFilterParamsByType, MicFilterType, MicNoiseSuppressionSlot } from "../types";
 
 export const NOISE_SUPPRESSION_SLOT: MicNoiseSuppressionSlot = { id: "noise-suppression", type: "noiseSuppression" };
-/** DeepFilterNet runs three 10 ms frames behind its input. */
-export const NOISE_SUPPRESSION_LATENCY_MS = 30;
 
 export interface MicParamField<Type extends MicFilterType = MicFilterType> {
   key: Extract<keyof MicFilterParamsByType[Type], string>;
