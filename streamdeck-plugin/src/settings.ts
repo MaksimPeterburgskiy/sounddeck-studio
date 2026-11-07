@@ -19,7 +19,8 @@ export const settingLabels: Record<ControlSettingKey, string> = {
   soundboardToVirtualMic: "Virtual\nmic",
   noiseSuppressionEnabled: "Noise\nfilter",
   echoCancellationEnabled: "Echo\ncancel",
-  monitorToHeadphones: "Monitor\nphones"
+  monitorToHeadphones: "Monitor\nphones",
+  hotkeysEnabled: "Hot-\nkeys"
 };
 
 export function settingKey(value: unknown): ControlSettingKey | undefined {

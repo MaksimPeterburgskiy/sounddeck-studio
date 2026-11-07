@@ -1629,7 +1629,7 @@ describe("external control protocol and dispatch", () => {
   it("dispatches every setting and bus over WebSocket and returns renderer values", async () => {
     await create();
     const connection = await session();
-    for (const key of ["micPassthrough", "soundboardToVirtualMic", "noiseSuppressionEnabled", "echoCancellationEnabled", "monitorToHeadphones"]) {
+    for (const key of ["micPassthrough", "soundboardToVirtualMic", "noiseSuppressionEnabled", "echoCancellationEnabled", "monitorToHeadphones", "hotkeysEnabled"]) {
       for (const [command, args] of [["setting.set", { key, value: false }], ["setting.toggle", { key }]]) {
         const data = { key, value: command === "setting.toggle" };
         onCommand.mockReturnValueOnce({ ok: true, data });
@@ -1730,7 +1730,7 @@ describe("external control protocol and dispatch", () => {
     const connection = await client();
     connection.send(hello());
     const initial = (await connection.next()).state;
-    expect(initial.settings).toEqual({ micPassthrough: false, soundboardToVirtualMic: false, noiseSuppressionEnabled: false, noiseSuppressionModel: "dfn3", noiseSuppressionAttenuationDb: 100, echoCancellationEnabled: false, monitorToHeadphones: true });
+    expect(initial.settings).toEqual({ micPassthrough: false, soundboardToVirtualMic: false, noiseSuppressionEnabled: false, noiseSuppressionModel: "dfn3", noiseSuppressionAttenuationDb: 100, echoCancellationEnabled: false, monitorToHeadphones: true, hotkeysEnabled: true });
     expect(initial.volumes).toEqual({ micVirtual: { value: 1, muted: false }, micMonitor: { value: 1, muted: false }, soundboardVirtual: { value: 1, muted: false }, soundboardMonitor: { value: 1, muted: false } });
     expect((await request()).body).toEqual(initial);
     const changed = { ...library, settings: { ...audioSettings, micPassthrough: true, micVirtualVolume: 0.3, micVirtualMuted: true } };

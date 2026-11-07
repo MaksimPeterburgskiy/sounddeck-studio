@@ -483,7 +483,9 @@ async function initializeLibrary() {
           microphoneDeviceId: "",
           microphoneDeviceLabel: "",
           stopAllHotkey: "Ctrl+Alt+Space",
-          cycleBoardsHotkey: ""
+          cycleBoardsHotkey: "",
+          hotkeysEnabled: true,
+          toggleHotkeysHotkey: ""
         },
         boards: [
           {

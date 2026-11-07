@@ -241,7 +241,7 @@ small { color: var(--text-dim); font-size: 12px; }
   padding-right: 2px;
 }
 
-.boardButton, .sideNav button, .wideButton, .topActions button {
+.boardButton, .sideNav button:where(:not(.switch)), .wideButton, .topActions button {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -254,7 +254,7 @@ small { color: var(--text-dim); font-size: 12px; }
   background: transparent;
   transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
 }
-.boardButton:hover, .sideNav button:hover { background: var(--surface-2); color: var(--text); }
+.boardButton:hover, .sideNav button:where(:not(.switch)):hover { background: var(--surface-2); color: var(--text); }
 .boardButton.active {
   border-color: var(--line-bright);
   background: var(--surface-2);
@@ -347,7 +347,19 @@ small { color: var(--text-dim); font-size: 12px; }
   text-transform: uppercase;
   color: var(--text-dim);
 }
-.sideNav button {
+.sideNavItem { position: relative; display: grid; }
+.sideNavItem > .switch {
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  width: 30px;
+  height: 17px;
+  transform: translateY(-50%);
+}
+.sideNavItem > .switch .switchThumb { top: 2px; left: 2px; width: 13px; height: 13px; }
+.sideNavItem > .switch[data-state="checked"] .switchThumb { transform: translateX(13px); }
+.sideNavItem > button:not(.switch) { padding-right: 50px; }
+.sideNav button:where(:not(.switch)) {
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -713,6 +725,8 @@ small { color: var(--text-dim); font-size: 12px; }
   transition: color 0.12s ease, background 0.12s ease;
 }
 .padHotkey:hover { color: var(--text); background: var(--surface-3); }
+/* Global hotkeys switched off: labels stay editable but read as inactive. */
+.hotkeysPaused .padHotkey:not(.capturing) { color: var(--text-faint); text-decoration: line-through; }
 .padHotkey.capturing {
   position: absolute;
   top: 4px;
@@ -1516,6 +1530,8 @@ input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent);
   width: 100%;
   max-width: 820px;
 }
+.hotkeyGroups { display: grid; gap: 20px; }
+.hotkeyGroups.paused .settingsCard { opacity: 0.55; }
 .settingsCard {
   border: 1px solid var(--line);
   border-radius: 12px;
@@ -2219,7 +2235,7 @@ input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent);
     border-bottom: 1px solid var(--line);
   }
   .sideNav { grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); margin-top: 0; }
-  .sideNav button { justify-content: center; }
+  .sideNav button:where(:not(.switch)) { justify-content: center; }
   .sideNavDivider, .sideNavLabel { grid-column: 1 / -1; }
   .boards { max-height: 170px; }
   .soundGrid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; padding-bottom: 60vh; }

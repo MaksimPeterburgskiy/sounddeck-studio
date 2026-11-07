@@ -4,7 +4,7 @@ import { makeAudioSettings } from "./testing/webAudioFakes";
 import type { ControlSettingKey, ControlVolumeBus } from "./controlProtocol";
 
 describe("external audio controls", () => {
-  it.each<ControlSettingKey>(["micPassthrough", "soundboardToVirtualMic", "noiseSuppressionEnabled", "echoCancellationEnabled", "monitorToHeadphones"])("sets and toggles %s", (key) => {
+  it.each<ControlSettingKey>(["micPassthrough", "soundboardToVirtualMic", "noiseSuppressionEnabled", "echoCancellationEnabled", "monitorToHeadphones", "hotkeysEnabled"])("sets and toggles %s", (key) => {
     const initial = makeAudioSettings();
     const set = applyAudioControlCommand(initial, { command: "setting.set", args: { key, value: false } });
     const toggled = applyAudioControlCommand(set.settings, { command: "setting.toggle", args: { key } });

@@ -540,6 +540,13 @@ function App() {
 
   const registerHotkeys = useCallback(async (current: SoundLibrary) => {
     const bindings: HotkeyBinding[] = [];
+    if (current.settings.toggleHotkeysHotkey) bindings.push({ type: "toggle-hotkeys", accelerator: normalizeAccelerator(current.settings.toggleHotkeysHotkey) });
+    // With hotkeys switched off, only the toggle stays registered so it can turn them back on.
+    if (!current.settings.hotkeysEnabled) {
+      const results = await window.sounddeck.registerHotkeys(bindings);
+      setHotkeyResults(results);
+      return;
+    }
     if (current.settings.stopAllHotkey) bindings.push({ type: "stop-all", accelerator: normalizeAccelerator(current.settings.stopAllHotkey) });
     if (current.settings.cycleBoardsHotkey) bindings.push({ type: "cycle-board", accelerator: normalizeAccelerator(current.settings.cycleBoardsHotkey) });
     for (const board of current.boards) {
@@ -592,6 +599,14 @@ function App() {
 
   useEffect(() => {
     return window.sounddeck.onHotkeyTrigger((binding) => {
+      if (binding.type === "toggle-hotkeys") {
+        const enabled = !libraryRef.current?.settings.hotkeysEnabled;
+        changeSettings({ hotkeysEnabled: enabled });
+        setMessage(enabled ? "Hotkeys on" : "Hotkeys off");
+        return;
+      }
+      // Registration already drops these while hotkeys are off; this guards a press racing the re-register.
+      if (!libraryRef.current?.settings.hotkeysEnabled) return;
       if (binding.type === "stop-all") {
         stopAllSounds();
         setMessage("Stopped all sounds");
@@ -1208,7 +1223,18 @@ function App() {
           <div className="sideNavLabel">Global settings</div>
           <button className={view === "devices" ? "active" : ""} onClick={() => setView("devices")}><Headphones size={18} /> Devices</button>
           <button className={view === "settings" ? "active" : ""} onClick={() => setView("settings")}><Settings size={18} /> Settings</button>
-          <button className={view === "hotkeys" ? "active" : ""} onClick={() => setView("hotkeys")}><Keyboard size={18} /> Hotkeys</button>
+          <div className="sideNavItem">
+            <button className={view === "hotkeys" ? "active" : ""} onClick={() => setView("hotkeys")}><Keyboard size={18} /> Hotkeys</button>
+            <Switch
+              label={library.settings.hotkeysEnabled ? "Turn off all hotkeys" : "Turn on all hotkeys"}
+              title={`${library.settings.hotkeysEnabled ? "Hotkeys on" : "Hotkeys off"}${library.settings.toggleHotkeysHotkey ? ` · ${formatAccelerator(library.settings.toggleHotkeysHotkey)}` : ""}`}
+              checked={library.settings.hotkeysEnabled}
+              onChange={(hotkeysEnabled) => {
+                changeSettings({ hotkeysEnabled });
+                setMessage(hotkeysEnabled ? "Hotkeys on" : "Hotkeys off");
+              }}
+            />
+          </div>
         </div>
         {appVersion && (
           <div className="appVersionRow">
@@ -1265,7 +1291,7 @@ function App() {
         </header>
 
         {view === "board" && (
-          <div className="boardView">
+          <div className={library.settings.hotkeysEnabled ? "boardView" : "boardView hotkeysPaused"}>
             <div className={dropActive ? "dropZone active" : "dropZone"}>
               <Upload size={19} />
               <span>Drop audio here</span>
@@ -2436,13 +2462,14 @@ function ClipEditor({ sound, engine, onChange, onClose, mediaUsedElsewhere }: {
   );
 }
 
-function Switch({ checked, disabled, label, onChange }: { checked: boolean; disabled?: boolean; label: string; onChange: (checked: boolean) => void }) {
+function Switch({ checked, disabled, label, title, onChange }: { checked: boolean; disabled?: boolean; label: string; title?: string; onChange: (checked: boolean) => void }) {
   return (
     <button
       type="button"
       role="switch"
       aria-checked={checked}
       aria-label={label}
+      title={title}
       className="switch"
       data-state={checked ? "checked" : "unchecked"}
       disabled={disabled}
@@ -3727,6 +3754,8 @@ function HotkeyPanel({ library, results, corsairState, capabilities, onChangeSet
   const hasMacPermissionIssue = capabilities?.platform === "darwin" && results.some((result) => result.reason === "macos-input-monitoring-permission");
   const issueFor = (result: HotkeyResult | undefined) => (result && !result.ok ? result.reason : undefined);
   const cycleResult = results.find((candidate) => candidate.type === "cycle-board");
+  const toggleResult = results.find((candidate) => candidate.type === "toggle-hotkeys");
+  const enabled = library.settings.hotkeysEnabled;
   return (
     <div className="settingsPanel">
       <SettingsCard title="Global" description="Shortcuts that work anywhere on your computer, even while SoundDeck is in the background.">
@@ -3747,6 +3776,16 @@ function HotkeyPanel({ library, results, corsairState, capabilities, onChangeSet
             Allow SoundDeck Studio under Privacy &amp; Security, then retry the hotkey.
           </SettingsNotice>
         )}
+        <SettingsRow icon={<Power size={16} />} title="Hotkeys enabled" description="Turn off to pause every hotkey below, including G-keys. The toggle shortcut keeps working.">
+          <Switch label="Hotkeys enabled" checked={enabled} onChange={(hotkeysEnabled) => onChangeSettings({ hotkeysEnabled })} />
+        </SettingsRow>
+        <SettingsRow icon={<Keyboard size={16} />} title="Toggle hotkeys" description="Turn all hotkeys on or off from anywhere." issue={issueFor(toggleResult)}>
+          <HotkeyCapture value={library.settings.toggleHotkeysHotkey} onChange={(hotkey) => onChangeSettings({ toggleHotkeysHotkey: hotkey })} />
+        </SettingsRow>
+      </SettingsCard>
+
+      <div className={enabled ? "hotkeyGroups" : "hotkeyGroups paused"} aria-disabled={!enabled || undefined}>
+      <SettingsCard title="Actions" description={enabled ? "Stop playback or move between boards." : "Paused. Turn hotkeys back on to use these."}>
         <SettingsRow icon={<OctagonX size={16} />} tone="danger" title="Emergency stop" description="Stop every sound immediately.">
           <HotkeyCapture value={library.settings.stopAllHotkey} onChange={(hotkey) => onChangeSettings({ stopAllHotkey: hotkey })} />
         </SettingsRow>
@@ -3790,6 +3829,7 @@ function HotkeyPanel({ library, results, corsairState, capabilities, onChangeSet
         })}
         {!allSounds.length && <div className="settingsEmpty">Add sounds to bind sound hotkeys.</div>}
       </SettingsCard>
+      </div>
     </div>
   );
 }
