@@ -2236,6 +2236,8 @@ input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent);
   }
   .sideNav { grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); margin-top: 0; }
   .sideNav button:where(:not(.switch)) { justify-content: center; }
+  /* Balance the switch's reserved space so the Hotkeys label centers like its neighbours. */
+  .sideNavItem > button:not(.switch) { padding-left: 50px; }
   .sideNavDivider, .sideNavLabel { grid-column: 1 / -1; }
   .boards { max-height: 170px; }
   .soundGrid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; padding-bottom: 60vh; }

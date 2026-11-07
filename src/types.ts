@@ -236,6 +236,8 @@ export interface HotkeyResult extends HotkeyBinding {
 
 export interface HotkeyTrigger extends HotkeyBinding {
   pressId?: string;
+  /** Set for Control API / Stream Deck commands relayed through the hotkey channel. */
+  external?: boolean;
 }
 
 export interface HotkeyRelease extends HotkeyBinding {

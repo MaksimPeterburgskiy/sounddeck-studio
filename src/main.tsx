@@ -545,6 +545,7 @@ function App() {
     if (!current.settings.hotkeysEnabled) {
       const results = await window.sounddeck.registerHotkeys(bindings);
       setHotkeyResults(results);
+      void window.sounddeck.getCapabilities().then(setCapabilities).catch(() => undefined);
       return;
     }
     if (current.settings.stopAllHotkey) bindings.push({ type: "stop-all", accelerator: normalizeAccelerator(current.settings.stopAllHotkey) });
@@ -606,7 +607,8 @@ function App() {
         return;
       }
       // Registration already drops these while hotkeys are off; this guards a press racing the re-register.
-      if (!libraryRef.current?.settings.hotkeysEnabled) return;
+      // External control commands share this channel and stay live regardless.
+      if (!binding.external && !libraryRef.current?.settings.hotkeysEnabled) return;
       if (binding.type === "stop-all") {
         stopAllSounds();
         setMessage("Stopped all sounds");
@@ -1226,7 +1228,7 @@ function App() {
           <div className="sideNavItem">
             <button className={view === "hotkeys" ? "active" : ""} onClick={() => setView("hotkeys")}><Keyboard size={18} /> Hotkeys</button>
             <Switch
-              label={library.settings.hotkeysEnabled ? "Turn off all hotkeys" : "Turn on all hotkeys"}
+              label="All hotkeys"
               title={`${library.settings.hotkeysEnabled ? "Hotkeys on" : "Hotkeys off"}${library.settings.toggleHotkeysHotkey ? ` · ${formatAccelerator(library.settings.toggleHotkeysHotkey)}` : ""}`}
               checked={library.settings.hotkeysEnabled}
               onChange={(hotkeysEnabled) => {

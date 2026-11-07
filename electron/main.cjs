@@ -157,7 +157,8 @@ const externalControl = createExternalControlBridge({
     if (hotkeyCaptureActive && command !== "sound.release") return { ok: false, code: "busy" };
     if (!controlRendererReady || !mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return { ok: false, code: "unavailable" };
     if (command === "sound.play" || command === "sound.press" || command.startsWith("setting.") || command.startsWith("volume.")) return controlRenderer.dispatch({ command, args }, signal, deadlineSignal);
-    const binding = { accelerator: "" };
+    // Marked external so the renderer's "hotkeys off" switch doesn't swallow it.
+    const binding = { accelerator: "", external: true };
     if (command === "playback.stopAll") binding.type = "stop-all";
     else if (command === "board.activate") Object.assign(binding, { type: "board", boardId: args.boardId });
     else {
