@@ -2236,7 +2236,8 @@ input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent);
   }
   .sideNav { grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); margin-top: 0; }
   .sideNav button:where(:not(.switch)) { justify-content: center; }
-  /* Balance the switch's reserved space so the Hotkeys label centers like its neighbours. */
+  /* The Hotkeys item carries a switch, so give it two cells and balance the switch's reserved space. */
+  .sideNavItem { grid-column: span 2; }
   .sideNavItem > button:not(.switch) { padding-left: 50px; }
   .sideNavDivider, .sideNavLabel { grid-column: 1 / -1; }
   .boards { max-height: 170px; }

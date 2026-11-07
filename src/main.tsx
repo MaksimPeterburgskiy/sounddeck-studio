@@ -563,6 +563,16 @@ function App() {
     void window.sounddeck.getCapabilities().then(setCapabilities).catch(() => undefined);
   }, []);
 
+  // One status message for every way the switch can flip: sidebar, Hotkeys page, toggle shortcut, Control API.
+  const hotkeysEnabled = library?.settings.hotkeysEnabled;
+  const previousHotkeysEnabled = useRef(hotkeysEnabled);
+  useEffect(() => {
+    const previous = previousHotkeysEnabled.current;
+    previousHotkeysEnabled.current = hotkeysEnabled;
+    if (previous === undefined || hotkeysEnabled === undefined || previous === hotkeysEnabled) return;
+    setMessage(hotkeysEnabled ? "Hotkeys on" : "Hotkeys off");
+  }, [hotkeysEnabled]);
+
   const corsairConnected = corsairState === "connected";
   useEffect(() => {
     // Reordering doesn't change bindings; skip re-registration during a drag
@@ -601,9 +611,7 @@ function App() {
   useEffect(() => {
     return window.sounddeck.onHotkeyTrigger((binding) => {
       if (binding.type === "toggle-hotkeys") {
-        const enabled = !libraryRef.current?.settings.hotkeysEnabled;
-        changeSettings({ hotkeysEnabled: enabled });
-        setMessage(enabled ? "Hotkeys on" : "Hotkeys off");
+        changeSettings({ hotkeysEnabled: !libraryRef.current?.settings.hotkeysEnabled });
         return;
       }
       // Registration already drops these while hotkeys are off; this guards a press racing the re-register.
@@ -1231,10 +1239,7 @@ function App() {
               label="All hotkeys"
               title={`${library.settings.hotkeysEnabled ? "Hotkeys on" : "Hotkeys off"}${library.settings.toggleHotkeysHotkey ? ` · ${formatAccelerator(library.settings.toggleHotkeysHotkey)}` : ""}`}
               checked={library.settings.hotkeysEnabled}
-              onChange={(hotkeysEnabled) => {
-                changeSettings({ hotkeysEnabled });
-                setMessage(hotkeysEnabled ? "Hotkeys on" : "Hotkeys off");
-              }}
+              onChange={(hotkeysEnabled) => changeSettings({ hotkeysEnabled })}
             />
           </div>
         </div>
