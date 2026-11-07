@@ -184,6 +184,9 @@ export interface AudioSettings {
   microphoneDeviceLabel: string;
   stopAllHotkey: string;
   cycleBoardsHotkey: string;
+  /** Master switch for global hotkeys; when off only the toggle hotkey stays live. */
+  hotkeysEnabled: boolean;
+  toggleHotkeysHotkey: string;
   /** Retrigger behaviour assigned to newly imported or recorded sounds. */
   defaultRetriggerMode: RetriggerMode;
 }
@@ -220,7 +223,7 @@ export interface MediaCropResult {
 }
 
 export interface HotkeyBinding {
-  type: "sound" | "stop-all" | "board" | "cycle-board";
+  type: "sound" | "stop-all" | "board" | "cycle-board" | "toggle-hotkeys";
   soundId?: string;
   boardId?: string;
   accelerator: string;
@@ -233,6 +236,8 @@ export interface HotkeyResult extends HotkeyBinding {
 
 export interface HotkeyTrigger extends HotkeyBinding {
   pressId?: string;
+  /** Set for Control API / Stream Deck commands relayed through the hotkey channel. */
+  external?: boolean;
 }
 
 export interface HotkeyRelease extends HotkeyBinding {

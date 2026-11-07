@@ -3,7 +3,7 @@ const fs = require("node:fs/promises");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const { WebSocketServer } = require("ws");
-const { TOGGLE_SETTING_KEYS, validControlSettingValue, normalizeAttenuation } = require("./controlSettingValues.cjs");
+const { TOGGLE_SETTING_KEYS, TOGGLE_SETTING_DEFAULT_ON, validControlSettingValue, normalizeAttenuation } = require("./controlSettingValues.cjs");
 const { MODEL_IDS } = require("./noiseSuppression.cjs");
 
 const PROTOCOL_VERSION = 1;
@@ -25,7 +25,7 @@ const MAX_PRESSES = 4096;
 const VOLUME_BUSES = ["micVirtual", "micMonitor", "soundboardVirtual", "soundboardMonitor"];
 
 function audioState(value) {
-  const settings = Object.fromEntries(TOGGLE_SETTING_KEYS.map((key) => [key, typeof value?.[key] === "boolean" ? value[key] : key === "monitorToHeadphones"]));
+  const settings = Object.fromEntries(TOGGLE_SETTING_KEYS.map((key) => [key, typeof value?.[key] === "boolean" ? value[key] : TOGGLE_SETTING_DEFAULT_ON.includes(key)]));
   settings.noiseSuppressionModel = MODEL_IDS.includes(value?.noiseSuppressionModel) ? value.noiseSuppressionModel : "dfn3";
   settings.noiseSuppressionAttenuationDb = normalizeAttenuation(value?.noiseSuppressionAttenuationDb);
   const volumes = Object.fromEntries(VOLUME_BUSES.map((bus) => [bus, {

@@ -365,6 +365,8 @@ const baseSettings: AudioSettings = {
   microphoneDeviceLabel: "",
   stopAllHotkey: "",
   cycleBoardsHotkey: "",
+  hotkeysEnabled: true,
+  toggleHotkeysHotkey: "",
   defaultRetriggerMode: "restart"
 };
 

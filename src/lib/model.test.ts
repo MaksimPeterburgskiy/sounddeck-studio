@@ -64,6 +64,8 @@ describe("model helpers", () => {
     expect(library.activeBoardId).toBe("a");
     expect(library.settings.stopAllHotkey).toBe("Ctrl+Alt+Space");
     expect(library.settings.cycleBoardsHotkey).toBe("");
+    expect(library.settings.hotkeysEnabled).toBe(true);
+    expect(library.settings.toggleHotkeysHotkey).toBe("");
     expect(library.settings.micVirtualVolume).toBe(1);
     expect(library.settings.micMonitorVolume).toBe(1);
     expect(library.settings.soundboardVirtualVolume).toBe(1);

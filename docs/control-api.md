@@ -62,7 +62,7 @@ The server retains the marker in its connected-client metadata. Older clients ma
 The server replies:
 
 ```json
-{"type":"welcome","protocol":1,"app":{"version":"0.1.22"},"state":{"activeBoardId":"board-a","playback":[],"library":{"activeBoardId":"board-a","boards":[]},"settings":{"micPassthrough":false,"soundboardToVirtualMic":false,"noiseSuppressionEnabled":false,"noiseSuppressionModel":"dfn3","noiseSuppressionAttenuationDb":100,"echoCancellationEnabled":false,"monitorToHeadphones":true},"volumes":{"micVirtual":{"value":1,"muted":false},"micMonitor":{"value":1,"muted":false},"soundboardVirtual":{"value":1,"muted":false},"soundboardMonitor":{"value":1,"muted":false}}}}
+{"type":"welcome","protocol":1,"app":{"version":"0.1.22"},"state":{"activeBoardId":"board-a","playback":[],"library":{"activeBoardId":"board-a","boards":[]},"settings":{"micPassthrough":false,"soundboardToVirtualMic":false,"noiseSuppressionEnabled":false,"noiseSuppressionModel":"dfn3","noiseSuppressionAttenuationDb":100,"echoCancellationEnabled":false,"monitorToHeadphones":true,"hotkeysEnabled":true},"volumes":{"micVirtual":{"value":1,"muted":false},"micMonitor":{"value":1,"muted":false},"soundboardVirtual":{"value":1,"muted":false},"soundboardMonitor":{"value":1,"muted":false}}}}
 ```
 
 A snapshot contains `activeBoardId`, `playback`, `library`, `settings` (audio toggles, noise model, and attenuation limit), and `volumes` (each bus's stored level and mute state). Library data is:
@@ -122,7 +122,7 @@ WebSocket press IDs belong to their session: clients may use the same ID indepen
 {"type":"command","id":"up","command":"sound.release","args":{"pressId":"key-1"}}
 ```
 
-Boolean setting keys are `micPassthrough`, `soundboardToVirtualMic`, `noiseSuppressionEnabled`, `echoCancellationEnabled`, and `monitorToHeadphones`. They accept `setting.set` and `setting.toggle`.
+Boolean setting keys are `micPassthrough`, `soundboardToVirtualMic`, `noiseSuppressionEnabled`, `echoCancellationEnabled`, `monitorToHeadphones`, and `hotkeysEnabled`. They accept `setting.set` and `setting.toggle`. `hotkeysEnabled` is the master switch for global keyboard and G-key hotkeys: while it is `false`, only the app's "Toggle hotkeys" shortcut stays active. It does not affect Control API or Stream Deck commands.
 
 Two additional keys accept `setting.set` (or HTTP `POST /v1/settings/<key>` with `{"value": ...}`):
 

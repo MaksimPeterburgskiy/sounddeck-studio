@@ -39,6 +39,8 @@ const defaultSettings: SoundLibrary["settings"] = {
   microphoneDeviceLabel: "",
   stopAllHotkey: "Ctrl+Alt+Space",
   cycleBoardsHotkey: "",
+  hotkeysEnabled: true,
+  toggleHotkeysHotkey: "",
   defaultRetriggerMode: "stop"
 };
 const defaultSoundOptions: Pick<SoundSlot, "fadeInMs" | "fadeOutMs" | "loop" | "soloPlay" | "retriggerMode" | "triggerMode" | "hotkey" | "outputTarget"> = {
@@ -237,6 +239,7 @@ export function normalizeLibrary(library: SoundLibrary): SoundLibrary {
     micMonitorMuted: boolOr(currentSettings.micMonitorMuted),
     soundboardVirtualMuted: boolOr(currentSettings.soundboardVirtualMuted),
     soundboardMonitorMuted: boolOr(currentSettings.soundboardMonitorMuted),
+    hotkeysEnabled: boolOr(currentSettings.hotkeysEnabled, defaultSettings.hotkeysEnabled),
     echoCancellationEnabled: boolOr(currentSettings.echoCancellationEnabled, defaultSettings.echoCancellationEnabled),
     noiseSuppressionModel: normalizeNoiseSuppressionModel(currentSettings.noiseSuppressionModel),
     noiseSuppressionEnabled: boolOr(currentSettings.noiseSuppressionEnabled, defaultSettings.noiseSuppressionEnabled),
@@ -246,6 +249,7 @@ export function normalizeLibrary(library: SoundLibrary): SoundLibrary {
   settings.defaultRetriggerMode = normalizeRetriggerMode(settings.defaultRetriggerMode, defaultSettings.defaultRetriggerMode);
   settings.stopAllHotkey = normalizeAccelerator(settings.stopAllHotkey);
   settings.cycleBoardsHotkey = normalizeAccelerator(settings.cycleBoardsHotkey);
+  settings.toggleHotkeysHotkey = normalizeAccelerator(settings.toggleHotkeysHotkey);
   settings.virtualOutputDeviceId = normalizeSelectableDeviceId(settings.virtualOutputDeviceId);
   settings.monitorDeviceLabel = String(settings.monitorDeviceLabel ?? "");
   const selectableMonitorDeviceId = normalizeSelectableDeviceId(settings.monitorDeviceId);
