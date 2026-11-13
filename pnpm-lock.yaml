@@ -244,8 +244,8 @@ importers:
   streamdeck-plugin:
     dependencies:
       '@elgato/streamdeck':
-        specifier: ^2.1.2
-        version: 2.1.2
+        specifier: ^3.0.4
+        version: 3.0.4
       ws:
         specifier: ^8.22.0
         version: 8.22.0
@@ -356,18 +356,15 @@ packages:
     engines: {node: '>=20.1.0'}
     hasBin: true
 
-  '@elgato/schemas@0.4.16':
-    resolution: {integrity: sha512-PFEi6F36ImO5KCSNHui9o/uXkwjca3hk5b95Df7LgNBdQYREXT3B+P3tYoz6avRuOPlArkKFSkOOvH6RRpjvLQ==}
-
   '@elgato/schemas@0.6.0':
     resolution: {integrity: sha512-fK3y35ZDwow3HV7/wuQyN/cy/Ir2rlYHiGAV9cUrNETz1T1bjtMl5tSaIooC3CBVLtMjsM4JuHwxejJouTkR1Q==}
 
-  '@elgato/streamdeck@2.1.2':
-    resolution: {integrity: sha512-qj6NuDyYj8bE+XFnr+O5ynB1zojwugfWiK3oQYwweaOzOFs7fEE21v9z75EPC8wQr3cuuzI7m557TQLn5k/4mA==}
+  '@elgato/streamdeck@3.0.4':
+    resolution: {integrity: sha512-AAaRxzR1bWwR6v2OVaqiAe3pjsbm3llddPSiioYgYQsHDorV+Cq/ZxQv5gIvjbnuh06CmItPpN7JuEEdrnQ1PQ==}
     engines: {node: '>=20.5.1'}
 
-  '@elgato/utils@0.6.0':
-    resolution: {integrity: sha512-DkBf07zo0qzHkoMO2L8HSDlfEwI56rI0fWedJjXcafPpoePoZ/nzqi+xL60Ad2KpQzCxstyN65oqVZ/Ar6woNg==}
+  '@elgato/utils@0.6.2':
+    resolution: {integrity: sha512-YxBKhF52a+rJdPwyDIBOXgyNCe9+lU+q8wMocZ7Zn50D6nRmOiCQksbNvw0UzYtC4uIIn8+f3CGMn/QnX+/3uQ==}
 
   '@hapi/address@5.1.1':
     resolution: {integrity: sha512-A+po2d/dVoY7cYajycYI43ZbYMXukuopIsqCjh5QzsBCipDtdofHntljDlpccMjIfTy6UOkg+5KPriwYch2bXA==}
@@ -2725,20 +2722,18 @@ snapshots:
     transitivePeerDependencies:
       - '@types/node'
 
-  '@elgato/schemas@0.4.16': {}
-
   '@elgato/schemas@0.6.0': {}
 
-  '@elgato/streamdeck@2.1.2':
+  '@elgato/streamdeck@3.0.4':
     dependencies:
-      '@elgato/schemas': 0.4.16
-      '@elgato/utils': 0.6.0
+      '@elgato/schemas': 0.6.0
+      '@elgato/utils': 0.6.2
       ws: 8.22.0
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
 
-  '@elgato/utils@0.6.0':
+  '@elgato/utils@0.6.2':
     dependencies:
       zod: 3.25.76
 
