@@ -193,7 +193,7 @@
     "@vitejs/plugin-react": "^6.1.2",
     "@vitest/coverage-v8": "^5.0.5",
     "concurrently": "^10.0.6",
-    "electron": "^44.7.0",
+    "electron": "^45.2.3",
     "electron-builder": "^26.16.1",
     "lucide-react": "^1.65.0",
     "onnxruntime-web": "1.31.1",
