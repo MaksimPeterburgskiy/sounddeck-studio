@@ -39,6 +39,21 @@ contextBridge.exposeInMainWorld("sounddeck", {
   importMedia: (paths) => ipcRenderer.invoke("media:import", paths),
   downloadMedia: (urls) => ipcRenderer.invoke("media:download", urls),
   readMedia: (mediaPath) => ipcRenderer.invoke("media:read", mediaPath),
+  onCableCaptureDemand: (label, callback) => {
+    let subscribed = true;
+    const listener = (_event, state) => {
+      if (state?.label === label) callback(typeof state.demand === "boolean" ? state.demand : null);
+    };
+    ipcRenderer.on("audio:cableCaptureDemand", listener);
+    void controlReadyToken.then((token) => {
+      if (subscribed) return ipcRenderer.invoke("audio:setCableCaptureEndpoint", label, token);
+    }).catch(() => { if (subscribed) callback(null); });
+    return () => {
+      subscribed = false;
+      ipcRenderer.removeListener("audio:cableCaptureDemand", listener);
+      void controlReadyToken.then((token) => ipcRenderer.invoke("audio:setCableCaptureEndpoint", null, token)).catch(() => {});
+    };
+  },
   getNoiseSuppressionAssets: (model) => ipcRenderer.invoke("audio:getNoiseSuppressionAssets", model),
   deleteMedia: (mediaPath) => ipcRenderer.invoke("media:delete", mediaPath),
   cropMedia: (payload) => ipcRenderer.invoke("media:crop", payload),

@@ -107,7 +107,8 @@ const METER_INTERVAL_MS = 33;
 export class AudioEngine {
   private monitorContext: AudioContext;
   private virtualContext: AudioContext;
-  private decodeContext: AudioContext;
+  private decodeContext: OfflineAudioContext;
+  private outputUsers = new Map<AudioContext, number>();
   private monitorBus: GainNode;
   private previewBus: GainNode;
   private virtualBus: GainNode;
@@ -124,11 +125,13 @@ export class AudioEngine {
   private micChainCreating?: Promise<void>;
   private micChainFailed = false;
   private recorderLeases = 0;
+  private cableCaptureDemand: boolean | null = null;
   private monitorBypass = false;
   private meterSubscribers = new Set<(reading: MicMeterReading | null) => void>();
   private meterTimer?: ReturnType<typeof setInterval>;
   private meterFallback?: { analyser: AnalyserNode; route: MicRoute; buffer: Float32Array<ArrayBuffer> };
   private micConfigureGeneration = 0;
+  private pendingMicConfiguration?: Promise<void>;
   private configureGeneration = 0;
   private micAppliedSettings?: AudioSettings;
   private micAppliedVirtualSinkId = "";
@@ -169,7 +172,9 @@ export class AudioEngine {
     };
     this.monitorContext = new AudioContext({ latencyHint: "interactive" });
     this.virtualContext = new AudioContext({ latencyHint: "interactive" });
-    this.decodeContext = new AudioContext({ latencyHint: "interactive" });
+    this.decodeContext = new OfflineAudioContext(2, 1, this.monitorContext.sampleRate);
+    this.suspendUnusedOutput(this.monitorContext);
+    this.suspendUnusedOutput(this.virtualContext);
     this.monitorBus = this.monitorContext.createGain();
     this.monitorBus.connect(this.monitorContext.destination);
     this.previewBus = this.monitorContext.createGain();
@@ -250,13 +255,25 @@ export class AudioEngine {
     if (waitForRouting) await waitForRouting();
     // Settings may have changed while decoding; re-check before any side effects.
     if (signal?.aborted || this.disposed || !this.hasLiveRoute(sound.outputTarget)) return false;
-    await Promise.all([this.monitorContext.resume(), this.virtualContext.resume()]);
-    if (waitForRouting) await waitForRouting();
-    if (signal?.aborted || this.disposed || !this.hasLiveRoute(sound.outputTarget)) return false;
+    const routes = this.contextsForTarget(sound.outputTarget);
+    const outputs = routes.map(({ context }) => context);
+    let started = false;
+    try {
+      await Promise.all(outputs.map((context) => this.retainOutput(context)));
+      if (waitForRouting) await waitForRouting();
+      if (signal?.aborted || this.disposed || !this.hasLiveRoute(sound.outputTarget)) return false;
+      const id = this.startVoice(sound, buffer, routes, fresh);
+      started = true;
+      return id;
+    } finally {
+      if (!started) outputs.forEach((context) => this.releaseOutput(context));
+    }
+  }
+
+  private startVoice(sound: SoundSlot, buffer: AudioBuffer, routes: { context: AudioContext; bus: GainNode }[], fresh = false) {
     // Only stop other voices once nothing else can bail out; a muted trigger must not silence what is playing.
     if (sound.soloPlay) this.stopAllExcept(sound.id);
     if (!fresh && sound.retriggerMode === "restart") this.stop(sound.id);
-    const contexts = this.contextsForTarget(sound.outputTarget);
     const trimStart = Math.min(Math.max(0, sound.trimStartSec ?? 0), buffer.duration);
     const trimEnd = Math.min(Math.max(trimStart + 0.01, sound.trimEndSec ?? buffer.duration), buffer.duration);
     const clipDuration = Math.max(0.01, trimEnd - trimStart);
@@ -279,7 +296,7 @@ export class AudioEngine {
       loop: sound.loop
     };
 
-    for (const route of contexts) {
+    for (const route of routes) {
       const context = route.context;
       const source = context.createBufferSource();
       const gain = context.createGain();
@@ -409,13 +426,23 @@ export class AudioEngine {
     const generation = this.previewGeneration;
     const buffer = await this.preload(sound);
     if (generation !== this.previewGeneration || this.disposed) return;
+    let started = false;
+    try {
+      await this.retainOutput(this.monitorContext);
+      if (generation !== this.previewGeneration || this.disposed) return;
+      this.startPreview(sound, buffer, fromSec, rate);
+      started = true;
+    } finally {
+      if (!started) this.releaseOutput(this.monitorContext);
+    }
+  }
+
+  private startPreview(sound: SoundSlot, buffer: AudioBuffer, fromSec: number, rate: number) {
     const trimStart = Math.min(Math.max(0, sound.trimStartSec ?? 0), buffer.duration);
     const trimEnd = Math.min(Math.max(trimStart + 0.01, sound.trimEndSec ?? buffer.duration), buffer.duration);
     const safeRate = Math.max(0.0625, rate || 1);
     const offset = Math.min(Math.max(trimStart, fromSec), trimEnd);
     const remaining = Math.max(0.01, trimEnd - offset);
-    await this.monitorContext.resume();
-    if (generation !== this.previewGeneration || this.disposed) return;
     const source = this.monitorContext.createBufferSource();
     const gain = this.monitorContext.createGain();
     const effects = normalizeSoundEffects(sound.effects);
@@ -507,7 +534,7 @@ export class AudioEngine {
     this.stopMeters();
     this.stopMic();
     this.disposeMicChain();
-    await Promise.allSettled([this.monitorContext.close(), this.virtualContext.close(), this.decodeContext.close()]);
+    await Promise.allSettled([this.monitorContext.close(), this.virtualContext.close()]);
   }
 
   async retryPreferredDevices(options: { recheckMonitor?: boolean } = {}): Promise<void> {
@@ -543,6 +570,7 @@ export class AudioEngine {
   subscribeMicMeters(callback: (reading: MicMeterReading | null) => void) {
     this.meterSubscribers.add(callback);
     this.micChain?.setMetering(true);
+    if (this.meterSubscribers.size === 1) void this.reconcileMicDemand();
     this.meterTimer ??= setInterval(() => this.emitMeters(), METER_INTERVAL_MS);
     return () => {
       this.meterSubscribers.delete(callback);
@@ -550,6 +578,7 @@ export class AudioEngine {
       this.micChain?.setMetering(false);
       if (this.meterTimer !== undefined) clearInterval(this.meterTimer);
       this.meterTimer = undefined;
+      void this.reconcileMicDemand();
     };
   }
 
@@ -580,6 +609,11 @@ export class AudioEngine {
 
   private async reconcileMicDemand() {
     if (this.disposed) return;
+    if (this.needsMicrophone() && !this.micStream && this.pendingMicConfiguration) {
+      // A recorder, meter and cable client can all arrive during the same device open.
+      await this.pendingMicConfiguration;
+      if (this.disposed) return;
+    }
     if (this.needsMicrophone() !== Boolean(this.micStream)) await this.configureMic(this.configureGeneration);
     else await this.syncMicChain();
   }
@@ -725,6 +759,31 @@ export class AudioEngine {
     return impulse;
   }
 
+  // Count pending starts as well as connected sources. A fade or reverb tail owns
+  // its output until its nodes are cleaned up, even after it leaves the playing list.
+  private retainOutput(context: AudioContext) {
+    this.outputUsers.set(context, (this.outputUsers.get(context) ?? 0) + 1);
+    return context.resume();
+  }
+
+  private releaseOutput(context: AudioContext) {
+    const users = this.outputUsers.get(context);
+    if (users === undefined) return;
+    const remaining = users - 1;
+    if (remaining > 0) {
+      this.outputUsers.set(context, remaining);
+    } else {
+      this.outputUsers.delete(context);
+      this.suspendUnusedOutput(context);
+    }
+  }
+
+  private suspendUnusedOutput(context: AudioContext) {
+    if (!this.disposed) void context.suspend().catch((error) => {
+      if (!this.disposed) console.warn("Could not suspend idle audio output", error);
+    });
+  }
+
   private contextsForTarget(target: OutputTarget) {
     const contexts: Array<{ context: AudioContext; bus: GainNode }> = [];
     if (target === "monitor" || target === "both") contexts.push({ context: this.monitorContext, bus: this.monitorBus });
@@ -767,8 +826,18 @@ export class AudioEngine {
     bus.gain.setTargetAtTime(target, now, 0.02);
   }
 
+  private wantsMicPassthrough(settings: AudioSettings = this.settings) {
+    return settings.micPassthrough && (settings.micPassthroughAlwaysOn || this.cableCaptureDemand !== false);
+  }
+
+  async setCableCaptureDemand(demand: boolean | null) {
+    const previouslyRouted = this.wantsMicPassthrough();
+    this.cableCaptureDemand = demand;
+    if (this.configureGeneration > 0 && this.wantsMicPassthrough() !== previouslyRouted) await this.reconcileMicDemand();
+  }
+
   private needsMicrophone(settings: AudioSettings = this.settings) {
-    return settings.micPassthrough || settings.monitorMicToHeadphones || this.recorderLeases > 0;
+    return this.wantsMicPassthrough(settings) || settings.monitorMicToHeadphones || this.recorderLeases > 0 || this.meterSubscribers.size > 0;
   }
 
   private shouldConfigureMic(nextSettings: AudioSettings) {
@@ -776,7 +845,7 @@ export class AudioEngine {
     return (
       !applied ||
       (this.needsMicrophone(nextSettings) && !this.micStream) ||
-      applied.micPassthrough !== nextSettings.micPassthrough ||
+      this.wantsMicPassthrough(applied) !== this.wantsMicPassthrough(nextSettings) ||
       applied.microphoneDeviceId !== nextSettings.microphoneDeviceId ||
       applied.monitorMicToHeadphones !== nextSettings.monitorMicToHeadphones
     );
@@ -873,6 +942,16 @@ export class AudioEngine {
   }
 
   private async configureMic(configureGeneration: number, preacquired?: MediaStream) {
+    const work = this.applyMicConfiguration(configureGeneration, preacquired);
+    this.pendingMicConfiguration = work;
+    try {
+      await work;
+    } finally {
+      if (this.pendingMicConfiguration === work) this.pendingMicConfiguration = undefined;
+    }
+  }
+
+  private async applyMicConfiguration(configureGeneration: number, preacquired?: MediaStream) {
     this.micAppliedSettings = undefined;
     const generation = this.micConfigureGeneration + 1;
     this.micConfigureGeneration = generation;
@@ -1028,7 +1107,11 @@ export class AudioEngine {
   }
 
   private chainWanted() {
-    return activeMicChainCount(this.settings) > 0 || this.recorderLeases > 0;
+    // Without an output route the raw meter has no running context. In that
+    // case the processing chain supplies the meters just as it does for recording.
+    const metersOnly = this.meterSubscribers.size > 0 && !this.settings.monitorMicToHeadphones &&
+      !(this.wantsMicPassthrough() && this.virtualSinkReady);
+    return activeMicChainCount(this.settings) > 0 || this.recorderLeases > 0 || metersOnly;
   }
 
   /**
@@ -1112,38 +1195,45 @@ export class AudioEngine {
     // Microphone routes are independent of the soundboard's output toggles.
     const contexts: AudioContext[] = [];
     if (stream && this.settings.monitorMicToHeadphones) contexts.push(this.monitorContext);
-    if (stream && this.settings.micPassthrough && this.virtualSinkReady) contexts.push(this.virtualContext);
+    if (stream && this.wantsMicPassthrough() && this.virtualSinkReady) contexts.push(this.virtualContext);
     const unchanged =
       stream === this.micRoutedStream &&
       contexts.length === this.micNodes.length &&
-      contexts.every((context, index) => this.micNodes[index].context === context);
+      this.micNodes.every((route) => contexts.includes(route.context));
     if (unchanged) return;
-    this.disconnectMicRoutes();
+    // Starting or stopping a cable client must not interrupt a live headphone monitor.
+    this.disconnectMicRoutes(stream === this.micRoutedStream ? contexts : []);
     if (!stream) return;
     this.micRoutedStream = stream;
     for (const context of contexts) {
+      if (this.micNodes.some((route) => route.context === context)) continue;
       const source = context.createMediaStreamSource(stream);
       const gain = context.createGain();
       gain.gain.value = this.micVolumeFor(context);
       source.connect(gain).connect(context.destination);
       this.micNodes.push({ source, gain, context });
+      void this.retainOutput(context).catch((error) => {
+        if (!this.disposed) console.warn("Could not resume microphone output", error);
+      });
     }
     this.applyMonitorBypass();
   }
 
-  private disconnectMicRoutes() {
-    if (this.meterFallback) {
+  private disconnectMicRoutes(keep: AudioContext[] = []) {
+    if (this.meterFallback && !keep.includes(this.meterFallback.route.context)) {
       this.meterFallback.route.source.disconnect(this.meterFallback.analyser);
       this.meterFallback = undefined;
     }
-    for (const node of this.micNodes) {
+    this.micNodes = this.micNodes.filter((node) => {
+      if (keep.includes(node.context)) return true;
       node.source.disconnect();
       node.gain.disconnect();
       node.raw?.source.disconnect();
       node.raw?.gain.disconnect();
-    }
-    this.micNodes = [];
-    this.micRoutedStream = undefined;
+      this.releaseOutput(node.context);
+      return false;
+    });
+    if (!this.micNodes.length) this.micRoutedStream = undefined;
   }
 
   private applyMonitorBypass() {
@@ -1293,6 +1383,7 @@ export class AudioEngine {
     }
     for (const source of voice.sources) {
       source.disconnect();
+      this.releaseOutput(source.context as AudioContext);
     }
     for (const gain of voice.gains) gain.disconnect();
     for (const chain of voice.effects) {
@@ -1325,6 +1416,7 @@ export class AudioEngine {
         }
       }
       source.disconnect();
+      this.releaseOutput(source.context as AudioContext);
     }
     for (const gain of voice.gains) gain.disconnect();
     for (const chain of voice.effects) {

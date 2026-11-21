@@ -1,0 +1,12 @@
+cmake_minimum_required(VERSION 3.15)
+project(SoundDeckCableCapture LANGUAGES CXX)
+
+add_executable(audio-cable-capture-demand audio-cable-capture-demand.cpp)
+target_compile_features(audio-cable-capture-demand PRIVATE cxx_std_17)
+target_link_libraries(audio-cable-capture-demand PRIVATE ole32 uuid)
+if(MSVC)
+  set_property(TARGET audio-cable-capture-demand PROPERTY MSVC_RUNTIME_LIBRARY MultiThreaded)
+elseif(MINGW)
+  target_link_options(audio-cable-capture-demand PRIVATE -municode -static -s)
+endif()
+install(TARGETS audio-cable-capture-demand RUNTIME DESTINATION .)

@@ -13,4 +13,9 @@ exports.default = async function afterPack(context) {
   const { installNativeTools } = await import("./native-tools.mjs");
   const installed = await installNativeTools(context);
   for (const filePath of installed) console.log(`Installed verified native tool: ${filePath}`);
+  if (context.electronPlatformName === "win32") {
+    const cableProbe = path.join(root, "native-tools", "audio-cable-capture-demand.exe");
+    await fs.access(cableProbe);
+    console.log(`Verified packaged Windows cable capture probe: ${cableProbe}`);
+  }
 };

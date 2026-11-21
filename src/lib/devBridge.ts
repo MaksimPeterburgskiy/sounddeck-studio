@@ -17,6 +17,7 @@ export function installDevBridge() {
         activeBoardId: "board-default",
         settings: {
           micPassthrough: false,
+          micPassthroughAlwaysOn: false,
           echoCancellationEnabled: false,
           noiseSuppressionModel: "dfn3",
           noiseSuppressionEnabled: false,
@@ -70,6 +71,10 @@ export function installDevBridge() {
     },
     async readMedia() {
       throw new Error("Run in Electron to read app-managed media");
+    },
+    onCableCaptureDemand(_outputLabel, callback) {
+      callback(null);
+      return () => {};
     },
     async getNoiseSuppressionAssets() {
       throw new Error("Noise suppression requires the Electron app");

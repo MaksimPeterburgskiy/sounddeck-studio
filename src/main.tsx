@@ -54,7 +54,7 @@ import { createControlCancellation } from "./lib/controlCancellation";
 import { SoundTriggers } from "./lib/soundTriggers";
 import type { ControlPlaybackResult, ControlPlaybackVoice, ControlSettingsPatch, ControlStatus } from "./lib/controlProtocol";
 import type { AudioDeviceStatus, MicrophoneProcessingStatus, ProcessedMicLease } from "./lib/audioEngine";
-import { findVirtualAudioCandidates, getDefaultDeviceLabel, isSelectableMediaDevice, normalizeMonitorDeviceId, normalizeSelectableDeviceId } from "./lib/devices";
+import { findVirtualAudioCandidates, getDefaultDeviceLabel, isSelectableMediaDevice, normalizeMonitorDeviceId, normalizeSelectableDeviceId, vbCableCaptureName } from "./lib/devices";
 import type { VirtualAudioCandidate } from "./lib/devices";
 import { acceleratorLooksReserved, formatBytes, formatDuration, getDefaultSoundEffects, makeBoard, nextBoard, normalizeLibrary, normalizeSoundEffects, now, RETRIGGER_MODES, retriggerModeLabel, soundEffectsAreActive, soundEffectsAreDefault, soundFromImport } from "./lib/model";
 import { hotkeyFallsBackToTap, claimCaptureSlot, eventToToken, formatAccelerator, MODIFIER_TOKENS, normalizeAccelerator, orderTokens } from "./lib/hotkeys";
@@ -104,6 +104,7 @@ function App() {
   const [view, setView] = useState<View>("board");
   const [selectedSoundId, setSelectedSoundId] = useState<string>("");
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
+  const [cableCaptureDemand, setCableCaptureDemand] = useState<boolean | null>(null);
   const [hotkeyResults, setHotkeyResults] = useState<HotkeyResult[]>([]);
   const [engineStatus, setEngineStatus] = useState<EngineStatus>("idle");
   const [playingIds, setPlayingIds] = useState<string[]>([]);
@@ -292,6 +293,8 @@ function App() {
   const defaultInputLabel = getDefaultDeviceLabel(devices, "audioinput");
   const defaultOutputLabel = getDefaultDeviceLabel(devices, "audiooutput");
   const virtualOutputLabel = devices.find((device) => device.kind === "audiooutput" && device.deviceId === virtualSinkDeviceId)?.label || "";
+  const watchedCableLabel = platform === "win32" && library?.settings.micPassthrough &&
+    !library.settings.micPassthroughAlwaysOn && vbCableCaptureName(virtualOutputLabel) ? virtualOutputLabel.trim() : "";
   const microphoneDeviceStatus = deviceStatus.microphone;
   const monitorDeviceStatus = deviceStatus.monitor;
   const preferredMicrophoneLabel = getPreferredMicrophoneLabel(
@@ -330,6 +333,15 @@ function App() {
       disposeAudio();
     };
   }, []);
+
+  useEffect(() => {
+    function applyDemand(demand: boolean | null) {
+      setCableCaptureDemand(demand);
+      void engineRef.current?.setCableCaptureDemand(demand);
+    }
+    applyDemand(null);
+    if (watchedCableLabel) return window.sounddeck.onCableCaptureDemand(watchedCableLabel, applyDemand);
+  }, [watchedCableLabel, virtualSinkDeviceId]);
 
   function configureAudio(settings: SoundLibrary["settings"]) {
     configuredSettingsRef.current = settings;
@@ -1352,6 +1364,7 @@ function App() {
             defaultInputLabel={defaultInputLabel}
             defaultOutputLabel={defaultOutputLabel}
             virtualOutputLabel={virtualOutputLabel}
+            waitingForRecorder={Boolean(watchedCableLabel) && cableCaptureDemand === false}
             platform={platform}
             candidate={recommendedVirtualAudio}
             processingStatus={microphoneProcessingStatus}
@@ -2898,7 +2911,7 @@ function MicFilterChain({ settings, processingStatus, engine, onChange }: {
 
   useEffect(() => {
     if (!engine) return;
-    return engine.subscribeMicMeters((reading) => {
+    const subscribe = () => engine.subscribeMicMeters((reading) => {
       const root = rootRef.current;
       if (!root) return;
       for (const element of root.querySelectorAll<HTMLElement>("[data-meter]")) {
@@ -2911,6 +2924,21 @@ function MicFilterChain({ settings, processingStatus, engine, onChange }: {
         else element.textContent = level ? micDbText(db) : Math.abs(db) < 0.05 ? "0.0" : `−${Math.abs(db).toFixed(1)}`;
       }
     });
+    let unsubscribe: (() => void) | undefined;
+    function syncVisibility() {
+      if (document.hidden) {
+        unsubscribe?.();
+        unsubscribe = undefined;
+      } else {
+        unsubscribe ??= subscribe();
+      }
+    }
+    syncVisibility();
+    document.addEventListener("visibilitychange", syncVisibility);
+    return () => {
+      document.removeEventListener("visibilitychange", syncVisibility);
+      unsubscribe?.();
+    };
   }, [engine]);
 
   useEffect(() => {
@@ -3528,7 +3556,7 @@ function MicTransferGraph({ floorDb, thresholdDb, curve }: { floorDb: number; th
   );
 }
 
-function DevicePanel({ library, engine, inputDevices, outputDevices, defaultInputLabel, defaultOutputLabel, virtualOutputLabel, platform, candidate, processingStatus, deviceStatus, preferredMicrophoneLabel, activeMicrophoneLabel, preferredMonitorLabel, activeMonitorLabel, onRefresh, onChange }: {
+function DevicePanel({ library, engine, inputDevices, outputDevices, defaultInputLabel, defaultOutputLabel, virtualOutputLabel, waitingForRecorder, platform, candidate, processingStatus, deviceStatus, preferredMicrophoneLabel, activeMicrophoneLabel, preferredMonitorLabel, activeMonitorLabel, onRefresh, onChange }: {
   library: SoundLibrary;
   engine: AudioEngine | null;
   inputDevices: MediaDeviceInfo[];
@@ -3536,6 +3564,7 @@ function DevicePanel({ library, engine, inputDevices, outputDevices, defaultInpu
   defaultInputLabel: string;
   defaultOutputLabel: string;
   virtualOutputLabel: string;
+  waitingForRecorder: boolean;
   platform: SoundDeckPlatform;
   candidate: VirtualAudioCandidate | null;
   processingStatus: MicrophoneProcessingStatus;
@@ -3564,13 +3593,16 @@ function DevicePanel({ library, engine, inputDevices, outputDevices, defaultInpu
     settings.monitorDeviceId && !outputDevices.some((device) => device.deviceId === settings.monitorDeviceId)
   );
   const route = virtualRouteCopy(platform);
-  const pairedInputVisible = inputDevices.some((device) => route.inputPattern.test(device.label));
+  const expectedCableInput = platform === "win32" && candidate && vbCableCaptureName(candidate.outputLabel);
+  const pairedInputVisible = inputDevices.some((device) => expectedCableInput
+    ? vbCableCaptureName(device.label) === expectedCableInput || device.label.trim().toLowerCase() === expectedCableInput.toLowerCase()
+    : route.inputPattern.test(device.label));
   const routeReady = Boolean(candidate && settings.virtualOutputDeviceId === candidate.outputDeviceId && pairedInputVisible);
   const outputSelected = Boolean(candidate && settings.virtualOutputDeviceId === candidate.outputDeviceId);
   const routeStatus = routeReady && candidate
     ? `${candidate.outputLabel} selected. Target apps should use ${candidate.expectedInputLabel}.`
     : outputSelected
-      ? `${candidate?.outputLabel || route.title} is selected, but ${route.inputLabel} is not visible as an input yet.`
+      ? `${candidate?.outputLabel || route.title} is selected, but ${candidate?.expectedInputLabel || route.inputLabel} is not visible as an input yet.`
       : route.missing;
   const handleMicrophoneChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
     const microphoneDeviceId = normalizeSelectableDeviceId(event.currentTarget.value);
@@ -3611,9 +3643,16 @@ function DevicePanel({ library, engine, inputDevices, outputDevices, defaultInpu
         >
           {routeStatus}
         </SettingsNotice>
-        <SettingsRow icon={<Mic size={16} />} title="Microphone to virtual mic" description="Send your voice through the virtual mic.">
+        <SettingsRow icon={<Mic size={16} />} title="Microphone to virtual mic" description={waitingForRecorder
+          ? "Ready. Your mic stays idle until an app starts listening to the virtual mic."
+          : "Send your voice through the virtual mic."}>
           <Switch label="Microphone to virtual mic" checked={settings.micPassthrough} onChange={(micPassthrough) => onChange({ micPassthrough })} />
         </SettingsRow>
+        {platform === "win32" && (
+          <SettingsRow icon={<Mic size={16} />} title="Keep microphone always on" description="Turn this on if an app can't hear you (such as some ASIO or kernel-streaming apps). Keeps Windows from sleeping automatically while SoundDeck is running." disabled={!settings.micPassthrough}>
+            <Switch label="Keep microphone always on" checked={settings.micPassthroughAlwaysOn} disabled={!settings.micPassthrough} onChange={(micPassthroughAlwaysOn) => onChange({ micPassthroughAlwaysOn })} />
+          </SettingsRow>
+        )}
         <SettingsRow icon={<Volume2 size={16} />} title="Mic volume" description="How loud your voice is in the virtual mic." disabled={!settings.micPassthrough}>
           <VolumeControl label="Mic volume (virtual mic)" value={settings.micVirtualVolume} muted={settings.micVirtualMuted} onToggleMute={() => onChange({ micVirtualMuted: !settings.micVirtualMuted })} disabled={!settings.micPassthrough} onChange={(micVirtualVolume) => onChange({ micVirtualVolume, micVirtualMuted: false })} />
         </SettingsRow>

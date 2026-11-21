@@ -14,6 +14,7 @@ const palette = ["#1db7a6", "#ffcf5c", "#ff6b6b", "#8f7cff", "#4ba3ff", "#74d66b
 const icons = ["zap", "radio", "music", "mic", "laugh", "siren", "sparkles", "gamepad"];
 const defaultSettings: SoundLibrary["settings"] = {
   micPassthrough: false,
+  micPassthroughAlwaysOn: false,
   echoCancellationEnabled: false,
   noiseSuppressionModel: "dfn3",
   noiseSuppressionEnabled: false,
@@ -239,6 +240,7 @@ export function normalizeLibrary(library: SoundLibrary): SoundLibrary {
     micMonitorMuted: boolOr(currentSettings.micMonitorMuted),
     soundboardVirtualMuted: boolOr(currentSettings.soundboardVirtualMuted),
     soundboardMonitorMuted: boolOr(currentSettings.soundboardMonitorMuted),
+    micPassthroughAlwaysOn: boolOr(currentSettings.micPassthroughAlwaysOn, false),
     hotkeysEnabled: boolOr(currentSettings.hotkeysEnabled, defaultSettings.hotkeysEnabled),
     echoCancellationEnabled: boolOr(currentSettings.echoCancellationEnabled, defaultSettings.echoCancellationEnabled),
     noiseSuppressionModel: normalizeNoiseSuppressionModel(currentSettings.noiseSuppressionModel),

@@ -14,6 +14,7 @@ for (const tokenName of ["GITHUB_TOKEN", "GH_TOKEN", "GITHUB_RELEASE_TOKEN", "RE
 
 const steps = [
   ["pnpm", ["run", "clean:release"]],
+  ["node", ["scripts/build-audio-cable-demand.mjs", "--required"]],
   ["node", ["scripts/fetch-native-tools.mjs", "--platform", "win32", "--arch", "x64"], {
     SOUNDDECK_NATIVE_TOOLS_OFFLINE: ""
   }],

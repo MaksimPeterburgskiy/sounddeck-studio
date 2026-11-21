@@ -27,6 +27,12 @@ const releaseDir = path.dirname(appOutDir);
 await verifyStreamDeckResource(path.join(appOutDir, "resources"));
 const toolsDir = path.join(appOutDir, "resources", "native-tools");
 const assets = await verifyPackagedProvenance(toolsDir, "win32-x64");
+const cableProbe = path.join(toolsDir, "audio-cable-capture-demand.exe");
+await access(cableProbe);
+const cableProbeResult = await execFileAsync(cableProbe, ["--once"], { timeout: 30_000, windowsHide: true });
+if (!/^(?:true|false|null)\s*$/.test(String(cableProbeResult.stdout || "").trim())) {
+  throw new Error("Packaged Windows cable capture probe returned an invalid result.");
+}
 
 await verifyNativeToolHashes(toolsDir, assets);
 for (const [name, asset] of Object.entries(assets)) {

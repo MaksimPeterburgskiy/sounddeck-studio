@@ -82,6 +82,8 @@ A new beta is published every night whenever `main` has changed, as a prerelease
 4. In Discord/OBS/your game, set the input device to `CABLE Output` on Windows or `BlackHole 2ch` on macOS.
 5. Keep **Monitor soundboard** pointed at your real headphones so you hear what you play.
 
+On Windows, SoundDeck only turns your microphone on while an app is actively listening to the virtual mic (such as during a Discord call), and turns it off again once nothing is listening so Windows can still go to sleep. Turning on headphone mic monitoring, recording a clip in SoundDeck, or viewing the **Devices** page also activates your mic while in use. If an app cannot hear you (which can happen with some pro-audio apps that use ASIO or kernel streaming), enable **Keep microphone always on** in **Devices** — note that this keeps Windows from sleeping automatically while SoundDeck is running.
+
 ## Stream Deck & external control
 
 Control SoundDeck Studio from an Elgato Stream Deck or another app. External control is off by default: turn on **Settings -> External control -> Enable external control** to use it.

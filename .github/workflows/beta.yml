@@ -155,6 +155,9 @@ jobs:
       - name: Fetch verified native tools
         run: node scripts/fetch-native-tools.mjs --platform win32 --arch x64
 
+      - name: Build Windows cable capture probe
+        run: node scripts/build-audio-cable-demand.mjs --required
+
       - name: Fetch VB-CABLE driver pack
         run: node scripts/fetch-vbcable.mjs
 

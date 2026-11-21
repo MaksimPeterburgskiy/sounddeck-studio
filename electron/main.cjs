@@ -25,6 +25,7 @@ const { ytDlpRuntimeOptions } = require("./ytDlpRuntime.cjs");
 const { createMacTrayTemplateImage, MAC_TRAY_ICON_FILENAME } = require("./trayIcon.cjs");
 const { createShutdownLifecycle, registerWindowShutdown } = require("./shutdownLifecycle.cjs");
 const { createUpdateInstallLifecycle } = require("./updateInstallLifecycle.cjs");
+const { createCableCaptureDemandSupervisor } = require("./cableCaptureDemand.cjs");
 const { installedChannel, isStalePayload, normalizeChannelPreference, resolveUpdaterFlags } = require("./updateChannel.cjs");
 const { getWindowsStartupState, hasStartupArg, hasExternalLaunchArg, shouldStartHidden, startupLoginItemOptions, STARTUP_ARG, WINDOWS_STARTUP_NAME } = require("./startupSettings.cjs");
 const {
@@ -146,6 +147,7 @@ function resetControlRenderer() {
   controlRendererToken = null;
   controlRenderer.cancelPending();
   externalControl.setDocument(null);
+  cableCaptureDemandSupervisor.setEndpoint(null);
 }
 
 const externalControl = createExternalControlBridge({
@@ -189,6 +191,15 @@ const shutdownLifecycle = createShutdownLifecycle({
     }
   },
   onError: (error) => console.error("Shutdown cleanup failed:", error)
+});
+
+const cableCaptureDemandSupervisor = createCableCaptureDemandSupervisor({
+  appIsPackaged: app.isPackaged,
+  resourcesPath: process.resourcesPath,
+  platform: process.platform,
+  repoRoot: path.join(__dirname, ".."),
+  onDemand: (label, demand) => sendToMainWindow("audio:cableCaptureDemand", { label, demand }),
+  trackChild: (child) => shutdownLifecycle.trackChild(child)
 });
 
 const updateInstallLifecycle = createUpdateInstallLifecycle({
@@ -461,6 +472,7 @@ async function initializeLibrary() {
         activeBoardId: "board-default",
         settings: {
           micPassthrough: false,
+          micPassthroughAlwaysOn: false,
           echoCancellationEnabled: false,
           noiseSuppressionModel: "dfn3",
           noiseSuppressionEnabled: false,
@@ -1291,6 +1303,11 @@ handleTrustedIpc("media:read", async (_event, mediaPath) => {
 handleTrustedIpc("audio:getNoiseSuppressionAssets", async (_event, modelId) => {
   const root = app.isPackaged ? process.resourcesPath : path.join(__dirname, "..");
   return loadNoiseSuppressionAssets(root, modelId);
+});
+
+handleTrustedIpc("audio:setCableCaptureEndpoint", (_event, label, token) => {
+  if (!controlRendererToken || token !== controlRendererToken || shutdownLifecycle.isShuttingDown()) return;
+  cableCaptureDemandSupervisor.setEndpoint(label);
 });
 
 handleTrustedIpc("media:saveRecording", async (_event, payload) => {

@@ -15,6 +15,23 @@ function preload() {
 }
 
 describe("preload control readiness", () => {
+  it("forwards demand for the subscribed cable and releases the subscription on cleanup", async () => {
+    const { ipcRenderer, sounddeck } = preload();
+    const label = "CABLE-B Input (VB-Audio Cable B)";
+    const receive = vi.fn();
+    const unsubscribe = sounddeck.onCableCaptureDemand(label, receive);
+    ipcRenderer.emit("control-ready-token", {}, "document");
+    await vi.waitFor(() => expect(ipcRenderer.invoke).toHaveBeenCalledWith("audio:setCableCaptureEndpoint", label, "document"));
+
+    ipcRenderer.emit("audio:cableCaptureDemand", {}, { label: "previous cable", demand: false });
+    ipcRenderer.emit("audio:cableCaptureDemand", {}, { label, demand: false });
+    ipcRenderer.emit("audio:cableCaptureDemand", {}, { label, demand: null });
+    unsubscribe();
+    ipcRenderer.emit("audio:cableCaptureDemand", {}, { label, demand: true });
+    expect(receive.mock.calls).toEqual([[false], [null]]);
+    await vi.waitFor(() => expect(ipcRenderer.invoke).toHaveBeenCalledWith("audio:setCableCaptureEndpoint", null, "document"));
+  });
+
   it("waits for the loaded document's token and retains it for late readiness calls", async () => {
     const outgoing = preload();
     const pending = outgoing.sounddeck.controlReady();
