@@ -7,10 +7,6 @@ allowBuilds:
   electron-winstaller: true
   protobufjs: false
   uiohook-napi: true
-minimumReleaseAgeExclude:
-  # Exact versions reviewed for this upgrade; retain the default age gate otherwise.
-  - '@types/node@24.13.5'
-  - electron@44.4.1
 overrides:
   "undici@>=6.0.0 <6.28.1": 6.28.1
   # Keep the CommonJS backport for older minimatch consumers.
