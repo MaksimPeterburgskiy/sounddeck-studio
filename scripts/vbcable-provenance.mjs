@@ -8,6 +8,17 @@ const execFileAsync = promisify(execFile);
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 const PROVENANCE_FILENAME = "PROVENANCE.json";
 
+// Windows PowerShell must not inherit PSModulePath from a PowerShell 7 parent
+// such as the default CI shell. It would load PowerShell 7's modules, whose
+// Expand-Archive calls .NET APIs that Windows PowerShell does not have.
+function windowsPowerShellEnv(extra) {
+  const env = { ...process.env };
+  for (const name of Object.keys(env)) {
+    if (name.toLowerCase() === "psmodulepath") delete env[name];
+  }
+  return { ...env, ...extra };
+}
+
 export function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
@@ -109,12 +120,11 @@ if ($signature.SignerCertificate.Subject -notmatch "(^|,\s*)SERIALNUMBER=$escape
     ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script],
     {
       windowsHide: true,
-      env: {
-        ...process.env,
+      env: windowsPowerShellEnv({
         SOUNDDECK_VBCABLE_FILE: filePath,
         SOUNDDECK_VBCABLE_SIGNER: setup.authenticodeSimpleName,
         SOUNDDECK_VBCABLE_BUSINESS_ID: setup.authenticodeBusinessId
-      }
+      })
     }
   );
 }
@@ -166,11 +176,10 @@ Expand-Archive -LiteralPath $env:SOUNDDECK_VBCABLE_ARCHIVE -DestinationPath $env
     ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script],
     {
       windowsHide: true,
-      env: {
-        ...process.env,
+      env: windowsPowerShellEnv({
         SOUNDDECK_VBCABLE_ARCHIVE: archivePath,
         SOUNDDECK_VBCABLE_DESTINATION: destinationPath
-      }
+      })
     }
   );
 }
