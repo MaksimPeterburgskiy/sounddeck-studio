@@ -82,6 +82,8 @@ A new beta is published every night whenever `main` has changed, as a prerelease
 4. In Discord/OBS/your game, set the input device to `CABLE Output` on Windows or `BlackHole 2ch` on macOS.
 5. Keep **Monitor soundboard** pointed at your real headphones so you hear what you play.
 
+On Windows, SoundDeck opens the microphone for passthrough when an app starts recording from the selected VB-CABLE's capture endpoint (such as CABLE Output or CABLE-A Output). It releases the microphone when the last app stops. Headphone monitoring, SoundDeck recording, and the visible Devices meters also use the microphone. For an ASIO or kernel-streaming app that Windows cannot detect, enable **Keep microphone passthrough on** in **Devices**.
+
 ## Stream Deck & external control
 
 Control SoundDeck Studio from an Elgato Stream Deck or another app. External control is off by default: turn on **Settings -> External control -> Enable external control** to use it.

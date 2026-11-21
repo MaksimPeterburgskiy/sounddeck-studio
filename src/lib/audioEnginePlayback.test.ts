@@ -3,7 +3,7 @@ import { AudioEngine } from "./audioEngine";
 import { normalizeSoundEffects } from "./model";
 import { beginAudioConfiguration, waitForAudioConfiguration, watchAudioDeviceChanges } from "./controlReadiness";
 import { createSoundPlayQueue } from "./soundPlayQueue";
-import { FakeAudioContext, deferred, makeAudioSettings, makeSound, voiceGains, waitForMockCalls } from "./testing/webAudioFakes";
+import { FakeAudioContext, FakeOfflineAudioContext, deferred, makeAudioSettings, makeSound, voiceGains, waitForMockCalls } from "./testing/webAudioFakes";
 import { getDefaultSoundEffects } from "./model";
 import { PressTracker } from "./pressTracker";
 import { SoundTriggers } from "./soundTriggers";
@@ -33,12 +33,13 @@ function virtualContext() {
 }
 
 function decodeContext() {
-  return FakeAudioContext.instances[2];
+  return FakeOfflineAudioContext.latest;
 }
 
 beforeEach(() => {
   FakeAudioContext.instances = [];
   vi.stubGlobal("AudioContext", FakeAudioContext);
+  vi.stubGlobal("OfflineAudioContext", FakeOfflineAudioContext);
   vi.stubGlobal("window", {
     sounddeck: {
       readMedia: vi.fn(async () => new ArrayBuffer(8))
@@ -61,7 +62,10 @@ describe("AudioEngine output routing", () => {
     const preparation = deferred<AudioBuffer>();
     const resume = deferred<void>();
     if (stage === "decode") decodeContext().decodeAudioData.mockReturnValueOnce(preparation.promise);
-    else monitorContext().resume.mockReturnValueOnce(resume.promise);
+    else monitorContext().resume.mockImplementationOnce(async () => {
+      await resume.promise;
+      monitorContext().state = "running";
+    });
     const cancellation = new AbortController();
     const play = engine.play(makeSound(), cancellation.signal, () => waitForAudioConfiguration(() => configuration.current));
     await waitForMockCalls(stage === "decode" ? decodeContext().decodeAudioData : monitorContext().resume, 1);
@@ -78,6 +82,7 @@ describe("AudioEngine output routing", () => {
     routing.resolve();
     expect(await play).toEqual(cancelled ? false : expect.any(String));
     expect(monitorContext().bufferSources).toHaveLength(cancelled ? 0 : 1);
+    expect(monitorContext().state).toBe(cancelled ? "suspended" : "running");
     await engine.dispose();
   });
 
@@ -1147,7 +1152,9 @@ describe("AudioEngine preview lifecycle", () => {
       expect(convolver.disconnect).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(99);
       expect(engine.isPreviewing()).toBe(true);
+      expect(monitorContext().state).toBe("running");
       await vi.advanceTimersByTimeAsync(1);
+      expect(monitorContext().state).toBe("suspended");
       expect(engine.isPreviewing()).toBe(false);
       expect(engine.getPreviewPosition()).toBe(1.75);
       expect(convolver.disconnect).toHaveBeenCalledOnce();
@@ -1241,13 +1248,35 @@ describe("AudioEngine preview lifecycle", () => {
 });
 
 describe("AudioEngine lifecycle and cache", () => {
+  it("keeps idle outputs suspended through sink selection and decoding, and resumes only the targeted output", async () => {
+    const engine = new AudioEngine(dualRouteSettings, vi.fn());
+    const sound = makeSound({ outputTarget: "virtual" });
+    await engine.configure(dualRouteSettings, "cable-device");
+    await engine.preload(sound);
+    expect(monitorContext().state).toBe("suspended");
+    expect(virtualContext().state).toBe("suspended");
+
+    await engine.play(sound);
+    expect(monitorContext().state).toBe("suspended");
+    expect(virtualContext().state).toBe("running");
+    virtualContext().bufferSources[0].onended!();
+    await vi.waitFor(() => expect(virtualContext().state).toBe("suspended"));
+
+    await engine.previewPlay(sound, 0, 1);
+    expect(monitorContext().state).toBe("running");
+    expect(virtualContext().state).toBe("suspended");
+    engine.previewPause();
+    expect(monitorContext().state).toBe("suspended");
+    await engine.dispose();
+  });
+
   it("dispose closes all contexts and makes configure a no-op", async () => {
     const engine = new AudioEngine(playbackSettings, vi.fn());
     const monitor = monitorContext();
 
     await engine.dispose();
 
-    expect(FakeAudioContext.instances.map((context) => context.close.mock.calls.length)).toEqual([1, 1, 1]);
+    expect(FakeAudioContext.instances.map((context) => context.close.mock.calls.length)).toEqual([1, 1]);
     await engine.configure(playbackSettings, "cable-device");
     expect(monitor.setSinkId).not.toHaveBeenCalled();
 
@@ -1328,12 +1357,15 @@ describe("AudioEngine lifecycle and cache", () => {
       expect(monitorContext().bufferSources[0].disconnect).toHaveBeenCalledOnce();
       expect(virtualContext().bufferSources[0].disconnect).toHaveBeenCalledOnce();
       expect(monitorContext().bufferSources[1].disconnect).not.toHaveBeenCalled();
+      expect(virtualContext().state).toBe("running");
 
       engine.stopAll();
+      expect(virtualContext().state).toBe("running");
       expect(status).toHaveBeenLastCalledWith("idle", [], []);
       await vi.advanceTimersByTimeAsync(50);
       expect(monitorContext().bufferSources[1].stop).toHaveBeenCalledOnce();
       expect(virtualContext().bufferSources[1].stop).toHaveBeenCalledOnce();
+      expect(virtualContext().state).toBe("suspended");
     } finally {
       await engine.dispose();
       vi.useRealTimers();

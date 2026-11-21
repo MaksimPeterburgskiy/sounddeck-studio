@@ -8,8 +8,9 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "electron": "electron .",
-    "prestart": "pnpm run fetch:native-tools --allow-host-tools",
+    "prestart": "pnpm run build:audio-cable-demand && pnpm run fetch:native-tools --allow-host-tools",
     "start": "pnpm run build && concurrently -k \"pnpm run dev\" \"wait-on tcp:5173 && electron .\"",
+    "preelectron": "pnpm run build:audio-cable-demand",
     "build": "tsc && vite build",
     "clean:release": "node scripts/clean-release.mjs",
     "dist": "pnpm run dist:win",
@@ -18,6 +19,7 @@
     "dist:mac:unsigned": "node scripts/dist-mac.mjs --unsigned",
     "fetch:native-tools": "node scripts/fetch-native-tools.mjs",
     "build:blackhole": "node scripts/build-blackhole.mjs",
+    "build:audio-cable-demand": "node scripts/build-audio-cable-demand.mjs",
     "fix:macos-dev-signatures": "node scripts/codesign-macos-dev-deps.mjs",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
@@ -64,6 +66,10 @@
         {
           "from": "streamdeck-plugin/dist/com.sounddeck.studio.streamDeckPlugin",
           "to": "streamdeck/com.sounddeck.studio.streamDeckPlugin"
+        },
+        {
+          "from": "tmp/native-tools/win32-x64/audio-cable-capture-demand.exe",
+          "to": "native-tools/audio-cable-capture-demand.exe"
         }
       ],
       "target": [

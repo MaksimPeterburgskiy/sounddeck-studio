@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { findCableInputDeviceId, findVirtualAudioCandidates, getDefaultDeviceLabel, isRoleDeviceId, isSelectableMediaDevice, makeMicrophoneConstraints, normalizeMonitorDeviceId } from "./devices";
+import { findCableInputDeviceId, findVirtualAudioCandidates, getDefaultDeviceLabel, isRoleDeviceId, isSelectableMediaDevice, makeMicrophoneConstraints, normalizeMonitorDeviceId, vbCableCaptureName } from "./devices";
 
 function device(kind: MediaDeviceKind, label: string, deviceId = label): MediaDeviceInfo {
   return { kind, label, deviceId, groupId: "", toJSON: () => ({}) } as MediaDeviceInfo;
@@ -28,6 +28,18 @@ describe("microphone constraints", () => {
 });
 
 describe("virtual audio device detection", () => {
+  it("pairs lettered VB-Audio endpoints and preserves the standard cable as the first choice", () => {
+    const cableB = "CABLE-B Input (VB-Audio Cable B)";
+    const standard = "CABLE In 16ch (VB-Audio Virtual Cable)";
+    expect(vbCableCaptureName("CABLE Input (USB Audio)")).toBeNull();
+    expect(vbCableCaptureName("Microphone (VB-Audio VoiceMeeter VAIO)")).toBeNull();
+    expect(vbCableCaptureName("Studio feed (VB-Audio Cable A)")).toBe("CABLE-A Output");
+    const routes = findVirtualAudioCandidates([device("audiooutput", cableB), device("audiooutput", standard)], "win32");
+    expect(routes.map(route => [route.outputLabel, route.expectedInputLabel])).toEqual([
+      [standard, "CABLE Output"], [cableB, "CABLE-B Output"]
+    ]);
+  });
+
   it("keeps the Windows VB-CABLE compatibility helper", () => {
     const devices = [
       device("audiooutput", "Speakers"),

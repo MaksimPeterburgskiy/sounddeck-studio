@@ -32,6 +32,13 @@ export function isSelectableMediaDevice(device: MediaDeviceInfo) {
   return !isRoleDeviceId(device.deviceId);
 }
 
+/** Chromium includes the Windows driver adapter in the endpoint label. */
+export function vbCableCaptureName(deviceLabel: string): string | null {
+  const adapter = /\(VB-Audio (?:Virtual Cable|Cable ([A-D]))\)$/i.exec(deviceLabel.trim());
+  if (!adapter) return null;
+  return adapter[1] ? `CABLE-${adapter[1].toUpperCase()} Output` : "CABLE Output";
+}
+
 export function findCableInputDeviceId(devices: MediaDeviceInfo[]) {
   return findVirtualAudioCandidates(devices, "win32").find((candidate) => candidate.recommended)?.outputDeviceId ?? "";
 }
@@ -54,11 +61,16 @@ export function findVirtualAudioCandidates(devices: MediaDeviceInfo[], platform:
   const candidates: VirtualAudioCandidate[] = [];
 
   if (normalizedPlatform === "win32") {
+    const additionalCables: VirtualAudioCandidate[] = [];
     for (const output of outputs) {
-      if (/cable input|vb-audio virtual cable/i.test(output.label)) {
+      const pairedInput = vbCableCaptureName(output.label);
+      if (pairedInput && pairedInput !== "CABLE Output") {
+        additionalCables.push(candidateFromDevice(output, "win32", "windows-vbcable", pairedInput, true));
+      } else if (/cable input|vb-audio virtual cable/i.test(output.label)) {
         candidates.push(candidateFromDevice(output, "win32", "windows-vbcable", "CABLE Output", true));
       }
     }
+    candidates.push(...additionalCables);
   }
 
   if (normalizedPlatform === "darwin") {

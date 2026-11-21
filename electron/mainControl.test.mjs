@@ -164,6 +164,16 @@ describe("main-process external control lifecycle", () => {
     await app.bridge.stop();
   });
 
+  it("accepts cable detection changes only from the trusted renderer", async () => {
+    const app = await boot();
+    await app.loaded();
+    expect(() => app.invoke("audio:setCableCaptureEndpoint",
+      { ...app.event, senderFrame: { url: app.event.senderFrame.url } }, null, app.token()
+    )).toThrow("Untrusted IPC sender");
+    await app.invoke("audio:setCableCaptureEndpoint", app.event, null, app.token());
+    await app.bridge.stop();
+  });
+
   it("waits for persisted settings before and during background startup", async () => {
     const app = await boot();
     const stored = deferred();

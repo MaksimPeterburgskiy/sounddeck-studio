@@ -158,6 +158,7 @@ export type MicChainEntry = MicFilter | MicNoiseSuppressionSlot;
 
 export interface AudioSettings {
   micPassthrough: boolean;
+  micPassthroughAlwaysOn: boolean;
   echoCancellationEnabled: boolean;
   noiseSuppressionModel: NoiseSuppressionModelId;
   noiseSuppressionEnabled: boolean;
@@ -311,6 +312,7 @@ declare global {
       importMedia: (paths: string[]) => Promise<MediaImportResult[]>;
       downloadMedia: (urls: string[]) => Promise<MediaImportResult[]>;
       readMedia: (mediaPath: string) => Promise<ArrayBuffer>;
+      onCableCaptureDemand: (outputLabel: string, callback: (demand: boolean | null) => void) => () => void;
       getNoiseSuppressionAssets: (model: NoiseSuppressionModelId) => Promise<{ wasm: ArrayBuffer; model: ArrayBuffer }>;
       deleteMedia: (mediaPath: string) => Promise<{ ok: boolean; reason?: string }>;
       cropMedia: (payload: { mediaPath: string; ext: string; startSec: number; endSec: number; rate: number; sampleRate?: number }) => Promise<MediaCropResult>;

@@ -192,6 +192,14 @@ export class FakeWorker {
   }
 }
 
+export class FakeOfflineAudioContext {
+  static latest: FakeOfflineAudioContext;
+  decodeAudioData = vi.fn(async () => new FakeAudioBuffer() as unknown as AudioBuffer);
+  constructor() {
+    FakeOfflineAudioContext.latest = this;
+  }
+}
+
 export class FakeAudioContext {
   static instances: FakeAudioContext[] = [];
   currentTime = 0;
@@ -272,7 +280,6 @@ export class FakeAudioContext {
   close = vi.fn(async () => {
     this.state = "closed";
   });
-  decodeAudioData = vi.fn(async () => new FakeAudioBuffer() as unknown as AudioBuffer);
   resume = vi.fn(async () => {
     if (this.state === "suspended") this.state = "running";
   });
@@ -340,6 +347,7 @@ export async function waitForMockCalls(mock: ReturnType<typeof vi.fn>, count: nu
 
 const baseSettings: AudioSettings = {
   micPassthrough: true,
+  micPassthroughAlwaysOn: false,
   echoCancellationEnabled: false,
   noiseSuppressionModel: "dfn3",
   noiseSuppressionEnabled: false,

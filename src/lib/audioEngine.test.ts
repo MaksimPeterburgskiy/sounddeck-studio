@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AudioEngine } from "./audioEngine";
 import type { AudioSettings, MicFilter } from "../types";
-import { FakeAudioContext, FakeAudioWorkletNode, FakeGainNode, FakeWorker, deferred, fakeStream, makeAudioSettings, makeSound, waitForMockCalls } from "./testing/webAudioFakes";
+import { FakeAudioContext, FakeOfflineAudioContext, FakeAudioWorkletNode, FakeGainNode, FakeWorker, deferred, fakeStream, makeAudioSettings, makeSound, waitForMockCalls } from "./testing/webAudioFakes";
 
 const settings: AudioSettings = makeAudioSettings();
 
@@ -21,11 +21,88 @@ describe("AudioEngine mic routing", () => {
     FakeAudioContext.instances = [];
     FakeWorker.instances = [];
     vi.stubGlobal("AudioContext", FakeAudioContext);
+    vi.stubGlobal("OfflineAudioContext", FakeOfflineAudioContext);
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  it("opens passthrough for an active cable recorder and releases it when the recorder stops", async () => {
+    const first = fakeStream();
+    const fallback = fakeStream();
+    const getUserMedia = vi.fn().mockResolvedValueOnce(first.stream).mockResolvedValueOnce(fallback.stream);
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+    const engine = new AudioEngine(settings, vi.fn());
+    await engine.setCableCaptureDemand(false);
+    await engine.configure(settings, "cable-device");
+    const [, virtual] = FakeAudioContext.instances;
+    expect(getUserMedia).not.toHaveBeenCalled();
+
+    await engine.setCableCaptureDemand(true);
+    await engine.setCableCaptureDemand(true);
+    expect(getUserMedia).toHaveBeenCalledOnce();
+    expect(liveMediaSources(virtual)[0].stream).toBe(first.stream);
+    await engine.setCableCaptureDemand(false);
+    expect(first.track.stop).toHaveBeenCalledOnce();
+    expect(virtual.state).toBe("suspended");
+
+    // Unknown demand (for example, after a helper error) restores passthrough.
+    await engine.setCableCaptureDemand(null);
+    expect(liveMediaSources(virtual)[0].stream).toBe(fallback.stream);
+    await engine.dispose();
+  });
+
+  it("keeps a live headphone monitor connected across cable demand changes", async () => {
+    const captured = fakeStream();
+    const getUserMedia = vi.fn().mockResolvedValue(captured.stream);
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+    const monitored = { ...settings, monitorMicToHeadphones: true };
+    const engine = new AudioEngine(monitored, vi.fn());
+    await engine.setCableCaptureDemand(false);
+    await engine.configure(monitored, "cable-device");
+    const [monitor, virtual] = FakeAudioContext.instances;
+    const originalMonitor = liveMediaSources(monitor)[0];
+    await engine.setCableCaptureDemand(true);
+    expect(virtual.state).toBe("running");
+    await engine.setCableCaptureDemand(false);
+    expect(virtual.state).toBe("suspended");
+    expect(originalMonitor.disconnect).not.toHaveBeenCalled();
+    expect(getUserMedia).toHaveBeenCalledOnce();
+    expect(captured.track.stop).not.toHaveBeenCalled();
+    await engine.dispose();
+  });
+
+  it("honors the always-on override without an active cable recorder", async () => {
+    const mic = fakeStream();
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia: vi.fn().mockResolvedValue(mic.stream) } });
+    const engine = new AudioEngine(settings, vi.fn());
+    await engine.setCableCaptureDemand(false);
+    await engine.configure({ ...settings, micPassthroughAlwaysOn: true }, "cable-device");
+    const [, virtual] = FakeAudioContext.instances;
+    expect(liveMediaSources(virtual)[0].stream).toBe(mic.stream);
+    await engine.configure(settings, "cable-device");
+    expect(virtual.state).toBe("suspended");
+    expect(mic.track.stop).toHaveBeenCalledOnce();
+    await engine.dispose();
+  });
+
+  it("resumes only the live microphone route and releases its output when the route closes", async () => {
+    const mic = fakeStream();
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia: vi.fn().mockResolvedValue(mic.stream) } });
+    const engine = new AudioEngine(settings, vi.fn());
+    await engine.configure(settings, "cable-device");
+    const [monitor, virtual] = FakeAudioContext.instances;
+    expect(monitor.state).toBe("suspended");
+    expect(virtual.state).toBe("running");
+
+    await engine.configure({ ...settings, micPassthrough: false, monitorMicToHeadphones: true }, "cable-device");
+    expect(virtual.state).toBe("suspended");
+    expect(monitor.state).toBe("running");
+    await engine.configure(playbackSettings, "cable-device");
+    expect(monitor.state).toBe("suspended");
+    await engine.dispose();
   });
 
   it("mutes microphone buses independently and restores their saved gains without reopening capture", async () => {
@@ -1085,7 +1162,7 @@ describe("AudioEngine mic routing", () => {
 
     const monitorContext = FakeAudioContext.instances[0];
     const virtualContext = FakeAudioContext.instances[1];
-    const processingContext = FakeAudioContext.instances[3];
+    const processingContext = FakeAudioContext.instances[2];
     const processedStream = processingContext.mediaDestinations[0].stream;
     expect(processingContext.options).toEqual({ latencyHint: "interactive", sampleRate: 48000 });
     expect(processingContext.mediaSources.map((source) => source.stream)).toEqual([captured.stream]);
@@ -1107,7 +1184,7 @@ describe("AudioEngine mic routing", () => {
 
     await engine.configure({ ...processedSettings, noiseSuppressionModel: "fastenhancer-m" }, "cable-device");
     expect(getUserMedia).toHaveBeenCalledTimes(1);
-    expect(FakeAudioContext.instances).toHaveLength(4);
+    expect(FakeAudioContext.instances).toHaveLength(3);
     expect(processingContext.mediaSources).toHaveLength(1);
     expect(FakeWorker.instances).toHaveLength(2);
     expect(window.sounddeck.getNoiseSuppressionAssets).toHaveBeenLastCalledWith("fastenhancer-m");
@@ -1146,7 +1223,7 @@ describe("AudioEngine mic routing", () => {
 
     const monitorContext = FakeAudioContext.instances[0];
     const virtualContext = FakeAudioContext.instances[1];
-    const processingContext = FakeAudioContext.instances[3];
+    const processingContext = FakeAudioContext.instances[2];
     expect(monitorContext.mediaSources.map((source) => source.stream)).toEqual([processingContext.mediaDestinations[0].stream]);
     expect(virtualContext.mediaSources).toHaveLength(0);
     expect(processingContext.mediaSources.map((source) => source.stream)).toEqual([captured.stream]);
@@ -1179,7 +1256,7 @@ describe("AudioEngine mic routing", () => {
 
     const monitorContext = FakeAudioContext.instances[0];
     const virtualContext = FakeAudioContext.instances[1];
-    const processingContext = FakeAudioContext.instances[3];
+    const processingContext = FakeAudioContext.instances[2];
     const rawStream = monitorContext.mediaSources[0].stream;
     expect(virtualContext.mediaSources[0].stream).toBe(rawStream);
     expect(processingContext.close).toHaveBeenCalledOnce();
@@ -1210,6 +1287,7 @@ describe("AudioEngine mic filter chain", () => {
     FakeAudioContext.instances = [];
     FakeWorker.instances = [];
     vi.stubGlobal("AudioContext", FakeAudioContext);
+    vi.stubGlobal("OfflineAudioContext", FakeOfflineAudioContext);
     vi.stubGlobal("AudioWorkletNode", FakeAudioWorkletNode);
     vi.stubGlobal("Worker", FakeWorker);
     vi.stubGlobal("window", {
@@ -1232,11 +1310,11 @@ describe("AudioEngine mic filter chain", () => {
     const engine = new AudioEngine(off, vi.fn(), processingStatus);
     await engine.configure(off, "cable-device");
     const [monitor, virtual] = FakeAudioContext.instances;
-    expect(FakeAudioContext.instances).toHaveLength(3);
+    expect(FakeAudioContext.instances).toHaveLength(2);
     expect(liveStreams(monitor)).toEqual([captured.stream]);
 
     await engine.configure({ ...off, micChain: [noiseSlot, highPass] }, "cable-device");
-    const chainContext = FakeAudioContext.instances[3];
+    const chainContext = FakeAudioContext.instances[2];
     const processed = chainContext.mediaDestinations[0].stream;
     expect(chainContext.options).toEqual({ latencyHint: "interactive", sampleRate: 48000 });
     expect(chainContext.mediaSources.map((source) => source.stream)).toEqual([captured.stream]);
@@ -1273,7 +1351,7 @@ describe("AudioEngine mic filter chain", () => {
     const initial = { ...routed, micChain: [noiseSlot, highPass, gain, compressor] };
     const engine = new AudioEngine(initial, vi.fn());
     await engine.configure(initial, "cable-device");
-    const chainContext = FakeAudioContext.instances[3];
+    const chainContext = FakeAudioContext.instances[2];
     const [input, fade] = chainContext.gains;
     const [first, second] = chainContext.biquads;
     const trim = chainContext.gains.find((node) => Math.abs(node.gain.value - 10 ** (6 / 20)) < 1e-9)!;
@@ -1316,7 +1394,7 @@ describe("AudioEngine mic filter chain", () => {
     const engine = new AudioEngine(filtered, vi.fn());
     await engine.configure(filtered, "cable-device");
     const [monitor, virtual] = FakeAudioContext.instances;
-    const processed = FakeAudioContext.instances[3].mediaDestinations[0].stream;
+    const processed = FakeAudioContext.instances[2].mediaDestinations[0].stream;
     const processedGain = monitor.mediaSources[0].connections[0] as FakeGainNode;
 
     engine.setMonitorBypass(true);
@@ -1343,7 +1421,7 @@ describe("AudioEngine mic filter chain", () => {
     expect(getUserMedia).not.toHaveBeenCalled();
 
     const lease = await engine.acquireProcessedMic();
-    const chainContext = FakeAudioContext.instances[3];
+    const chainContext = FakeAudioContext.instances[2];
     expect(getUserMedia).toHaveBeenCalledOnce();
     expect(lease.stream).toBe(chainContext.mediaDestinations[0].stream);
 
@@ -1353,13 +1431,36 @@ describe("AudioEngine mic filter chain", () => {
     await engine.dispose();
   });
 
+  it("shares a pending microphone open between the recorder and Devices meters while the cable is idle", async () => {
+    const mic = fakeStream();
+    const opening = deferred<MediaStream>();
+    const getUserMedia = vi.fn(() => opening.promise);
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+    const engine = new AudioEngine(settings, vi.fn());
+    await engine.setCableCaptureDemand(false);
+    await engine.configure(settings, "cable-device");
+    const readings = vi.fn();
+    const unsubscribe = engine.subscribeMicMeters(readings);
+    const recording = engine.acquireProcessedMic();
+    opening.resolve(mic.stream);
+    const lease = await recording;
+    expect(getUserMedia).toHaveBeenCalledOnce();
+    expect(FakeAudioContext.instances[1].state).toBe("suspended");
+    lease.release();
+    await vi.waitFor(() => expect(readings).toHaveBeenCalledWith(expect.objectContaining({ inputDb: expect.any(Number) })));
+    expect(mic.track.stop).not.toHaveBeenCalled();
+    unsubscribe();
+    await vi.waitFor(() => expect(mic.track.stop).toHaveBeenCalledOnce());
+    await engine.dispose();
+  });
+
   it("reports levels and gain reduction to meter subscribers", async () => {
     vi.useFakeTimers();
     vi.stubGlobal("navigator", { mediaDevices: { getUserMedia: vi.fn().mockResolvedValue(fakeStream().stream) } });
     const filtered = { ...routed, micChain: [noiseSlot, compressor] };
     const engine = new AudioEngine(filtered, vi.fn());
     await engine.configure(filtered, "cable-device");
-    const chainContext = FakeAudioContext.instances[3];
+    const chainContext = FakeAudioContext.instances[2];
     const [inputAnalyser, outputAnalyser] = chainContext.analysers;
     inputAnalyser.level = 0.5;
     outputAnalyser.level = 0.25;
@@ -1389,6 +1490,7 @@ describe("AudioEngine live effects", () => {
   beforeEach(() => {
     FakeAudioContext.instances = [];
     vi.stubGlobal("AudioContext", FakeAudioContext);
+    vi.stubGlobal("OfflineAudioContext", FakeOfflineAudioContext);
     vi.stubGlobal("window", {
       sounddeck: {
         readMedia: vi.fn(async () => new ArrayBuffer(8))
