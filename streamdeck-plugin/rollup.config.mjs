@@ -29,13 +29,14 @@ export default {
   plugins: [
     replace({ preventAssignment: true, __PLUGIN_VERSION__: JSON.stringify(app.version), __PLUGIN_DISTRIBUTION__: JSON.stringify(distribution) }),
     {
-      name: "sdk-v2-drm-safe-runtime",
-      // SDK v2 otherwise reads manifest.json during registration and logs in
+      name: "sdk-drm-safe-runtime",
+      // The SDK otherwise reads manifest.json during registration and logs in
       // cwd()/logs. Embed metadata and redirect the existing rotating file target.
+      // SDK 3.0.5 moved these modules from dist/plugin/ to dist/; accept both layouts.
       transform(source, rawId) {
         // Rollup reports Windows module ids with backslashes.
         const id = rawId.replaceAll("\\", "/");
-        if (id.endsWith("/@elgato/streamdeck/dist/plugin/manifest.js")) {
+        if (/\/@elgato\/streamdeck\/dist\/(plugin\/)?manifest\.js$/.test(id)) {
           adaptedSdkModules.add("manifest");
           return { code: `import { Version } from "./common/version.js";
             const manifest = ${JSON.stringify(manifest)};
@@ -43,7 +44,7 @@ export default {
             export function getSDKVersion() { return manifest.SDKVersion; }
             export function getSoftwareMinimumVersion() { return new Version(manifest.Software.MinimumVersion); }`, map: null };
         }
-        if (id.endsWith("/@elgato/streamdeck/dist/plugin/logging/index.js")) {
+        if (/\/@elgato\/streamdeck\/dist\/(plugin\/)?logging\/index\.js$/.test(id)) {
           adaptedSdkModules.add("logging");
           if (!source.includes('dest: path.join(cwd(), "logs")')
             || !source.includes('import { cwd } from "node:process";')
