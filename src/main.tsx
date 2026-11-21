@@ -3644,13 +3644,13 @@ function DevicePanel({ library, engine, inputDevices, outputDevices, defaultInpu
           {routeStatus}
         </SettingsNotice>
         <SettingsRow icon={<Mic size={16} />} title="Microphone to virtual mic" description={waitingForRecorder
-          ? "Waiting for an app to use the virtual mic. Your voice will be sent when one connects."
+          ? "Ready. Your mic stays idle until an app starts listening to the virtual mic."
           : "Send your voice through the virtual mic."}>
           <Switch label="Microphone to virtual mic" checked={settings.micPassthrough} onChange={(micPassthrough) => onChange({ micPassthrough })} />
         </SettingsRow>
         {platform === "win32" && (
-          <SettingsRow icon={<Mic size={16} />} title="Keep microphone passthrough on" description="Normally the mic opens when an app uses the virtual cable. Keep it on for ASIO or kernel-streaming apps." disabled={!settings.micPassthrough}>
-            <Switch label="Keep microphone passthrough on" checked={settings.micPassthroughAlwaysOn} disabled={!settings.micPassthrough} onChange={(micPassthroughAlwaysOn) => onChange({ micPassthroughAlwaysOn })} />
+          <SettingsRow icon={<Mic size={16} />} title="Keep microphone always on" description="Turn this on if an app can't hear you (such as some ASIO or kernel-streaming apps). Keeps Windows from sleeping automatically while SoundDeck is running." disabled={!settings.micPassthrough}>
+            <Switch label="Keep microphone always on" checked={settings.micPassthroughAlwaysOn} disabled={!settings.micPassthrough} onChange={(micPassthroughAlwaysOn) => onChange({ micPassthroughAlwaysOn })} />
           </SettingsRow>
         )}
         <SettingsRow icon={<Volume2 size={16} />} title="Mic volume" description="How loud your voice is in the virtual mic." disabled={!settings.micPassthrough}>

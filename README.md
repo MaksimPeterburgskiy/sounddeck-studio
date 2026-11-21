@@ -82,7 +82,7 @@ A new beta is published every night whenever `main` has changed, as a prerelease
 4. In Discord/OBS/your game, set the input device to `CABLE Output` on Windows or `BlackHole 2ch` on macOS.
 5. Keep **Monitor soundboard** pointed at your real headphones so you hear what you play.
 
-On Windows, SoundDeck opens the microphone for passthrough when an app starts recording from the selected VB-CABLE's capture endpoint (such as CABLE Output or CABLE-A Output). It releases the microphone when the last app stops. Headphone monitoring, SoundDeck recording, and the visible Devices meters also use the microphone. For an ASIO or kernel-streaming app that Windows cannot detect, enable **Keep microphone passthrough on** in **Devices**.
+On Windows, SoundDeck only turns your microphone on while an app is actively listening to the virtual mic (such as during a Discord call), and turns it off again once nothing is listening so Windows can still go to sleep. Turning on headphone mic monitoring, recording a clip in SoundDeck, or viewing the **Devices** page also activates your mic while in use. If an app cannot hear you (which can happen with some pro-audio apps that use ASIO or kernel streaming), enable **Keep microphone always on** in **Devices** — note that this keeps Windows from sleeping automatically while SoundDeck is running.
 
 ## Stream Deck & external control
 
