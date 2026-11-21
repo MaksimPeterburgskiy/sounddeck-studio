@@ -149,8 +149,7 @@ export abstract class LiveAction extends SingletonAction<ActionSettings> {
           // Recompute from the current snapshot, preserving its binding and revision.
           const current = await entry.action.getSettings();
           if (this.visible.get(entry.action.id) !== entry) return;
-          // getSettings may itself emit didReceiveSettings with this snapshot.
-          // Any other settings event during the read supersedes it.
+          // A settings event that arrived during the read supersedes this snapshot.
           if (entry.settings !== previous && entry.settings !== current) { entry.dirty = true; continue; }
           settings = this.syncSettings(current);
           if (settings !== current) await entry.action.setSettings(settings);
