@@ -15,20 +15,20 @@
     "restart": "streamdeck restart com.sounddeck.studio"
   },
   "dependencies": {
-    "@elgato/streamdeck": "^3.0.5",
+    "@elgato/streamdeck": "^3.0.6",
     "ws": "^8.23.0"
   },
   "devDependencies": {
-    "@elgato/cli": "^1.10.4",
-    "@rollup/plugin-commonjs": "^29.0.0",
+    "@elgato/cli": "^1.10.5",
+    "@rollup/plugin-commonjs": "^29.0.3",
     "@rollup/plugin-node-resolve": "^16.0.3",
     "@rollup/plugin-replace": "^6.0.3",
     "@rollup/plugin-typescript": "^12.3.1",
-    "@types/node": "^26.6.6",
-    "@types/ws": "^8.18.1",
-    "rollup": "^4.68.3",
+    "@types/node": "^26.6.11",
+    "@types/ws": "^8.18.2",
+    "rollup": "^4.68.8",
     "tslib": "^2.9.1",
     "typescript": "^6.0.3",
-    "vitest": "^5.1.0"
+    "vitest": "^5.1.2"
   }
 }
