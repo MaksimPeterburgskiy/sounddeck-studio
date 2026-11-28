@@ -8,17 +8,16 @@ allowBuilds:
   protobufjs: false
   uiohook-napi: true
 overrides:
-  "undici@>=6.0.0 <6.28.1": 6.28.1
+  "undici@>=6.0.0 <6.28.1": 6.29.1
   # Keep the CommonJS backport for older minimatch consumers.
-  "brace-expansion@<3.0.0": 2.1.7
-  "brace-expansion@>=3.0.0 <5.0.12": 5.0.12
-  "fast-uri@>=3.0.0 <3.1.8": 3.1.8
+  "brace-expansion@<3.0.0": 2.1.8
+  "brace-expansion@>=3.0.0 <5.0.12": 5.1.0
+  "fast-uri@>=3.0.0 <3.1.8": 3.1.9
   "js-yaml@>=4.0.0 <4.3.2": 4.3.2
-  "tar@<=7.5.20": 7.5.22
+  "tar@<=7.5.20": 7.5.24
   "@xmldom/xmldom@>=0.7.0 <0.8.15": 0.8.15
-  "joi@>=18.0.0 <18.2.9": 18.2.9
 
 patchedDependencies:
-  app-builder-lib@26.16.1: patches/app-builder-lib@26.16.1.patch
+  app-builder-lib@26.18.0: patches/app-builder-lib@26.18.0.patch
 
 strictDepBuilds: true

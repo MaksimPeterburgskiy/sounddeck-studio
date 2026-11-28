@@ -110,7 +110,7 @@ Requirements:
 
 - Windows 10/11 (64-bit) or macOS 13 Ventura or later
 - Node.js 24+
-- pnpm 12.4.2 (pinned in `package.json`)
+- pnpm 12.23.0 (pinned in `package.json`)
 
 ```bash
 git clone https://github.com/MaksimPeterburgskiy/sounddeck-studio.git
